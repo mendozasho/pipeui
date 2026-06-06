@@ -140,12 +140,19 @@ plus the `alias_map`, not persisted as a fact about the function:
   in the UI, but in v1 that override is **not persisted** (v2: a per-source scalar
   store — see Active Deferred Work).
 
-### 5. Trust boundary (v1: single trusted local user)
+### 5. Trust boundary (v1: single trusted local user, Unix-only)
 User functions run **process-isolated** with a strict data-in/data-out interface.
 This is a stability/accident boundary, not a defense against malicious code. If
 the app ever becomes multi-user or hosted, OS-level sandboxing must be added
-before running untrusted modules. *Mechanics (worker model, `setrlimit`,
-Arrow/parquet vs pickle, per-user venv + lockfile) → CLAUDE_REFERENCE.md §10.*
+before running untrusted modules.
+
+**v1 is Unix-only.** The resource limits (`setrlimit` CPU-time and memory caps)
+rely on Python's Unix-only `resource` module, so the worker applies them
+unconditionally — no Windows branch or graceful-degradation path — and CI runs
+on Linux. The wall-clock timeout is the cross-platform safety net that still
+bounds runaway workers. Windows support (timeout-only, weaker memory isolation)
+is out of scope for v1. *Mechanics (worker model, `setrlimit`, Arrow IPC vs
+pickle, per-user venv + lockfile) → CLAUDE_REFERENCE.md §10.*
 
 ### 6. Type migration over rejection
 When a user changes a column's type, the app **migrates** the already-ingested
