@@ -1,0 +1,185 @@
+---
+created: 2026-06-06
+updated: 2026-06-06
+purpose: >
+  Project operating document — "what to build and why." Read first for every
+  conversation. Design decisions and rationale live here; implementation
+  mechanics live in CLAUDE_REFERENCE.md (see the routing table). The canonical
+  long-form design intent lives in design.md; this file is the distilled,
+  load-bearing version of it.
+---
+
+# CLAUDE.md
+
+## Routing table — where to read for detail
+
+`CLAUDE.md` (this file) answers *what to build and why*. `CLAUDE_REFERENCE.md`
+answers *how a specific thing is implemented*. When editing a source file, read
+the matching reference section first. The reference file does not exist yet; its
+section numbers are reserved here and will be populated next session. §13 is
+fixed as Testing Conventions by the `use-file` skill.
+
+| Topic | CLAUDE_REFERENCE.md § |
+| ----- | --------------------- |
+| Registry & relational table schemas | §1 |
+| `content_hash_id` (UUID5 + table namespace) and surrogate `id` generation | §2 |
+| Validation objects — `*Entry` / `*Update` mechanics, recompute-on-edit | §3 |
+| Rejection objects — `FailedRegistryEntry`, `FailedFunctionEntry`, rollback triggers | §4 |
+| Cache / staging table mechanics (create-flow metadata vs ingestion rows) | §5 |
+| Source initialization flow (backend steps 1–6) | §6 |
+| Column-type migration (recreate-and-copy + `TRY_CAST` + atomic swap) | §7 |
+| JIT per-source table creation & `sql_user_table` modules | §8 |
+| Ingestion atomicity mechanics | §9 |
+| Function objects & execution model (process isolation, `setrlimit`, Arrow IPC, venv/lockfile) | §10 |
+| Function classification mechanics (`function_class` / `function_type` / `function_return_type` derivation) | §11 |
+| `alias_map` binding & multi-select execution | §12 |
+| Testing conventions (behavioral-guarantee pattern, mocking strategy) | §13 |
+| CLI visual layer | §14 |
+| Package structure | §15 |
+| Completed work history | §16 |
+
+---
+
+## Collaboration rules
+
+1. **Confirm reasoning before code.** Lay out the logic and get explicit sign-off
+   before writing a single line of code.
+2. **Sectioned code; ask about boundaries.** Break code into individual sections.
+   If it is unclear which files or modules a piece is allowed to talk to, ask
+   before writing rather than guessing (see Architecture → module boundaries).
+3. **design.md is the source of design intent.** Reference it; this file is its
+   distilled form. Keep the two consistent.
+4. **One branch per unit of work.** Each piece of work happens on its own branch.
+5. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
+   go in CLAUDE_REFERENCE.md. Split criterion: *what to build and why* → CLAUDE.md,
+   *how it is implemented* → CLAUDE_REFERENCE.md.
+6. **Cross-check first.** Before proposing any design change or code update, verify
+   it aligns with the Key Design Principles below.
+7. **Read before editing.** When editing a specific module, read the corresponding
+   CLAUDE_REFERENCE.md section for implementation constraints.
+8. **Respect declared module boundaries.** Do not introduce a dependency the design
+   forbids (e.g. the per-source instance table must not know about the registry;
+   user functions must never receive the DB connection).
+9. **Guarantees require tests.** Any new behavioral guarantee documented in either
+   file must have corresponding tests.
+10. **Don't silently resolve open questions.** Items under Active Deferred Work are
+    undecided; surface them rather than encoding an answer in code.
+
+---
+
+## Architecture
+
+- **One DuckDB database for everything.** Registry tables, relational map tables,
+  and every per-source (JIT) data table live as tables inside a single DuckDB
+  file. Cross-source joins (the "join with other reports" feature) are therefore
+  direct and need no `ATTACH`.
+- **Registry vs instance tables.** The registries (`source_registry`,
+  `function_registry`, `column_registry`, `parameter`) describe sources; the
+  per-source data ("instance") tables hold the user's actual rows and are built
+  JIT from `source_registry` + `column_registry` at ingestion.
+- **Module boundaries (load-bearing, do not cross):**
+  - `source_registry` knows about its instance table; the instance table must not
+    know about the registry.
+  - User-uploaded functions receive **data only** (a scalar, `pd.Series`, or
+    `pd.DataFrame`) and return data. They never receive the DuckDB connection,
+    file paths, or any app object. The backend pulls data out, calls the function,
+    and writes results back itself.
+  - Relational map rows are written directly (no Python validation object between
+    them and the table); the registry rows go through `*Entry` / `*Update` objects.
+
+---
+
+## Key Design Principles
+
+### 1. Dual-id identity
+Every registry table carries two ids. A **random surrogate `id`** is the true
+primary key and the only thing maps and writes reference. A **`content_hash_id`**
+(UUID5) is a "by current content" lookup. The `content_hash_id` is **mutable**,
+**recomputed whenever a contributing field changes** (via the `*Update` objects),
+**unique within its own table**, and **namespaced per table** so identical inputs
+in different tables never collide. Because every write and every map reference
+uses the surrogate, recomputing a `content_hash_id` never orphans a map row.
+
+*Open:* a mutable + unique hash means an edit can recompute onto a value that
+already exists on another row in the same table; the collision rule (reject vs
+merge) is undecided — see Active Deferred Work.
+
+### 2. Function collapse on `content_hash_id`
+Re-uploading the "same" function (same `function_name`, `function_class`,
+`function_return_type`) collapses **strictly on `content_hash_id`**. On collision
+the **existing surrogate `function_id` is preserved** and only the mutable columns
+are overwritten. This is what keeps `source_function_map`, `alias_map`, and the
+derived `parameter.content_hash_id` values intact across a re-upload.
+
+### 3. Transaction boundaries; "rollback" has one meaning
+Writes are grouped into atomic sets (`BEGIN` / `COMMIT` / `ROLLBACK`):
+- **Source-create** — the `source_registry` row + every `column_registry` row +
+  every `source_column_map` row commit as **one** transaction. A source is never
+  left half-registered.
+- **Function registration** (uploading a `.py`) — the `function_registry` row +
+  all its `parameter` rows are one transaction.
+- **Function attach** (tying a function to a source) — the `source_function_map`
+  row + its `alias_map` rows are a separate transaction.
+- **Ingestion** — staged into a temp table, written to the real table only on
+  success.
+
+Throughout the app, **"rollback" always means a DuckDB transaction abort that
+returns the database to its last committed state.** Reverting to an *earlier*
+ingestion (time-travel) is explicitly out of scope — there is no per-ingestion
+history.
+
+### 4. Binding model is derived, not stored
+Per-parameter classification (`function_class`) is **derived** from `param_type`
+plus the `alias_map`, not persisted as a fact about the function:
+- `scalar` < `column_backed` < `pd.series` < `pd.dataframe` (highest → lowest
+  granularity); anything above `scalar` is `multi_select_eligible`.
+- `column_backed` (a `str` param tied to an `alias_map` row) is resolved **at
+  attach time** from metadata.
+- Arguments are bound **by keyword** via `param_name`.
+- A `scalar` param uses its **Python default**; the user may override it per-run
+  in the UI, but in v1 that override is **not persisted** (v2: a per-source scalar
+  store — see Active Deferred Work).
+
+### 5. Trust boundary (v1: single trusted local user)
+User functions run **process-isolated** with a strict data-in/data-out interface.
+This is a stability/accident boundary, not a defense against malicious code. If
+the app ever becomes multi-user or hosted, OS-level sandboxing must be added
+before running untrusted modules. *Mechanics (worker model, `setrlimit`,
+Arrow/parquet vs pickle, per-user venv + lockfile) → CLAUDE_REFERENCE.md §10.*
+
+### 6. Type migration over rejection
+When a user changes a column's type, the app **migrates** the already-ingested
+data (recreate-and-copy, `TRY_CAST` pre-check, atomic swap, all in a transaction)
+rather than rejecting the change or forcing a re-upload. The `column_registry`
+(source of truth) and the materialized table stay in sync. *Steps and the reason
+in-place `ALTER` is not used → CLAUDE_REFERENCE.md §7.*
+
+---
+
+## Active Deferred Work
+
+Undecided or out-of-scope-for-now. Do not encode an answer in code without a
+decision.
+
+- **`column_type` enum** — the concrete set of allowed column types is unspecified.
+- **Return-type vocabulary** — reconcile `vector`/`matrix` (function-classification
+  prose) with `pd.series`/`pd.dataframe` (`function_class`). Pick one vocabulary.
+- **`function_signature` field** — present in `function_registry` but undefined
+  (no type, no description). Decide what it stores or drop it.
+- **Single-column PK / no uniqueness check (M4)** — design assumes the first column
+  is the PK when one can't be determined; there is no validation that the chosen
+  PK is unique. Decide whether to enforce.
+- **`content_hash_id` edit-collision rule (1.3)** — reject the edit vs merge the
+  rows when a recompute hits an existing hash in the same table.
+- **v2 scalar persistence** — a table storing per-source scalar argument overrides
+  so they survive across runs.
+- **Results & Summary layer** — deferred until the rest of the codebase exists;
+  shape depends on the user's data.
+
+---
+
+## CLI reference
+
+*Placeholder — no CLI exists yet.* Commands and the CLI visual layer will be
+documented here as they are built; visual-layer implementation detail will live
+in CLAUDE_REFERENCE.md §14.
