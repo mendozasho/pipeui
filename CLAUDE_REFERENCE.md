@@ -554,5 +554,5 @@ populated as modules are created.
   Implementation decisions pinned (all consistent with design.md): surrogate
   ids `uuid4`; `content_hash_id` two-level `uuid5`; `*Entry`/`*Update` are
   pydantic v2; user-function worker boundary uses Arrow IPC; v1 is Unix-only.
-  Pending follow-up: record the "v1 is Unix-only" platform posture in CLAUDE.md
-  (Principle 5), per the doc-split rule.
+  The "v1 is Unix-only" platform posture was recorded in CLAUDE.md (Principle 5)
+  per the doc-split rule.
