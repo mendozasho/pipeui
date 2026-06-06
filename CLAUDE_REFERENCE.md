@@ -1,0 +1,558 @@
+---
+created: 2026-06-06
+updated: 2026-06-06
+purpose: >
+  Project reference document — "how a specific thing is implemented." The
+  companion to CLAUDE.md, which answers "what to build and why." Read the
+  relevant section here before editing the matching source module; read
+  CLAUDE.md first for design intent, principles, and Active Deferred Work.
+  Section numbers are fixed by the routing table in CLAUDE.md and must stay
+  in lockstep with it. The canonical long-form design intent is design.md;
+  this file is the implementation-level companion to it, not a replacement.
+---
+
+# CLAUDE_REFERENCE.md
+
+## How to read this file
+
+Every section number below corresponds 1:1 to the routing table at the top of
+CLAUDE.md. When you edit a source module, read the matching section here for the
+implementation constraints, then check the cross-referenced CLAUDE.md principle
+for *why* the constraint exists. This file documents mechanics only; whenever a
+"what/why" question comes up it is answered in CLAUDE.md or design.md and
+cross-linked, not re-argued here.
+
+**Doc-split reminder (CLAUDE.md rule 5):** new *implementation detail* lands
+here; new *design decisions* land in CLAUDE.md. If editing this file surfaces a
+genuine design choice, stop and record it in CLAUDE.md first.
+
+**Deferred items are not resolved here.** Anything under CLAUDE.md → Active
+Deferred Work is referenced as open, never silently decided (CLAUDE.md rule 10).
+Such points are tagged **[DEFERRED]** inline below.
+
+**Decisions pinned in the session that created this file** (all consistent with
+design.md): surrogate ids are `uuid4`; `content_hash_id` uses two-level
+`uuid5`; `*Entry`/`*Update` objects are pydantic v2; the user-function worker
+boundary uses Arrow IPC; v1 is Unix-only. Each is documented in the relevant
+section below.
+
+---
+
+## §1 — Registry & relational table schemas
+
+*Implements: CLAUDE.md → Architecture (registry vs instance tables) and
+Principle 1 (dual-id identity). Design intent: design.md → Tables.*
+
+All registry tables, all relational map tables, and every per-source (JIT)
+instance table live as tables **inside one DuckDB database file**. There is no
+`ATTACH`; cross-source joins are direct (see §8 for instance tables).
+
+**Identity columns (every registry table).** Two id columns:
+- the **surrogate `*_id`** (`source_id`, `function_id`, `column_id`,
+  `param_id`) — DuckDB native `UUID`, `uuid4`, **primary key**, NOT NULL. This
+  is the only value that maps and writes reference (§2).
+- the **`content_hash_id`** — DuckDB native `UUID`, `uuid5`, mutable,
+  recomputed on edit (§2, §3), unique *within its own table*.
+
+**Enum storage.** Defined enums (`ingestion_method` ∈ {`upsert`, `skip`}, and
+the function enums in §11) are stored as constrained `VARCHAR`, validated at the
+app layer by the pydantic objects (§3), in v1. Promotion to DuckDB native `ENUM`
+is possible once each vocabulary is final; `column_registry.column_type` cannot
+be promoted until its set is pinned — **[DEFERRED]** (CLAUDE.md → Active
+Deferred Work: `column_type` enum).
+
+### Registry tables (concrete schema)
+
+`source_registry`
+
+| column | DuckDB type | null | notes |
+| --- | --- | --- | --- |
+| `source_id` | UUID | no | PK, surrogate (uuid4) |
+| `content_hash_id` | UUID | no | uuid5 of (`source_name`, `primary_key`, `ingestion_method`); unique in table |
+| `source_name` | VARCHAR | no | mutable |
+| `date_ingested` | TIMESTAMP | yes | last-ingested timestamp (no per-ingestion history — §9) |
+| `date_registered` | DATE | no | immutable, set once at create |
+| `ingestion_method` | VARCHAR(enum) | no | `upsert` \| `skip` |
+| `pattern` | VARCHAR | yes | regex/naming convention inferred from filename (§6.1) |
+| `primary_key` | VARCHAR | no | PK column of the instance table; first column assumed if undeterminable — no uniqueness check **[DEFERRED]** |
+| `table_url` | VARCHAR | yes until create completes | resolves to the single DB file; instance table identified by name within it |
+
+`function_registry`
+
+| column | DuckDB type | null | notes |
+| --- | --- | --- | --- |
+| `function_id` | UUID | no | PK, surrogate (uuid4); preserved across re-upload collapse (§11, Principle 2) |
+| `content_hash_id` | UUID | no | uuid5 of (`function_name`, `function_class`, `function_return_type`) |
+| `function_class` | VARCHAR(enum) | no | derived, not stored as a fact about the fn — see §11 |
+| `function_name` | VARCHAR | no | from `__name__` |
+| `function_doc` | VARCHAR | yes | from docstring; tooltip source |
+| `function_return_type` | VARCHAR(enum) | no | see §11 vocabulary note |
+| `function_type` | VARCHAR(enum) | no | `validation` \| `transform`, derived (§11) |
+| `module_path` | VARCHAR | no | path used to load the actual fn |
+| `function_signature` | — | — | **[DEFERRED]** — no type/description decided; stored or dropped pending decision |
+
+`column_registry`
+
+| column | DuckDB type | null | notes |
+| --- | --- | --- | --- |
+| `column_id` | UUID | no | PK, surrogate (uuid4) |
+| `content_hash_id` | UUID | no | uuid5 of (`column_name`, `column_type`) |
+| `column_name` | VARCHAR | no | taken verbatim from the spreadsheet |
+| `column_type` | VARCHAR(enum) | no | inferred at read; falls back to `var` when uninferable (§6.1) — enum set **[DEFERRED]** |
+
+`parameter`
+
+| column | DuckDB type | null | notes |
+| --- | --- | --- | --- |
+| `param_id` | UUID | no | PK, surrogate (uuid4) |
+| `content_hash_id` | UUID | no | uuid5 of (`param_name`, `function_id`, `param_type`) — ties the param to a specific function |
+| `param_name` | VARCHAR | no | name in the function definition; used for keyword binding (§12) |
+| `param_type` | VARCHAR(enum) | no | user-typed in the module |
+| `function_id` | UUID | no | FK → `function_registry.function_id` (surrogate) |
+
+### Relational map tables
+
+Map rows are written **directly** with a plain SQL/DuckDB insert — no pydantic
+object between them and the table (module boundary in CLAUDE.md → Architecture).
+Each map's own id is a `uuid5` composed from the two surrogate FKs it joins, so
+the same pair never produces two rows.
+
+- `source_column_map(source_column_map_id, column_id, source_id)` — columns of a
+  source / sources using a column.
+- `source_function_map(source_function_map_id, source_id, function_id)` —
+  functions attached to a source / sources affected by a function edit.
+- `alias_map(alias_map_id, column_id, parameter_id, source_id)` — see §12; the
+  binding table that powers multi-column runs.
+
+---
+
+## §2 — `content_hash_id` (UUID5 + table namespace) and surrogate id generation
+
+*Implements: CLAUDE.md → Principle 1. Design intent: design.md → "A note on
+tables".*
+
+**Surrogate `id` (`uuid4`).** Generated behind a **single injectable function**
+(one module-level factory, e.g. `new_id()`), so it can be patched in one place
+for deterministic tests (§13). It is the true PK and the only value referenced
+by maps and writes; it is **never** recomputed or changed by an edit.
+
+**`content_hash_id` (two-level `uuid5`).** Computed in two steps so the per-table
+namespacing in Principle 1 is structural rather than convention:
+1. A fixed **app-root namespace** constant (one `uuid5`/`UUID` literal defined
+   once for the project).
+2. A **per-table namespace** = `uuid5(app_root, table_name)`.
+3. `content_hash_id` = `uuid5(table_namespace, canonical_input)`.
+
+`canonical_input` is the table's contributing fields joined in a **fixed order
+with a reserved separator**. Field order is the order the fields appear in the
+schema (§1), so the serialization is stable and reproducible. Contributing
+fields per table are exactly those listed in the §1 `content_hash_id` rows.
+
+Because different tables use different namespaces, identical field values in
+different tables never collide (Principle 1). Recompute happens only through the
+`*Update` objects (§3); since maps reference the surrogate, recompute never
+orphans a map row.
+
+**[DEFERRED]** — edit-collision rule: a recompute can land on a
+`content_hash_id` that already exists on another row in the same table; reject
+vs. merge is undecided (CLAUDE.md → Active Deferred Work). Code must not assume
+either; surface the collision.
+
+---
+
+## §3 — Validation objects: `*Entry` / `*Update` mechanics, recompute-on-edit
+
+*Implements: CLAUDE.md → Principle 1 and Architecture (registry rows go through
+`*Entry`/`*Update`; map rows do not). Design intent: design.md → Validation
+Objects.*
+
+**Library: pydantic v2.** Chosen over dataclasses because the entire role of
+these objects is field validation with structured error messages that feed the
+rejection objects (§4), and because `*Update` needs all-optional fields with
+partial-update semantics. Dependency cost is negligible.
+
+**`*Entry` (`SourceRegistryEntry`, `ColumnRegistryEntry`, …).** Full mirror of
+the table's fields; validates every field. Methods:
+- `content_hash_id` generation following the §2 logic for that table.
+- (`SourceRegistryEntry` only) `table_url` generation; resolves to the single DB
+  file and updates the object in place.
+- On any validation failure the whole object is handed to the matching rejection
+  object (§4) with the error message; it does not write.
+- Communicates only with the create-flow cache (§5) and a config holding the DB
+  URL — not with other app objects.
+
+**`*Update` (`SourceRegistryUpdate`, `ColumnRegistryUpdate`, …).** Same fields,
+all optional. Only fields the user actually touched are populated; untouched
+fields are not re-validated. **Recompute-on-edit:** if an update touches any
+field that feeds the `content_hash_id` (per §1/§2), the object recomputes
+`content_hash_id`. The surrogate id is never changed by an update. All update
+requests flow through these objects, never through `*Entry`.
+
+---
+
+## §4 — Rejection objects: `FailedRegistryEntry`, `FailedFunctionEntry`, rollback triggers
+
+*Implements: CLAUDE.md → Principle 3 (rollback semantics). Design intent:
+design.md → Rejection Objects.*
+
+Both are **stack** objects accumulating failures to return to the UI.
+
+`FailedRegistryEntry` — registry tables only (tables with `registry` in the
+name). Stores the attempted `*Entry` object (which both carries the attempted
+values and identifies the target table) plus the error message / failure reason.
+
+`FailedFunctionEntry` — function rejections (missing return, untyped parameter,
+etc.). Stores the function and its breakdown plus the error message and
+suggested remediation.
+
+**Rollback trigger.** A rejection object requests rollback of **the entire
+transaction set it belongs to**, never a single write (this is the one meaning
+of "rollback" — a DuckDB transaction abort to last committed state; see §9 and
+Principle 3):
+- `FailedRegistryEntry` in source-create → unwinds the `source_registry` row +
+  every `column_registry` row + every `source_column_map` row (§6).
+- `FailedFunctionEntry` → unwinds whichever function set it belongs to:
+  registration (`function_registry` + `parameter` rows) or attach
+  (`source_function_map` + `alias_map` rows) (§10, §11).
+
+---
+
+## §5 — Cache / staging table mechanics
+
+*Implements: CLAUDE.md → Principle 3 (staged-then-committed). Design intent:
+design.md → Initializing a new source, backend step 1.4 and step 10.*
+
+A **transient DuckDB staging table** (DuckDB built-in temp/staging
+functionality) backs two distinct uses of the *same mechanism*:
+- **Create-flow cache** — holds *registration metadata*: read column names,
+  user-confirmed `column_type`s, and the PK choice. The user's final
+  confirmation is the source of truth; edits the user makes update the cache
+  before values are pulled into `*Entry` objects (§3).
+- **Ingestion staging** — holds *actual rows* during a load (§9).
+
+Both stage writes during an operation and abort the transaction on any error in
+the set, returning the DB to its last working state. The two uses never mix
+contents; only the mechanism is shared.
+
+---
+
+## §6 — Source initialization flow (backend steps 1–6)
+
+*Implements: CLAUDE.md → Architecture and Principle 3 (source-create is one
+transaction). Design intent: design.md → Initializing a new source → Backend
+Perspective.*
+
+1. **Read the uploads.** Per file: (1.1) infer a regex `pattern` from the
+   filename; (1.2) add any unknown columns to `column_registry`; (1.3) infer
+   `column_type` from sample data using DuckDB-native inference, falling back to
+   `var` when inference errors or has insufficient data (optionally cross-check
+   `column_registry` for a known type); (1.4) stage everything in the create-flow
+   cache (§5) and request the PK column from the user; (1.5) get `date_ingested`
+   from `st_mtime` (or faster); (1.6) everything is now known except `table_url`
+   (optional until step 2).
+2. **Build `SourceRegistryEntry`** from the cache (column data is not in
+   `source_registry`, so it is not pulled in here). Validate; generate
+   `table_url` and `content_hash_id` (§2, §3).
+3.–5. **Write as ONE transaction** (`BEGIN`/`COMMIT`/`ROLLBACK`): the
+   `source_registry` row (3) + a `column_registry` row per column via
+   `ColumnRegistryEntry` (4) + a `source_column_map` row per column written
+   directly with the new `uuid5` map id (5). Any failure → no rows written, and
+   the relevant `*Entry` goes to `FailedRegistryEntry` (§4). A source is never
+   left half-registered.
+6. The source is now filterable by `source_id` and joinable to `column_registry`
+   for column detail. Subsequent user edits funnel through `*Update` objects (§3).
+
+**[DEFERRED]** — no validation that the chosen/assumed PK is unique (CLAUDE.md →
+Active Deferred Work: single-column PK / no uniqueness check).
+
+---
+
+## §7 — Column-type migration (recreate-and-copy + `TRY_CAST` + atomic swap)
+
+*Implements: CLAUDE.md → Principle 6 (migrate over reject). Design intent:
+design.md → Initializing a new source, step 7.*
+
+When a user changes a column's type (`edit` → `source`), the already-ingested
+data is migrated, keeping `column_registry` (source of truth) and the
+materialized instance table in sync.
+
+Mechanism, entirely inside one transaction:
+1. **Pre-check with `TRY_CAST`** — report rows that would fail to convert so the
+   user decides how to handle un-castable values *before* committing (no silent
+   loss to NULL).
+2. **Recreate-and-copy** — create a new table with the updated column type;
+   `INSERT ... SELECT` existing rows with the changed column cast to the new
+   type; validate.
+3. **Atomic swap** — drop old, rename new.
+
+Any failure rolls the whole transaction back to the last good state (§9).
+
+In-place `ALTER ... ALTER COLUMN ... TYPE` is **not** used: DuckDB's in-place
+change fails if conflicting-type values ever existed (even if since deleted) and
+cannot alter an indexed column — which includes the PK. A fresh table carries no
+such history or dependency.
+
+---
+
+## §8 — JIT per-source table creation & `sql_user_table` modules
+
+*Implements: CLAUDE.md → Architecture (instance tables built JIT; instance table
+must not know about the registry). Design intent: design.md steps 8–9.*
+
+When the user first ingests rows, the backend builds a **per-source instance
+table JIT** from `source_registry` + `column_registry` (column names + confirmed
+types + PK). This is an end-user-dependent table: its schema and contents come
+from the upload, not a fixed schema. Once built, files tied to the source are
+written directly via SQL (§9 governs atomicity).
+
+The generated SQL for each user table is stored in a **`sql_user_table/`**
+folder, one Python module per table named `<source>_source_sql.py` (e.g.
+`foo_source_sql.py`).
+
+**Boundary:** the instance table has no reference back to the registry; the
+registry knows about the instance table, not vice versa.
+
+---
+
+## §9 — Ingestion atomicity mechanics
+
+*Implements: CLAUDE.md → Principle 3 ("rollback" has one meaning). Design intent:
+design.md step 10.*
+
+Each upload is first loaded into a **temporary table** (§5 ingestion staging) and
+written into the source's real instance table only if the load completes. Any
+failure aborts via DuckDB transaction rollback (`BEGIN`/`COMMIT`/`ROLLBACK`),
+leaving the existing table at its last committed state. Schema changes (table
+create/alter) are transactional in DuckDB and fall under the same all-or-nothing
+guarantee.
+
+On duplicate ids during ingestion, `ingestion_method` decides: `upsert` or
+`skip`. Ingested rows are retained for summaries and deliverables.
+
+**"Rollback" everywhere in this app = a DuckDB transaction abort to the last
+committed state.** Reverting to an *earlier* ingestion (time-travel) is out of
+scope — there is no per-ingestion history.
+
+---
+
+## §10 — Function objects & execution model
+
+*Implements: CLAUDE.md → Principle 5 (trust boundary) and Principle 3 (function
+write transactions). Design intent: design.md → Function Objects.*
+
+**Trust boundary (v1: single trusted local user).** Process isolation is a
+**stability/accident** boundary, not a defense against malicious code. If the app
+ever becomes multi-user/hosted, OS-level sandboxing must be added first.
+
+**Data-only interface.** User functions receive **only data** — a scalar,
+`pd.Series`, or `pd.DataFrame` — and return data. They never receive the DuckDB
+connection, file paths, or any app object, so user code structurally cannot
+touch the database, registries, or other sources. The backend pulls the
+column/table out of DuckDB, calls the function, and writes the result back
+itself.
+
+**Isolation mechanics:**
+- **Per-call worker process** — each function call runs in its own process; a
+  crash, hang, or memory blowup takes the worker, not the app.
+- **Wall-clock timeout** — the backend kills the worker after a wall-clock bound
+  (cross-platform; the always-available safety net).
+- **`resource.setrlimit`** — CPU-time and memory (address-space) caps. v1 is
+  **Unix-only**, so the worker imports `resource` and applies the limits
+  **unconditionally** — no Windows guard or graceful-degradation path to
+  maintain. (Platform posture is recorded in CLAUDE.md; the mechanics live here.)
+- **Per-user venv + lockfile** — user modules run in their own environment
+  (e.g. a `uv`/`pip` env with a lockfile), separate from the app's, so user
+  dependencies cannot shadow the app's. pandas is available by default.
+
+**Data boundary transport: Arrow IPC.** Data crosses the process boundary as
+Arrow IPC rather than pickle (deserialization is itself an execution vector).
+Arrow is in-memory (no disk hop) for the transient per-call handoff, and DuckDB
+has native Arrow support, so column-out-of-DuckDB → worker → result-back needs no
+extra serialization step. Parquet remains a possible later spill-to-disk
+fallback for very large frames — not v1.
+
+**Function write transactions (Principle 3).** Two separate atomic units, since
+they happen at different times:
+- **Registration** (uploading a `.py`): `function_registry` row + all that
+  function's `parameter` rows = one transaction.
+- **Attach** (tying a function to a source): `source_function_map` row + its
+  `alias_map` rows = a separate transaction.
+- Either set is all-or-nothing; failure routes to `FailedFunctionEntry` (§4).
+
+---
+
+## §11 — Function classification mechanics
+
+*Implements: CLAUDE.md → Principle 4 (binding derived, not stored) and Principle
+2 (collapse on `content_hash_id`). Design intent: design.md → Backend Perspective
+– function classification.*
+
+Classification is **derived** from the parameter signature + the `alias_map`, not
+persisted as an intrinsic fact about the function.
+
+**`function_class`** — the least-granular (most generic) parameter drives it.
+Granularity high → low:
+1. `scalar` — a single-value primitive (`int`, `float`, `bool`), and `str` when
+   **not** tied to an `alias_map` row. Uses its Python default; the UI may
+   override per-run, but in v1 the override is **not persisted** (CLAUDE.md →
+   Active Deferred Work: v2 scalar persistence).
+2. `column_backed` — a `str` parameter tied to an `alias_map` row; resolved **at
+   attach time** from metadata.
+3. `pd.series`.
+4. `pd.dataframe`.
+
+Anything above `scalar` is **`multi_select_eligible`**: a parameter can take a
+stack of eligible column arguments and the function runs once per argument
+(e.g. 3 eligible columns → 3 runs → 3 results aggregated in the summary).
+
+**`function_type`** — derived from the return: a `boolean` / `pd.Series[bool]`
+return ⇒ `validation`; any non-boolean return ⇒ `transform`.
+
+**`function_return_type`** — determines how results are delivered (a looped
+scalar return must store per-row results and return them once all rows run; a
+column-shaped return runs as a vector and is returned directly).
+
+**[DEFERRED] — return-type vocabulary.** design.md uses `vector`/`matrix` for
+`function_return_type` and `pd.series`/`pd.dataframe` for `function_class`. These
+are **not yet reconciled** (CLAUDE.md → Active Deferred Work). This section is
+written vocabulary-agnostic: a "column-shaped" (1-D) return and a "table-shaped"
+(2-D) return are described by behavior; do not encode a single canonical spelling
+until the reconciliation is decided.
+
+**Collapse on re-upload (Principle 2).** Functions sharing `function_name`,
+`function_class`, and `function_return_type` collapse **strictly on
+`content_hash_id`**. On collision the existing surrogate `function_id` is
+preserved and only mutable columns are overwritten — keeping `source_function_map`,
+`alias_map`, and derived `parameter.content_hash_id` values intact.
+
+---
+
+## §12 — `alias_map` binding & multi-select execution
+
+*Implements: CLAUDE.md → Principle 4. Design intent: design.md → alias_map, and
+"using the created function after upload".*
+
+`alias_map(alias_map_id, column_id, parameter_id, source_id)` maps a function's
+parameter to a source's column. It is what lets one function run across multiple
+columns of one source, and lets a parameter↔column mapping be reused across
+sources.
+
+- **Resolution at attach time.** When a function is attached to a source, the
+  app validates against the `alias_map` that the source's columns are mapped to
+  the parameters; an unmapped parameter/column fails the attach with a message
+  (no silent attach). `column_backed` params (§11) are resolved here from
+  metadata.
+- **Keyword binding.** Arguments are bound to parameters **by keyword** via
+  `param_name` (§1 `parameter`), not positionally.
+- **Multi-select loop.** For a `multi_select_eligible` parameter with N mapped
+  eligible columns, the function runs N times (once per column); results are
+  aggregated in the summary (§16/Results — deferred).
+- The `alias_map` row id is the `uuid5` of (`parameter_id`, `column_id`,
+  `source_id`); rows are written directly (no pydantic object), as part of the
+  attach transaction (§10).
+
+---
+
+## §13 — Testing conventions
+
+*Implements: CLAUDE.md → rule 9 (every documented behavioral guarantee has a
+test). Defined by the `use-file` skill as the home of the behavioral-guarantee
+pattern and mocking strategy.*
+
+**Framework & tiers.** `pytest`. Two markers: `unit` (pure logic — no DB, no
+subprocess) and `integration` (real DuckDB and/or real subprocess). v1 is
+Unix-only and CI runs on Linux, so the `setrlimit` tests always execute — there
+is no platform-skip tier to maintain.
+
+**Mocking strategy — real ephemeral DuckDB sandbox, not a fake.** Anything that
+touches SQL/transactions runs against a **real** DuckDB engine on disposable
+storage; the guarantees under test (rollback, `TRY_CAST`, atomicity, cross-source
+joins) *are* DuckDB behaviors and a fake interface cannot validate them.
+- `:memory:` by default; a temp file only when a test exercises `table_url` /
+  file-path resolution or needs the DB to survive a reopen.
+- **Fresh DB per test** (function-scoped fixture + a schema-builder helper that
+  creates the registry tables, plus a seeding helper for "a registered source
+  with N columns").
+- **Do NOT** use the "wrap each test in a transaction, roll back at teardown"
+  isolation trick — the system under test owns transactions/rollback, so a
+  test-level transaction would collide with what is being verified.
+- Mocks are used only at the pure-logic edge and the worker boundary (below).
+
+**Behavioral-guarantee pattern (the rule-9 mechanism).** One test per documented
+guarantee:
+- test name encodes the guarantee (e.g. `test_source_create_atomic_when_column_row_fails`);
+- arrange-act-assert against **observable state** (per-table row counts, DB
+  snapshot equality), never internal call assertions;
+- each test references the design.md / CLAUDE.md clause it guards, so the set of
+  guarantees can be audited against the set of tests.
+
+**Transaction / rollback recipe** (one per atomic set: source-create, function
+registration, function attach, ingestion, migration): snapshot the DB → attempt
+the set with a failure injected on a late write → assert **zero** rows from the
+set persisted and the snapshot is unchanged. Prefer a **real** failure (data that
+violates the schema) over monkeypatch; monkeypatch only where a real failure is
+hard to provoke.
+
+**Process isolation (§10).**
+- *Boundary guarantee* (`unit`): assert the worker harness only ever passes
+  scalar/`Series`/`DataFrame` and never the connection or app objects.
+- *Real-subprocess tests* (`integration`): timeout (looping function killed
+  within bound); crash (raising function → worker dies, app survives, error
+  surfaced via `FailedFunctionEntry`); `setrlimit` memory cap (allocate-big
+  function killed). Use tight limits (~1–2 s timeout, small mem cap) so they stay
+  fast and deterministic.
+- *Result write-back*: mock the worker boundary (a fake result coming back) when
+  the test only cares that the backend writes the result into DuckDB correctly.
+
+**Pure-logic tests** (`unit`, no DB, no subprocess) — the bulk of the suite:
+`content_hash_id` recompute (contributing field changes → hash changes;
+non-contributing field → unchanged; surrogate id never changes); function
+collapse (same name/class/return_type → same `content_hash_id`, surrogate
+preserved, mutables overwritten); the full `function_class` / `function_type` /
+`function_return_type` derivation table (§11).
+
+**UUID determinism.** Patch the single injectable surrogate (`uuid4`) factory
+(§2) via a fixture for equality assertions. For `content_hash_id` (`uuid5`,
+deterministic) assert **relationships** (equal inputs → equal hash; different
+table namespace → different hash) rather than hardcoded UUID literals.
+
+**Fixtures / sample data — no committed files.** A fixture-builder writes **real**
+CSV/xlsx files to a temp dir from quirk-encoding specs (mixed-type column for the
+`TRY_CAST` migration pre-check; ambiguous-type column for inference; a column
+that forces the `var` fallback). Real files are used only where the file-read /
+inference path *is* the thing under test; in-memory frames / SQL inserts are used
+for everything downstream of an already-loaded table. Rationale: keeps DuckDB's
+native inference honest while avoiding repo bloat and — important for a tool that
+ingests user reports — never committing user-shaped data.
+
+---
+
+## §14 — CLI visual layer
+
+*Reserved — no CLI exists yet (mirrors CLAUDE.md → CLI reference placeholder).*
+Commands and the visual-layer implementation detail will be documented here as
+they are built.
+
+---
+
+## §15 — Package structure
+
+*Reserved — code does not exist yet.* The only fixed point so far is the
+`sql_user_table/` folder of per-source modules named `<source>_source_sql.py`
+(§8). The remaining layout is undecided and must not be invented here; it will be
+populated as modules are created.
+
+---
+
+## §16 — Completed work history
+
+- **Prior sessions** — authored `design.md` (canonical design intent) and
+  `CLAUDE.md` (distilled "what/why", routing table, principles, Active Deferred
+  Work).
+- **This session** — created this file (`CLAUDE_REFERENCE.md`) with §1–§13
+  populated and §14–§16 reserved, tied 1:1 to the CLAUDE.md routing table.
+  Implementation decisions pinned (all consistent with design.md): surrogate
+  ids `uuid4`; `content_hash_id` two-level `uuid5`; `*Entry`/`*Update` are
+  pydantic v2; user-function worker boundary uses Arrow IPC; v1 is Unix-only.
+  Pending follow-up: record the "v1 is Unix-only" platform posture in CLAUDE.md
+  (Principle 5), per the doc-split rule.
