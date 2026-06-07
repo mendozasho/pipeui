@@ -9,7 +9,7 @@ from pathlib import Path
 import duckdb
 
 from pipeui.ids import content_hash_id
-from pipeui.schema import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
+from pipeui.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB, IngestionMethod
 from pipeui.staging import CreateFlowCache
 from pipeui.validation import (
     ColumnRegistryEntry,
@@ -19,7 +19,10 @@ from pipeui.validation import (
 
 
 def infer_pattern(filename: str) -> str | None:
-    """Return a generalized regex pattern for a filename, or None if no digits exist."""
+    """Return a generalized regex pattern for a filename, or None if no digits exist.
+
+    Generally used to infer the filename of a new data source. For example, `sales-2025.04.03.xlsx`.
+    """
     stem = Path(filename).stem
     if not re.search(r"\d", stem):
         return None
@@ -27,9 +30,14 @@ def infer_pattern(filename: str) -> str | None:
 
 
 def infer_column_types(
-    conn: duckdb.DuckDBPyConnection, file_path: str
+        conn: duckdb.DuckDBPyConnection,
+        file_path: str
 ) -> list[tuple[str, str]]:
-    """Infer column names and types from a CSV or xlsx file using DuckDB sniffing."""
+    """Infer column names and types from a CSV or xlsx file using DuckDB sniffing.
+
+    Needs a duckdb connection to execute the DESCRIBE SELECT query, which is used to try and
+    get the column types.
+    """
     ext = Path(file_path).suffix.lower()
 
     if ext == ".xlsx":
@@ -89,24 +97,31 @@ def create_source(
     primary_key: str,
     ingestion_method: str = "upsert",
 ) -> tuple[uuid.UUID | None, FailedRegistryEntry]:
-    """Execute §6 source-create flow as one atomic transaction."""
+    """Execute the source-create flow as one atomic transaction."""
     failed = FailedRegistryEntry()
 
-    # §6 step 1.1
+    # Check if ingestion method is valid
+    if ingestion_method not in IngestionMethod.__members__.values():
+        raise ValueError(f"Invalid ingestion method: {ingestion_method}")
+
+    # Try to infer the pattern of the filename for future searches
     pattern = infer_pattern(Path(file_path).name)
 
-    # §6 step 1.2–1.3
+    # Try to infer column types from the file. Will later add the ones not in the column registry
     columns = infer_column_types(conn, file_path)
 
-    # §6 step 1.4 — stage in create-flow cache
+    # [1] [stage in create-flow cache]
+    # We stage so that any errors can be rolled back to previous working state.
     cache = CreateFlowCache(conn)
     cache.stage_columns(columns)
     cache.set_primary_key(primary_key)  # [DEFERRED] PK uniqueness not validated (§6, CLAUDE.md M4)
 
-    # §6 step 1.5
+    # The registry table requires the date we ingested the file, so we can keep track.
+    # Future builds may use this as a way of rolling back to a previous version.
     date_ingested = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
 
-    # §6 step 2 — build and validate SourceRegistryEntry
+    # [2] [build and validate SourceRegistryEntry]
+    # We build out the entry with a pydantic-based class to ensure the data is validated and correct.
     try:
         entry = SourceRegistryEntry(
             source_name=source_name,
@@ -116,15 +131,17 @@ def create_source(
             primary_key=primary_key,
         )
     except Exception as exc:
-        failed.add(None, str(exc))
+        failed.add(None, str(exc))  # should be an error from the pydantic validation
         return None, failed
 
+    # TODO: This should likely be added as part of the original step.
+    #  We aren't creating the path based off the variables
     db_path = _get_db_path(conn)
     entry.generate_table_url(db_path)
 
-    staged = cache.get_staged()
+    staged = cache.get_staged()  # used for the column table
 
-    # §6 steps 3–5 — one transaction covers source_registry + column_registry + source_column_map
+    # one transaction covers source_registry + column_registry + source_column_map
     conn.execute("BEGIN")
     try:
         conn.execute(

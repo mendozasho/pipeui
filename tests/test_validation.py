@@ -1,5 +1,5 @@
 """
-Behavioral-guarantee tests for validation.py (§3, §4).
+Behavioral-guarantee tests for pipeui.validation (§3, §4).
 Marker: unit — pure logic, no DB, no subprocess.
 """
 import uuid
