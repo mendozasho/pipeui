@@ -21,6 +21,7 @@ DUCKDB_TO_PYTHON: dict[str, type] = {
     "BOOL": bool,
 }
 """DuckDB to Python type mapping."""
+"""DuckDB to Python type mapping."""
 
 PYTHON_TO_DUCKDB = mapping = {
     "int64": "BIGINT",
