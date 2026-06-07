@@ -21,3 +21,8 @@ markers = [
     "unit: pure logic tests — no DB, no subprocess",
     "integration: tests using real DuckDB or subprocess",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
