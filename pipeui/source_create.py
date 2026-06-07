@@ -8,8 +8,8 @@ from pathlib import Path
 
 import duckdb
 
-from pipeui.ids import content_hash_id, new_id
-from pipeui.schema import DUCKDB_TO_PYTHON
+from pipeui.ids import content_hash_id
+from pipeui.schema import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
 from pipeui.staging import CreateFlowCache
 from pipeui.validation import (
     ColumnRegistryEntry,
@@ -37,19 +37,22 @@ def infer_column_types(
             rows = conn.execute(
                 f"DESCRIBE SELECT * FROM read_xlsx('{file_path}')"
             ).fetchall()
-        except Exception:
+        except Exception as exc:
             # Fall back to pandas for xlsx when read_xlsx is unavailable.
             import pandas as pd  # noqa: PLC0415
 
             df = pd.read_excel(file_path, nrows=0)
+            print(exc)
             return [
                 (col, _map_pandas_dtype(str(df[col].dtype)))
                 for col in df.columns
             ]
-    else:
+    elif ext == ".csv":
         rows = conn.execute(
             "DESCRIBE SELECT * FROM read_csv_auto(?)", [file_path]
         ).fetchall()
+    else:
+        raise ValueError(f"Unsupported file extension: {ext}")
 
     result = []
     for row in rows:
@@ -57,25 +60,14 @@ def infer_column_types(
         raw_type = row[1].upper() if row[1] else ""
         # Normalize parameterized types like VARCHAR(100) or DECIMAL(18,3) → base name
         base_type = re.split(r"[\s(]", raw_type)[0]
-        col_type = base_type if base_type in DUCKDB_TO_PYTHON else "var"
+        col_type = base_type if base_type in DUCKDB_TO_PYTHON else "VARCHAR"
         result.append((col_name, col_type))
     return result
 
 
 def _map_pandas_dtype(dtype_str: str) -> str:
-    """Map a pandas dtype string to a DUCKDB_TO_PYTHON key or 'var'."""
-    mapping = {
-        "int64": "BIGINT",
-        "int32": "INTEGER",
-        "int16": "SMALLINT",
-        "int8": "TINYINT",
-        "float64": "DOUBLE",
-        "float32": "FLOAT",
-        "bool": "BOOLEAN",
-        "object": "VARCHAR",
-        "datetime64[ns]": "TIMESTAMP",
-    }
-    return mapping.get(dtype_str, "var")
+    """Map a pandas dtype string to a DUCKDB_TO_PYTHON key or 'varchar'."""
+    return PYTHON_TO_DUCKDB.get(dtype_str, "VARCHAR")
 
 
 def _get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
@@ -85,8 +77,8 @@ def _get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
         for row in rows:
             if row[1] == "main" and row[2]:
                 return row[2]
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Error retrieving database path: {exc}")
     return ":memory:"
 
 

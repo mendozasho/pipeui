@@ -1,12 +1,39 @@
 import duckdb
 
 DUCKDB_TO_PYTHON: dict[str, type] = {
-    "DOUBLE": float, "FLOAT": float, "REAL": float, "DECIMAL": float, "NUMERIC": float,
-    "BIGINT": int, "INTEGER": int, "INT": int, "SMALLINT": int, "TINYINT": int, "HUGEINT": int,
-    "VARCHAR": str, "TEXT": str,
-    "DATE": str, "TIMESTAMP": str, "TIMESTAMPTZ": str,
-    "BOOLEAN": bool, "BOOL": bool,
+    "DOUBLE": float,
+    "FLOAT": float,
+    "REAL": float,
+    "DECIMAL": float,
+    "NUMERIC": float,
+    "BIGINT": int,
+    "INTEGER": int,
+    "INT": int,
+    "SMALLINT": int,
+    "TINYINT": int,
+    "HUGEINT": int,
+    "VARCHAR": str,
+    "TEXT": str,
+    "DATE": str,
+    "TIMESTAMP": str,
+    "TIMESTAMPTZ": str,
+    "BOOLEAN": bool,
+    "BOOL": bool,
 }
+"""DuckDB to Python type mapping."""
+
+PYTHON_TO_DUCKDB = mapping = {
+    "int64": "BIGINT",
+    "int32": "INTEGER",
+    "int16": "SMALLINT",
+    "int8": "TINYINT",
+    "float64": "DOUBLE",
+    "float32": "FLOAT",
+    "bool": "BOOLEAN",
+    "object": "VARCHAR",
+    "datetime64[ns]": "TIMESTAMP",
+}
+"""Python to DuckDB type mapping."""
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS source_registry (
@@ -66,11 +93,41 @@ CREATE TABLE IF NOT EXISTS alias_map (
     source_id    UUID NOT NULL REFERENCES source_registry(source_id)
 );
 """
+"""Creates the base application tables on initialization."""
 
+
+############################
+# DuckDB Related Functions
+############################
+# Leaving it here in case in the future, we need to get away from DuckDB
 
 def get_connection(db_path: str = ":memory:") -> duckdb.DuckDBPyConnection:
+    """Establishes and returns a connection to a DuckDB database.
+
+    This function creates a connection to a DuckDB database using the provided
+    database file path. If no path is provided, it defaults to an in-memory
+    database.
+
+    :param db_path: The file path to the DuckDB database. Defaults to ":memory:"
+                    which creates an in-memory database.
+    :type db_path: str
+    :return: A DuckDBPyConnection object representing the connection to the database.
+    :rtype: duckdb.DuckDBPyConnection
+    """
     return duckdb.connect(db_path)
 
 
 def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Creates the necessary schema in the provided DuckDB connection.
+
+    This function executes a predefined SQL Data Definition Language (DDL) statement
+    to create database schema elements such as tables or other objects within the
+    given DuckDB connection.
+
+    :param conn: The DuckDB connection object to execute the schema creation
+        DDL statement on.
+    :type conn: duckdb.DuckDBPyConnection
+
+    :return: None
+    """
     conn.execute(_DDL)
