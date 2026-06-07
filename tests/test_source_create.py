@@ -175,7 +175,7 @@ def test_source_create_var_fallback(db, tmp_path):
     path = make_csv(tmp_path, "report.csv", ["id"], [[1]])
 
     # Patch infer_column_types to simulate an unrecognized type coming back from DuckDB
-    with patch("pipeui.source_create.infer_column_types", return_value=[("id", "var")]):
+    with patch("pipeui.workflow.create.infer_column_types", return_value=[("id", "var")]):
         source_id, failed = create_source(db, path, "var_source", "id")
 
     assert not failed.has_failures()
