@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipeui"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=0.10",
+    "pydantic>=2.0",
+    "pyarrow>=14.0",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: pure logic tests — no DB, no subprocess",
+    "integration: tests using real DuckDB or subprocess",
+]
