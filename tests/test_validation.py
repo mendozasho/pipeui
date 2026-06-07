@@ -2,12 +2,11 @@
 Behavioral-guarantee tests for pipeui.validation (§3, §4).
 Marker: unit — pure logic, no DB, no subprocess.
 """
-import uuid
 
 import pytest
 from pydantic import ValidationError
 
-from pipeui.ids import content_hash_id
+from pipeui.validation.ids import content_hash_id
 from pipeui.validation import (
     ColumnRegistryEntry,
     ColumnRegistryUpdate,

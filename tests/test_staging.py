@@ -1,7 +1,6 @@
 import pytest
-import duckdb
 
-from pipeui.staging import CreateFlowCache
+from pipeui.workflow.staging import CreateFlowCache
 
 
 @pytest.fixture

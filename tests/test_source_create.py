@@ -1,14 +1,14 @@
-"""Tests for source_create.py — behavioral guarantees per §13."""
+"""Tests for helpers.py — behavioral guarantees per §13."""
 from __future__ import annotations
 
 import csv
-import pathlib
 import uuid
 from unittest.mock import patch
 
 import pytest
 
-from pipeui.source_create import create_source, infer_column_types, infer_pattern
+from pipeui.helpers import infer_pattern
+from pipeui.workflow.create import create_source
 
 
 def make_csv(tmp_path, name, columns, rows):

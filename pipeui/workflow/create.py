@@ -2,92 +2,17 @@ from __future__ import annotations
 
 import datetime
 import os
-import re
 import uuid
 from pathlib import Path
 
 import duckdb
 
-from pipeui.ids import content_hash_id
-from pipeui.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB, IngestionMethod
-from pipeui.staging import CreateFlowCache
-from pipeui.validation import (
-    ColumnRegistryEntry,
-    FailedRegistryEntry,
-    SourceRegistryEntry,
-)
-
-
-def infer_pattern(filename: str) -> str | None:
-    """Return a generalized regex pattern for a filename, or None if no digits exist.
-
-    Generally used to infer the filename of a new data source. For example, `sales-2025.04.03.xlsx`.
-    """
-    stem = Path(filename).stem
-    if not re.search(r"\d", stem):
-        return None
-    return re.sub(r"\d+", r"\\d+", stem)
-
-
-def infer_column_types(
-        conn: duckdb.DuckDBPyConnection,
-        file_path: str
-) -> list[tuple[str, str]]:
-    """Infer column names and types from a CSV or xlsx file using DuckDB sniffing.
-
-    Needs a duckdb connection to execute the DESCRIBE SELECT query, which is used to try and
-    get the column types.
-    """
-    ext = Path(file_path).suffix.lower()
-
-    if ext == ".xlsx":
-        try:
-            rows = conn.execute(
-                f"DESCRIBE SELECT * FROM read_xlsx('{file_path}')"
-            ).fetchall()
-        except Exception as exc:
-            # Fall back to pandas for xlsx when read_xlsx is unavailable.
-            import pandas as pd  # noqa: PLC0415
-
-            df = pd.read_excel(file_path, nrows=0)
-            print(exc)
-            return [
-                (col, _map_pandas_dtype(str(df[col].dtype)))
-                for col in df.columns
-            ]
-    elif ext == ".csv":
-        rows = conn.execute(
-            "DESCRIBE SELECT * FROM read_csv_auto(?)", [file_path]
-        ).fetchall()
-    else:
-        raise ValueError(f"Unsupported file extension: {ext}")
-
-    result = []
-    for row in rows:
-        col_name = row[0]
-        raw_type = row[1].upper() if row[1] else ""
-        # Normalize parameterized types like VARCHAR(100) or DECIMAL(18,3) → base name
-        base_type = re.split(r"[\s(]", raw_type)[0]
-        col_type = base_type if base_type in DUCKDB_TO_PYTHON else "VARCHAR"
-        result.append((col_name, col_type))
-    return result
-
-
-def _map_pandas_dtype(dtype_str: str) -> str:
-    """Map a pandas dtype string to a DUCKDB_TO_PYTHON key or 'varchar'."""
-    return PYTHON_TO_DUCKDB.get(dtype_str, "VARCHAR")
-
-
-def _get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
-    """Return the DB file path for this connection, or ':memory:' for in-memory."""
-    try:
-        rows = conn.execute("PRAGMA database_list").fetchall()
-        for row in rows:
-            if row[1] == "main" and row[2]:
-                return row[2]
-    except Exception as exc:
-        print(f"Error retrieving database path: {exc}")
-    return ":memory:"
+from pipeui.validation.ids import content_hash_id
+from pipeui.schema.constants import IngestionMethod
+from pipeui.duckdb import infer_column_types, get_db_path
+from pipeui.helpers import infer_pattern
+from pipeui.workflow.staging import CreateFlowCache
+from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, ColumnRegistryEntry
 
 
 def create_source(
@@ -136,7 +61,7 @@ def create_source(
 
     # TODO: This should likely be added as part of the original step.
     #  We aren't creating the path based off the variables
-    db_path = _get_db_path(conn)
+    db_path = get_db_path(conn)
     entry.generate_table_url(db_path)
 
     staged = cache.get_staged()  # used for the column table
