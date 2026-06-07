@@ -28,15 +28,15 @@ def make_csv(tmp_path, name, columns, rows):
 
 @pytest.mark.unit
 def test_infer_pattern_extracts_digit_pattern():
-    """§6 step 1.1: filename with digits produces a pattern containing \\d+."""
-    result = infer_pattern("sales_2024.csv")
+    """filename with digits produces a pattern containing \\d+."""
+    result = infer_pattern("sales_2024.07.08_bar.csv")
     assert result is not None
     assert r"\d+" in result
 
 
 @pytest.mark.unit
 def test_infer_pattern_returns_none_for_no_digits():
-    """§6 step 1.1: filename with no digits returns None."""
+    """filename with no digits returns None."""
     assert infer_pattern("employees.csv") is None
 
 
@@ -47,7 +47,7 @@ def test_infer_pattern_returns_none_for_no_digits():
 
 @pytest.mark.integration
 def test_source_create_registers_source_row(db, tmp_path):
-    """§6: source-create writes source_registry row with correct source_name and ingestion_method."""
+    """source-create writes source_registry row with correct source_name and ingestion_method."""
     path = make_csv(tmp_path, "report.csv", ["id", "value"], [[1, "a"], [2, "b"]])
     source_id, failed = create_source(db, path, "my_report", "id", "upsert")
 

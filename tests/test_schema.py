@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from pipeui.schema import create_schema, get_connection
+from pipeui.duckdb import create_schema
 from tests.conftest import make_registered_source
 
 REGISTRY_TABLES = {"source_registry", "function_registry", "column_registry", "parameter"}
@@ -10,6 +10,7 @@ MAP_TABLES = {"source_column_map", "source_function_map", "alias_map"}
 
 
 def _table_names(conn) -> set[str]:
+    """Returns the set of table names in the database."""
     rows = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
     return {r[0] for r in rows}
 
@@ -30,8 +31,15 @@ def test_all_map_tables_created(db):
 def test_source_registry_columns(db):
     # §1: source_registry must expose exactly the columns specified in the schema
     expected = {
-        "source_id", "content_hash_id", "source_name", "date_ingested",
-        "date_registered", "ingestion_method", "pattern", "primary_key", "table_url",
+        "source_id",
+        "content_hash_id",
+        "source_name",
+        "date_ingested",
+        "date_registered",
+        "ingestion_method",
+        "pattern",
+        "primary_key",
+        "table_url",
     }
     rows = db.execute(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'source_registry'"
@@ -52,6 +60,7 @@ def test_source_column_map_has_composite_uuid_pk(db):
     source_id, column_ids = make_registered_source(db, n_columns=1)
     row = db.execute("SELECT source_column_map_id FROM source_column_map LIMIT 1").fetchone()
     assert row is not None
+
     # DuckDB returns UUIDs as strings in this context; round-trip must parse cleanly
     parsed = uuid.UUID(str(row[0]))
     assert isinstance(parsed, uuid.UUID)

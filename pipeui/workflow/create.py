@@ -26,7 +26,8 @@ def create_source(
     failed = FailedRegistryEntry()
 
     # Check if ingestion method is valid
-    if ingestion_method not in IngestionMethod.__members__.values():
+    if not IngestionMethod.accepted(ingestion_method):
+        print(IngestionMethod.__members__.values())
         raise ValueError(f"Invalid ingestion method: {ingestion_method}")
 
     # Try to infer the pattern of the filename for future searches

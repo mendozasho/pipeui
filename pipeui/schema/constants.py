@@ -54,3 +54,8 @@ class IngestionMethod(enum.Enum):
     """
     UPSERT = "upsert"
     APPEND = "append"
+
+    @staticmethod
+    def accepted(val: str) -> bool:
+        members = [member.value for member in IngestionMethod.__members__.values()]
+        return val.lower() in members

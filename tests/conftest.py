@@ -5,12 +5,12 @@ import uuid
 import pytest
 
 from pipeui.validation.ids import content_hash_id
-from pipeui.schema import create_schema, get_connection
+from pipeui.duckdb import create_schema, get_connection
 
 
 @pytest.fixture
 def db():
-    # §13: fresh in-memory sandbox; function-scoped so each test gets a clean slate
+    # fresh in-memory sandbox; function-scoped so each test gets a clean slate
     conn = get_connection(":memory:")
     create_schema(conn)
     yield conn
@@ -19,7 +19,7 @@ def db():
 
 @pytest.fixture
 def db_file(tmp_path):
-    # §13: file-backed only when table_url / file-path resolution is under test
+    # file-backed only when table_url / file-path resolution is under test
     path = str(tmp_path / "test.db")
     conn = get_connection(path)
     create_schema(conn)
@@ -39,6 +39,12 @@ def patch_new_id(monkeypatch):
 
 
 def make_registered_source(conn, n_columns: int = 2):
+    """
+    Create a test source with a specified number of columns.
+
+    Returns:
+        tuple: source_id, list of column_ids
+    """
     source_id = uuid.uuid4()
     ch = content_hash_id("source_registry", f"test_source_{source_id}", "id", "upsert")
     conn.execute(
