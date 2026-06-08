@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from pipeui.api.deps import get_conn
+from pipeui.helpers import get_conn
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.workflow.migration import migrate_column

@@ -8,7 +8,7 @@ import duckdb
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from pipeui.api.deps import get_conn
+from pipeui.helpers import get_conn
 from pipeui.workflow.functions import list_functions, scan_functions
 
 router = APIRouter(prefix="/functions", tags=["functions"])
