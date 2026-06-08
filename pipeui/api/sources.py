@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Generator
 
 import duckdb
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
@@ -14,16 +14,19 @@ from pipeui.workflow.create import create_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-# Resolve DB path from env var; default to pipeui.db in the working directory.
-DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))
+# Hardcoded for now; will become an app setting when that feature is wired up.
+DB_PATH = Path("pipeui.db")
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 
 
-def _get_conn() -> duckdb.DuckDBPyConnection:
+def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
@@ -57,7 +60,6 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         record["date_ingested"] = record["date_ingested"].isoformat() if record["date_ingested"] else None
         record["date_registered"] = record["date_registered"].isoformat() if record["date_registered"] else None
 
-        # Fetch columns for this source
         cols = conn.execute(
             """
             SELECT cr.column_id, cr.column_name, cr.column_type
@@ -79,12 +81,8 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
 
 @router.get("")
-def list_sources():
-    conn = _get_conn()
-    try:
-        return _source_rows(conn)
-    finally:
-        conn.close()
+def list_sources(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    return _source_rows(conn)
 
 
 @router.post("")
@@ -93,6 +91,7 @@ async def register_source(
     source_name: str = Form(...),
     primary_key: str = Form(...),
     ingestion_method: str = Form("upsert"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -101,12 +100,10 @@ async def register_source(
             detail=f"Unsupported file type '{suffix}'. Accepted: {sorted(ALLOWED_EXTENSIONS)}",
         )
 
-    # Write the upload to a temp file so create_source can read it from disk
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
-    conn = _get_conn()
     try:
         source_id, failed = create_source(
             conn=conn,
@@ -123,11 +120,9 @@ async def register_source(
                 content={"ok": False, "errors": reasons},
             )
 
-        # Return the newly registered source record
         rows = _source_rows(conn)
         record = next((r for r in rows if r["source_id"] == str(source_id)), None)
         return {"ok": True, "source": record}
 
     finally:
-        conn.close()
         Path(tmp_path).unlink(missing_ok=True)
