@@ -11,10 +11,11 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 CONFIG_PATH = Path("pipeui.config.json")
 
-DEFAULTS = {
+DEFAULTS: dict = {
     "db_path": "pipeui.db",
     "accent": "#7c6cf5",
     "density": "regular",
+    "functions_paths": [],
 }
 
 
@@ -22,12 +23,14 @@ class AppSettings(BaseModel):
     db_path: str = DEFAULTS["db_path"]
     accent: str = DEFAULTS["accent"]
     density: str = DEFAULTS["density"]
+    functions_paths: list[str] = []
 
 
 class SettingsPatch(BaseModel):
     db_path: str | None = None
     accent: str | None = None
     density: str | None = None
+    functions_paths: list[str] | None = None
 
 
 def load_settings() -> AppSettings:
@@ -51,7 +54,8 @@ def get_settings():
 @router.patch("")
 def patch_settings(patch: SettingsPatch):
     current = load_settings()
-    updates = {k: v for k, v in patch.model_dump().items() if v is not None}
+    # Use model_fields_set to include only explicitly-provided fields (handles empty list for functions_paths)
+    updates = {k: v for k, v in patch.model_dump().items() if k in patch.model_fields_set}
     restart_required = "db_path" in updates and updates["db_path"] != current.db_path
     updated = current.model_copy(update=updates)
     save_settings(updated)

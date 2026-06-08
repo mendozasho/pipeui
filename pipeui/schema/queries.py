@@ -20,9 +20,10 @@ CREATE TABLE IF NOT EXISTS function_registry (
     function_name        VARCHAR NOT NULL,
     function_doc         VARCHAR,
     function_return_type VARCHAR NOT NULL,
-    function_signature   VARCHAR NOT NULL,
+    function_signature   VARCHAR,
     function_type        VARCHAR NOT NULL,
-    module_path          VARCHAR NOT NULL
+    module_path          VARCHAR NOT NULL,
+    is_active            BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS column_registry (
