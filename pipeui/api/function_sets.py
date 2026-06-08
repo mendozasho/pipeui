@@ -28,17 +28,17 @@ class CreateSetBody(BaseModel):
     members: list[str] = []
 
 
-@router.get("")
-def get_function_sets(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
-    """Return all function sets as summaries, ordered by set_name."""
-    return list_function_sets(conn)
-
-
 class PatchSetBody(BaseModel):
     set_name: Optional[str] = None
     set_description: Optional[str] = None
     clear_description: bool = False
     members: Optional[list[str]] = None
+
+
+@router.get("")
+def get_function_sets(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    """Return all function sets as summaries, ordered by set_name."""
+    return list_function_sets(conn)
 
 
 @router.get("/{set_id}")
