@@ -51,9 +51,13 @@ class IngestionMethod(enum.Enum):
     :ivar APPEND: Specifies that the ingestion method involves adding new records
         without checking for existing records.
     :type APPEND: str
+    :ivar SKIP: Specifies that the ingestion method involves skipping ingestion
+        of data without any action.
+    :type SKIP: str
     """
     UPSERT = "upsert"
     APPEND = "append"
+    SKIP = "skip"
 
     @staticmethod
     def accepted(val: str) -> bool:

@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-06
+updated: 2026-06-07
 purpose: >
   Project reference document — "how a specific thing is implemented." The
   companion to CLAUDE.md, which answers "what to build and why." Read the
@@ -30,11 +30,15 @@ genuine design choice, stop and record it in CLAUDE.md first.
 Deferred Work is referenced as open, never silently decided (CLAUDE.md rule 10).
 Such points are tagged **[DEFERRED]** inline below.
 
-**Decisions pinned in the session that created this file** (all consistent with
-design.md): surrogate ids are `uuid4`; `content_hash_id` uses two-level
-`uuid5`; `*Entry`/`*Update` objects are pydantic v2; the user-function worker
-boundary uses Arrow IPC; v1 is Unix-only. Each is documented in the relevant
-section below.
+**Decisions pinned so far** (all consistent with design.md): surrogate ids are
+`uuid4`; `content_hash_id` uses two-level `uuid5`; `*Entry`/`*Update` objects are
+pydantic v2; the user-function worker boundary uses Arrow IPC; v1 is Unix-only.
+Pinned in the docs-sync session: ingestion methods are `upsert`/`append`/`skip`;
+the uninferable `column_type` fallback is `VARCHAR`; the `content_hash_id`
+edit-collision rule is **reject** (enforced at the write boundary);
+`function_signature` is retained and defined. Each is documented in the relevant
+section below. Code debt left by the implementation+reorg session is tracked in
+REFACTOR_PLAN.md.
 
 ---
 
@@ -54,12 +58,12 @@ instance table live as tables **inside one DuckDB database file**. There is no
 - the **`content_hash_id`** — DuckDB native `UUID`, `uuid5`, mutable,
   recomputed on edit (§2, §3), unique *within its own table*.
 
-**Enum storage.** Defined enums (`ingestion_method` ∈ {`upsert`, `skip`}, and
-the function enums in §11) are stored as constrained `VARCHAR`, validated at the
-app layer by the pydantic objects (§3), in v1. Promotion to DuckDB native `ENUM`
-is possible once each vocabulary is final; `column_registry.column_type` cannot
-be promoted until its set is pinned — **[DEFERRED]** (CLAUDE.md → Active
-Deferred Work: `column_type` enum).
+**Enum storage.** Defined enums (`ingestion_method` ∈ {`upsert`, `append`,
+`skip`}, and the function enums in §11) are stored as constrained `VARCHAR`,
+validated at the app layer by the pydantic objects (§3), in v1. Promotion to
+DuckDB native `ENUM` is possible once each vocabulary is final;
+`column_registry.column_type` cannot be promoted until its set is pinned —
+**[DEFERRED]** (CLAUDE.md → Active Deferred Work: `column_type` enum).
 
 ### Registry tables (concrete schema)
 
@@ -72,7 +76,7 @@ Deferred Work: `column_type` enum).
 | `source_name` | VARCHAR | no | mutable |
 | `date_ingested` | TIMESTAMP | yes | last-ingested timestamp (no per-ingestion history — §9) |
 | `date_registered` | DATE | no | immutable, set once at create |
-| `ingestion_method` | VARCHAR(enum) | no | `upsert` \| `skip` |
+| `ingestion_method` | VARCHAR(enum) | no | `upsert` \| `append` \| `skip` (semantics in §9) |
 | `pattern` | VARCHAR | yes | regex/naming convention inferred from filename (§6.1) |
 | `primary_key` | VARCHAR | no | PK column of the instance table; first column assumed if undeterminable — no uniqueness check **[DEFERRED]** |
 | `table_url` | VARCHAR | yes until create completes | resolves to the single DB file; instance table identified by name within it |
@@ -89,7 +93,7 @@ Deferred Work: `column_type` enum).
 | `function_return_type` | VARCHAR(enum) | no | see §11 vocabulary note |
 | `function_type` | VARCHAR(enum) | no | `validation` \| `transform`, derived (§11) |
 | `module_path` | VARCHAR | no | path used to load the actual fn |
-| `function_signature` | — | — | **[DEFERRED]** — no type/description decided; stored or dropped pending decision |
+| `function_signature` | VARCHAR | no | canonical `param_name: type` signature (the `inspect.signature` form, including the return annotation) captured at registration. Its purpose is to make argument binding easy: attach/run binds arguments **by keyword** to these parameters (§12). The `parameter` rows are the queryable per-parameter decomposition; this column is the canonical signature string. (Must be added back to the DDL — see REFACTOR_PLAN.md.) |
 
 `column_registry`
 
@@ -98,7 +102,7 @@ Deferred Work: `column_type` enum).
 | `column_id` | UUID | no | PK, surrogate (uuid4) |
 | `content_hash_id` | UUID | no | uuid5 of (`column_name`, `column_type`) |
 | `column_name` | VARCHAR | no | taken verbatim from the spreadsheet |
-| `column_type` | VARCHAR(enum) | no | inferred at read; falls back to `var` when uninferable (§6.1) — enum set **[DEFERRED]** |
+| `column_type` | VARCHAR(enum) | no | inferred at read; falls back to `VARCHAR` when uninferable (§6.1) — enum set **[DEFERRED]** |
 
 `parameter`
 
@@ -132,9 +136,11 @@ the same pair never produces two rows.
 tables".*
 
 **Surrogate `id` (`uuid4`).** Generated behind a **single injectable function**
-(one module-level factory, e.g. `new_id()`), so it can be patched in one place
-for deterministic tests (§13). It is the true PK and the only value referenced
-by maps and writes; it is **never** recomputed or changed by an edit.
+(one module-level factory, `new_id()`), so it can be patched in one place for
+deterministic tests (§13). It is the true PK and the only value referenced by
+maps and writes; it is **never** recomputed or changed by an edit. The factory
+lives in `pipeui/ids.py` (foundational module — see §15; relocation from
+`pipeui/validation/ids.py` is tracked in REFACTOR_PLAN.md).
 
 **`content_hash_id` (two-level `uuid5`).** Computed in two steps so the per-table
 namespacing in Principle 1 is structural rather than convention:
@@ -153,10 +159,17 @@ different tables never collide (Principle 1). Recompute happens only through the
 `*Update` objects (§3); since maps reference the surrogate, recompute never
 orphans a map row.
 
-**[DEFERRED]** — edit-collision rule: a recompute can land on a
-`content_hash_id` that already exists on another row in the same table; reject
-vs. merge is undecided (CLAUDE.md → Active Deferred Work). Code must not assume
-either; surface the collision.
+**Edit-collision rule (decided: reject).** A recompute can land on a
+`content_hash_id` already present on another row in the same table. On collision
+the edit is **rejected and surfaced as a failure** (no merge). Because detecting
+it requires reading other rows — which the `*Update` objects do **not** do (§3,
+and CLAUDE.md → Architecture) — the check lives at the **write/transaction
+boundary** (the workflow layer that owns the connection): recompute the hash in
+`*Update`, then, before/within the UPDATE, look for an existing row carrying the
+new `content_hash_id` on a *different* surrogate id; on a hit, route to
+`FailedRegistryEntry` (§4) and roll back. Implements CLAUDE.md → Principle 1.
+(Wiring this into real code — currently simulated inline in a test — is tracked
+in REFACTOR_PLAN.md.)
 
 ---
 
@@ -179,7 +192,7 @@ the table's fields; validates every field. Methods:
 - On any validation failure the whole object is handed to the matching rejection
   object (§4) with the error message; it does not write.
 - Communicates only with the create-flow cache (§5) and a config holding the DB
-  URL — not with other app objects.
+  URL — not with other app objects, and **never reads other table rows**.
 
 **`*Update` (`SourceRegistryUpdate`, `ColumnRegistryUpdate`, …).** Same fields,
 all optional. Only fields the user actually touched are populated; untouched
@@ -188,18 +201,26 @@ field that feeds the `content_hash_id` (per §1/§2), the object recomputes
 `content_hash_id`. The surrogate id is never changed by an update. All update
 requests flow through these objects, never through `*Entry`.
 
+**Collision check lives at the write boundary, not in the model.** After the
+`*Update` recomputes the hash, the workflow layer checks the target table for an
+existing row carrying that `content_hash_id` on a *different* surrogate id; a hit
+is rejected via `FailedRegistryEntry` (§4) and the transaction rolls back (no
+merge). The check is *not* a pydantic validator because the model holds no DB
+handle and does not read other rows (boundary above) — see §2.
+
 ---
 
 ## §4 — Rejection objects: `FailedRegistryEntry`, `FailedFunctionEntry`, rollback triggers
 
-*Implements: CLAUDE.md → Principle 3 (rollback semantics). Design intent:
-design.md → Rejection Objects.*
+*Implements: CLAUDE.md → Principle 3 (rollback semantics) and Principle 1
+(edit-collision → reject). Design intent: design.md → Rejection Objects.*
 
 Both are **stack** objects accumulating failures to return to the UI.
 
 `FailedRegistryEntry` — registry tables only (tables with `registry` in the
 name). Stores the attempted `*Entry` object (which both carries the attempted
 values and identifies the target table) plus the error message / failure reason.
+Also the sink for an edit-collision rejection (§2/§3).
 
 `FailedFunctionEntry` — function rejections (missing return, untyped parameter,
 etc.). Stores the function and its breakdown plus the error message and
@@ -227,7 +248,8 @@ functionality) backs two distinct uses of the *same mechanism*:
 - **Create-flow cache** — holds *registration metadata*: read column names,
   user-confirmed `column_type`s, and the PK choice. The user's final
   confirmation is the source of truth; edits the user makes update the cache
-  before values are pulled into `*Entry` objects (§3).
+  before values are pulled into `*Entry` objects (§3). Implemented as
+  `CreateFlowCache` in `pipeui/workflow/staging.py`.
 - **Ingestion staging** — holds *actual rows* during a load (§9).
 
 Both stage writes during an operation and abort the transaction on any error in
@@ -240,16 +262,16 @@ contents; only the mechanism is shared.
 
 *Implements: CLAUDE.md → Architecture and Principle 3 (source-create is one
 transaction). Design intent: design.md → Initializing a new source → Backend
-Perspective.*
+Perspective.* Implemented in `pipeui/workflow/create.py::create_source`.
 
 1. **Read the uploads.** Per file: (1.1) infer a regex `pattern` from the
    filename; (1.2) add any unknown columns to `column_registry`; (1.3) infer
    `column_type` from sample data using DuckDB-native inference, falling back to
-   `var` when inference errors or has insufficient data (optionally cross-check
-   `column_registry` for a known type); (1.4) stage everything in the create-flow
-   cache (§5) and request the PK column from the user; (1.5) get `date_ingested`
-   from `st_mtime` (or faster); (1.6) everything is now known except `table_url`
-   (optional until step 2).
+   `VARCHAR` when inference errors or has insufficient data (optionally
+   cross-check `column_registry` for a known type); (1.4) stage everything in the
+   create-flow cache (§5) and request the PK column from the user; (1.5) get
+   `date_ingested` from `st_mtime` (or faster); (1.6) everything is now known
+   except `table_url` (optional until step 2).
 2. **Build `SourceRegistryEntry`** from the cache (column data is not in
    `source_registry`, so it is not pulled in here). Validate; generate
    `table_url` and `content_hash_id` (§2, §3).
@@ -264,6 +286,13 @@ Perspective.*
 
 **[DEFERRED]** — no validation that the chosen/assumed PK is unique (CLAUDE.md →
 Active Deferred Work: single-column PK / no uniqueness check).
+
+**Known gap (REFACTOR_PLAN.md):** an invalid `ingestion_method` currently raises
+uncaught in `create_source` (the `IngestionMethod.accepted()` gate) rather than
+routing to `FailedRegistryEntry`; and the enum (`upsert`/`append`) and the
+`SourceRegistryEntry` validator (`upsert`/`skip`) disagree, so only `upsert`
+works today. Both need unifying to the full `upsert`/`append`/`skip` set with the
+invalid path routed to the rejection stack.
 
 ---
 
@@ -307,7 +336,7 @@ written directly via SQL (§9 governs atomicity).
 
 The generated SQL for each user table is stored in a **`sql_user_table/`**
 folder, one Python module per table named `<source>_source_sql.py` (e.g.
-`foo_source_sql.py`).
+`foo_source_sql.py`). *(Not yet created — see §15 / ROADMAP.md.)*
 
 **Boundary:** the instance table has no reference back to the registry; the
 registry knows about the instance table, not vice versa.
@@ -326,8 +355,14 @@ leaving the existing table at its last committed state. Schema changes (table
 create/alter) are transactional in DuckDB and fall under the same all-or-nothing
 guarantee.
 
-On duplicate ids during ingestion, `ingestion_method` decides: `upsert` or
-`skip`. Ingested rows are retained for summaries and deliverables.
+On duplicate ids during ingestion, `ingestion_method` decides:
+- **`upsert`** — update the existing row, or insert if new.
+- **`append`** — straight insert; no duplicate handling (insert whatever loads).
+- **`skip`** — skip rows whose id already exists, **and report the skipped rows
+  back to the user** so dropped lines are visible (this report is a behavioral
+  guarantee — rule 9 — and owes a test; see ROADMAP.md `feat/ingestion`).
+
+Ingested rows are retained for summaries and deliverables.
 
 **"Rollback" everywhere in this app = a DuckDB transaction abort to the last
 committed state.** Reverting to an *earlier* ingestion (time-travel) is out of
@@ -423,7 +458,9 @@ until the reconciliation is decided.
 `function_class`, and `function_return_type` collapse **strictly on
 `content_hash_id`**. On collision the existing surrogate `function_id` is
 preserved and only mutable columns are overwritten — keeping `source_function_map`,
-`alias_map`, and derived `parameter.content_hash_id` values intact.
+`alias_map`, and derived `parameter.content_hash_id` values intact. (This is the
+function re-upload collapse; the registry edit-collision in §2 is a separate rule
+that *rejects*.)
 
 ---
 
@@ -444,6 +481,9 @@ sources.
   metadata.
 - **Keyword binding.** Arguments are bound to parameters **by keyword** via
   `param_name` (§1 `parameter`), not positionally.
+  `function_registry.function_signature` (§1) is the canonical captured
+  `param_name: type` signature this binding follows; the `parameter` rows are the
+  queryable decomposition `alias_map` joins against.
 - **Multi-select loop.** For a `multi_select_eligible` parameter with N mapped
   eligible columns, the function runs N times (once per column); results are
   aggregated in the summary (§16/Results — deferred).
@@ -468,11 +508,13 @@ is no platform-skip tier to maintain.
 touches SQL/transactions runs against a **real** DuckDB engine on disposable
 storage; the guarantees under test (rollback, `TRY_CAST`, atomicity, cross-source
 joins) *are* DuckDB behaviors and a fake interface cannot validate them.
-- `:memory:` by default; a temp file only when a test exercises `table_url` /
-  file-path resolution or needs the DB to survive a reopen.
-- **Fresh DB per test** (function-scoped fixture + a schema-builder helper that
-  creates the registry tables, plus a seeding helper for "a registered source
-  with N columns").
+- `:memory:` by default (the function-scoped `db` fixture); a temp file only when
+  a test exercises `table_url` / file-path resolution or needs the DB to survive
+  a reopen (the `db_file` fixture).
+- **Fresh DB per test** (function-scoped fixture + the `create_schema` builder
+  that creates the registry/map tables, plus the `make_registered_source(conn,
+  n_columns)` seeding helper in `conftest.py` for "a registered source with N
+  columns").
 - **Do NOT** use the "wrap each test in a transaction, roll back at teardown"
   isolation trick — the system under test owns transactions/rollback, so a
   test-level transaction would collide with what is being verified.
@@ -506,24 +548,34 @@ hard to provoke.
 
 **Pure-logic tests** (`unit`, no DB, no subprocess) — the bulk of the suite:
 `content_hash_id` recompute (contributing field changes → hash changes;
-non-contributing field → unchanged; surrogate id never changes); function
-collapse (same name/class/return_type → same `content_hash_id`, surrogate
-preserved, mutables overwritten); the full `function_class` / `function_type` /
-`function_return_type` derivation table (§11).
+non-contributing field → unchanged; surrogate id never changes); the
+edit-collision rejection (recompute onto an existing same-table hash → routed to
+`FailedRegistryEntry`); function collapse (same name/class/return_type → same
+`content_hash_id`, surrogate preserved, mutables overwritten); the full
+`function_class` / `function_type` / `function_return_type` derivation table (§11).
 
 **UUID determinism.** Patch the single injectable surrogate (`uuid4`) factory
-(§2) via a fixture for equality assertions. For `content_hash_id` (`uuid5`,
-deterministic) assert **relationships** (equal inputs → equal hash; different
-table namespace → different hash) rather than hardcoded UUID literals.
+(§2) via a fixture for equality assertions (`patch_new_id`). For `content_hash_id`
+(`uuid5`, deterministic) assert **relationships** (equal inputs → equal hash;
+different table namespace → different hash) rather than hardcoded UUID literals.
 
-**Fixtures / sample data — no committed files.** A fixture-builder writes **real**
-CSV/xlsx files to a temp dir from quirk-encoding specs (mixed-type column for the
-`TRY_CAST` migration pre-check; ambiguous-type column for inference; a column
-that forces the `var` fallback). Real files are used only where the file-read /
-inference path *is* the thing under test; in-memory frames / SQL inserts are used
-for everything downstream of an already-loaded table. Rationale: keeps DuckDB's
-native inference honest while avoiding repo bloat and — important for a tool that
-ingests user reports — never committing user-shaped data.
+**Fixtures / sample data — no committed files.** Where the file-read / inference
+path *is* under test, write **real** CSV/xlsx to a temp dir (currently via a
+per-test `make_csv` helper in `test_source_create.py`); use in-memory frames /
+SQL inserts for everything downstream of an already-loaded table. A richer
+quirk-encoding fixture-builder (mixed-type for the `TRY_CAST` migration
+pre-check; ambiguous-type for inference; a column that forces the `VARCHAR`
+fallback) is **owed but not yet built** — add it when the inference/migration
+tests need it. Rationale: keeps DuckDB's native inference honest while avoiding
+repo bloat and — important for a tool that ingests user reports — never
+committing user-shaped data.
+
+**Known test debt (REFACTOR_PLAN.md):** `patch_new_id` and
+`test_source_create_var_fallback` carry stale pre-reorg patch targets
+(`pipeui.ids.new_id`, `pipeui.source_create.*`); the ingestion-method validation
+paths need unifying before their atomicity test passes; the edit-collision check
+is currently simulated inline in `test_validation.py` rather than exercising real
+code.
 
 ---
 
@@ -537,10 +589,54 @@ they are built.
 
 ## §15 — Package structure
 
-*Reserved — code does not exist yet.* The only fixed point so far is the
-`sql_user_table/` folder of per-source modules named `<source>_source_sql.py`
-(§8). The remaining layout is undecided and must not be invented here; it will be
-populated as modules are created.
+Phase 0–1 code now exists. Current layout (boundaries in CLAUDE.md →
+Architecture):
+
+```
+pipeui/
+  __init__.py
+  ids.py               # surrogate new_id() (uuid4) + two-level uuid5 content_hash_id (§2)
+                       #   [foundational; being relocated here from validation/ids.py — REFACTOR_PLAN.md]
+  duckdb.py            # get_connection, create_schema, DuckDB-native type inference, db-path resolution
+  helpers.py           # filename → regex pattern inference (§6.1)
+  schema/
+    __init__.py
+    constants.py       # DUCKDB_TO_PYTHON / PYTHON_TO_DUCKDB maps, IngestionMethod enum
+    queries.py         # DDL for the 4 registries + 3 map tables (§1)
+  validation/
+    __init__.py
+    source.py          # SourceRegistryEntry / SourceRegistryUpdate (pydantic v2, §3)
+    column.py          # ColumnRegistryEntry / ColumnRegistryUpdate (pydantic v2, §3)
+    fails.py           # FailedRegistryEntry / FailedFunctionEntry stacks (§4)
+  workflow/
+    __init__.py
+    staging.py         # CreateFlowCache — transient temp-table staging (§5)
+    create.py          # create_source() — the one-transaction source-create flow (§6)
+tests/
+  __init__.py
+  conftest.py          # db / db_file / patch_new_id fixtures + make_registered_source seeding helper
+  test_ids.py          # §2
+  test_validation.py   # §3, §4
+  test_staging.py      # §5
+  test_schema.py       # §1
+  test_source_create.py# §6
+```
+
+**Layer boundaries:**
+- `ids.py` is foundational — imported by both `validation/` and `workflow/`; it
+  holds no DB handle and depends on nothing else in the package. (This is why it
+  is being lifted out of `validation/` — REFACTOR_PLAN.md.)
+- `schema/` + `duckdb.py` are the DB layer (DDL, type maps, connection,
+  inference). No validation or workflow logic here.
+- `validation/` holds the pydantic `*Entry`/`*Update` objects and rejection
+  stacks. These **do not read other table rows** (§3 boundary).
+- `workflow/` owns the DuckDB connection and transactions. The atomic write sets
+  (§6) and the edit-collision check (§2/§3) live here. Map rows are written
+  directly from here; registry rows go through the `validation/` objects.
+
+**Still to come:** the `sql_user_table/` folder of per-source modules named
+`<source>_source_sql.py` (§8); the function track package(s) (§10–§12); CLI
+(§14). Layout for those is undecided and must not be invented here.
 
 ---
 
@@ -549,10 +645,20 @@ populated as modules are created.
 - **Prior sessions** — authored `design.md` (canonical design intent) and
   `CLAUDE.md` (distilled "what/why", routing table, principles, Active Deferred
   Work).
-- **This session** — created this file (`CLAUDE_REFERENCE.md`) with §1–§13
+- **CLAUDE_REFERENCE authoring session** — created this file with §1–§13
   populated and §14–§16 reserved, tied 1:1 to the CLAUDE.md routing table.
   Implementation decisions pinned (all consistent with design.md): surrogate
   ids `uuid4`; `content_hash_id` two-level `uuid5`; `*Entry`/`*Update` are
   pydantic v2; user-function worker boundary uses Arrow IPC; v1 is Unix-only.
-  The "v1 is Unix-only" platform posture was recorded in CLAUDE.md (Principle 5)
-  per the doc-split rule.
+- **Implementation + reorg session (Claude Code)** — built Phase 0 + Phase 1:
+  id generation, the DuckDB schema/DDL, the test harness, the pydantic
+  validation objects, the create-flow staging cache, and the one-transaction
+  `create_source` flow — under the new `schema/` / `validation/` / `workflow/`
+  package layout (§15). Left some debt (now in REFACTOR_PLAN.md).
+- **Docs-sync session (this one)** — reconciled the docs to the implemented code
+  and the reorg, and pinned the open decisions surfaced by the diff: ingestion
+  methods = `upsert`/`append`/`skip` (semantics §9); `column_type` uninferable
+  fallback = `VARCHAR` (not `var`); `content_hash_id` edit-collision = **reject**
+  at the write boundary (§2/§3); `function_signature` **retained and defined** as
+  the canonical `param_name: type` signature for keyword binding (§1, §12).
+  Opened REFACTOR_PLAN.md for the code debt the reorg left.

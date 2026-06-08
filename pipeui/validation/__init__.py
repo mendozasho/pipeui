@@ -4,10 +4,10 @@ from .fails import FailedRegistryEntry, FailedFunctionEntry
 
 
 __all__ = [
-    ColumnRegistryEntry,
-    ColumnRegistryUpdate,
-    SourceRegistryEntry,
-    SourceRegistryUpdate,
-    FailedRegistryEntry,
-    FailedFunctionEntry,
+    "ColumnRegistryEntry",
+    "ColumnRegistryUpdate",
+    "SourceRegistryEntry",
+    "SourceRegistryUpdate",
+    "FailedRegistryEntry",
+    "FailedFunctionEntry",
 ]

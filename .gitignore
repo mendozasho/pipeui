@@ -1,4 +1,7 @@
-.claude/
+.claude/settings.local.json
+.claude/agent-memory-local/
+.claude/*.local.md
+
 *.egg-info/
 __pycache__/
 *.pyc

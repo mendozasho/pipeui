@@ -1,6 +1,6 @@
 ---
 created: 2026-05-29
-updated: 2026-06-06
+updated: 2026-06-07
 ---
 
 # Data
@@ -14,7 +14,7 @@ The application uses a **single** DuckDB database file. The registry and relatio
 1. Since the user is able to edit some of the content on a table (ie. `Data Type`, `ingestion_method`, etc.), we have made the design decision to have a `content_hash_id`, which is the UUID5 that can be used as a lookup to the table, and the actual `id`, generated from a random hash, that will act as the true id whenever a write is made to a table.
 	1. The `content_hash_id` is **mutable**. It is derived from the table's mutable fields and is recomputed whenever any contributing field changes (edits go through the `*Update` objects, which regenerate it). Because every write and every relational-map reference uses the random surrogate `id`, recomputing the `content_hash_id` never orphans a map row. Lookups via `content_hash_id` are therefore lookups "by current content," not by a frozen token.
 	2. The `content_hash_id` is **unique within its own table** and is namespaced per table (for example, by using the table name as the UUID5 namespace). Hashes in different tables are unrelated and never collide, even when a field shares the same name across tables.
-	3. Open decision: because the `content_hash_id` is both mutable and unique, an edit can recompute to a value that already exists on another row in the same table. The behavior on such a collision (reject the edit vs. merge the rows) still needs to be defined.
+	3. Decided (reject): because the `content_hash_id` is both mutable and unique, an edit can recompute to a value that already exists on another row in the same table. On such a collision the edit is **rejected** and surfaced as a failure (no merge). The recompute happens in the `*Update` object, but the collision check is enforced at the write/transaction boundary (the workflow layer that owns the DuckDB connection), since the validation objects do not read other rows.
 
 ### source_registry
 - Each source that a user registers, gets an entry into this table.
@@ -22,55 +22,55 @@ The application uses a **single** DuckDB database file. The registry and relatio
 - If a primary key can't be determined or pulled, we should assume that the first column is the primary key. This should only be the case when the primary key is invalid or missing
 - This table is mainly used to create the tables that the user ends up uploading as part of their workflow. This acts as a registry, so that the user can also see what sources they have uploaded.
 
-| field name         | type     | description                                                                                                                                                                                                                                                                                                                                                          | Mutable or Immutable |
-| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `content_hash_id`  | UUID     | the content hash lookups to this table. A UUID created from `source_name`, `primary_key`, and `ingestion_method`.                                                                                                                                                                                                                                                    | mutable              |
-| `source_id`        | UUID     | the primary UUID generated from a random hash                                                                                                                                                                                                                                                                                                                        | immutable            |
-| `source_name`      | string   | name of the report, used in the table creation and subsequent uploads                                                                                                                                                                                                                                                                                                | mutable              |
-| `date_ingested`    | datetime | used as part of the date filters, etc. This is the last-ingested timestamp (reverting to an earlier ingestion is out of scope — see step 10 for what "rollback" means in this app).                                                                                                                                                                                                                                                                                                                    |                      |
-| `date_registered`  | date     | used to save the first time the report was registered. This helps to keep track of the age of a report, whether we need a new report, or when we stopped using a report.                                                                                                                                                                                             | immutable            |
-| `ingestion_method` | enum     | used to determine how we should treat each new record during ingestion, when there are duplicate ids. To start, we have `upsert`, and `skip`.                                                                                                                                                                                                                        | mutable              |
-| `pattern`          | string   | possible naming conventions that the report may have if the application were to search in the directory for the report. Also open to having this be a regex string                                                                                                                                                                                                   | mutable              |
-| `primary_key`      | string   | the primary key column, that the instance table uses. Used during table creation and joins with other reports. For example, if the user registers Foo as a source, when the actual data is uploaded to that table, then the backend will need to know which column is the primary key. Another example would be during table creation, and defining the primary_key. | mutable              |
-| `table_url`        | string   | the filepath to where the actual table with the data uploaded (with the columns and column types are registered) is stored. This url is used for look ups and writes into the various tables. Since the app uses one database (see the Data intro), this resolves to that single database file and is the same across rows; the per-source data table is identified by name within it.                                                                                                                                                                        | mutable              |
+| field name | type | description | Mutable or Immutable |
+| --- | --- | --- | --- |
+| `content_hash_id` | UUID | the content hash lookups to this table. A UUID created from `source_name`, `primary_key`, and `ingestion_method`. | mutable |
+| `source_id` | UUID | the primary UUID generated from a random hash | immutable |
+| `source_name` | string | name of the report, used in the table creation and subsequent uploads | mutable |
+| `date_ingested` | datetime | used as part of the date filters, etc. This is the last-ingested timestamp (reverting to an earlier ingestion is out of scope — see step 10 for what "rollback" means in this app). | |
+| `date_registered` | date | used to save the first time the report was registered. This helps to keep track of the age of a report, whether we need a new report, or when we stopped using a report. | immutable |
+| `ingestion_method` | enum | used to determine how we should treat each new record during ingestion, when there are duplicate ids. The methods are `upsert` (update the existing row or insert if new), `append` (straight insert with no duplicate handling), and `skip` (skip records whose id already exists and report the skipped records back to the user so it's clear which lines were dropped). | mutable |
+| `pattern` | string | possible naming conventions that the report may have if the application were to search in the directory for the report. Also open to having this be a regex string | mutable |
+| `primary_key` | string | the primary key column, that the instance table uses. Used during table creation and joins with other reports. For example, if the user registers Foo as a source, when the actual data is uploaded to that table, then the backend will need to know which column is the primary key. Another example would be during table creation, and defining the primary_key. | mutable |
+| `table_url` | string | the filepath to where the actual table with the data uploaded (with the columns and column types are registered) is stored. This url is used for look ups and writes into the various tables. Since the app uses one database (see the Data intro), this resolves to that single database file and is the same across rows; the per-source data table is identified by name within it. | mutable |
 
 
 ### function_registry
 - the function registry is used to register and store functions that the user has uploaded to the app, so that the functions can be used as checks, transformations, or deliverables.
 
-| field name             | type   | description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Mutable or Immutable |
-| ---------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `function_id`          | UUID   | the primary UUID generated from a random hash                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | immutable            |
-| `content_hash_id`      | UUID   | created from `function_name`, `function_class`, and `return_type`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | mutable              |
-| `function_class`       | enum   | whether the function has a `scalar`, `column_backed`, `pd.series`, `pd.dataframe` signature. This is determined during function registry and validation, where the backend will determine the signature by the least granular parameter. This field helps to determine whether a function is `multi_select_eligible`, and can run multiple columns in a parameter for alias_maps and running the function multiple times in a single report.                                                                                                                                                                                                                                                                                                                        | mutable              |
-| `function_name`        | string | name of the function, usually used in summary sheets, quick lookups from other sources, and lookups to get the UUID of the function. Pulled from `__name__`, so that the function name that the user gives is the name of the function that gets referenced                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | mutable              |
-| `function_doc`         | string | this is pulled from the function docstring, and is used as a tooltip to the user, using the app, to help remind them what the function actually does. The tooltip should also show the user parameters and parameter types in the function, which can be pulled via `inspect.signature` or something similar                                                                                                                                                                                                                                                                                                                                                                                                                                                        | mutable              |
-| `function_return_type` | enum   | the return type of the function, used to determine how the results should be delivered. For example, if a function takes in scalar parameters (int, float, str) and returns a scalar, we know that the function is being looped, where each record is getting passed as the argument. In order to fully validate a table, and return the results, if a function returns a scalar, we essentially need to store each row's result, and return the results when all records have been run. For a pd.Series return, since these run as vectors, we can essentially just return it as a pd.Series. Practically, in the backend, these will all be wrapped in some kind of object, so that another object using it, won't have to know which return type a function had. | mutable              |
-| `function_type`        | enum   | whether the function is a `validation` function, where the point of the function is to check whether a column or the table passes a set of checks, or a `transform` function, where the function aims to change the values in the dataset. This is determined by a function that takes in the `function_class`, `function_return_type` and checks whether the function returns a `boolean` \| `pd.Series[bool]`, which makes it a validation, or returns non-boolean data types (transform).                                                                                                                                                                                                                                                                        | mutable              |
-| `module_path`          | string | the path to where the actual function lives in the app, so that the function can be used and pulled. The idea is that this table gets called, with the functions that are tied to the report, and we pull the actual python function to run through this module_path field.<br>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | mutable              |
-| `function_signature`   | string |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                      |
+| field name | type | description | Mutable or Immutable |
+| --- | --- | --- | --- |
+| `function_id` | UUID | the primary UUID generated from a random hash | immutable |
+| `content_hash_id` | UUID | created from `function_name`, `function_class`, and `return_type` | mutable |
+| `function_class` | enum | whether the function has a `scalar`, `column_backed`, `pd.series`, `pd.dataframe` signature. This is determined during function registry and validation, where the backend will determine the signature by the least granular parameter. This field helps to determine whether a function is `multi_select_eligible`, and can run multiple columns in a parameter for alias_maps and running the function multiple times in a single report. | mutable |
+| `function_name` | string | name of the function, usually used in summary sheets, quick lookups from other sources, and lookups to get the UUID of the function. Pulled from `__name__`, so that the function name that the user gives is the name of the function that gets referenced | mutable |
+| `function_doc` | string | this is pulled from the function docstring, and is used as a tooltip to the user, using the app, to help remind them what the function actually does. The tooltip should also show the user parameters and parameter types in the function, which can be pulled via `inspect.signature` or something similar | mutable |
+| `function_return_type` | enum | the return type of the function, used to determine how the results should be delivered. For example, if a function takes in scalar parameters (int, float, str) and returns a scalar, we know that the function is being looped, where each record is getting passed as the argument. In order to fully validate a table, and return the results, if a function returns a scalar, we essentially need to store each row's result, and return the results when all records have been run. For a pd.Series return, since these run as vectors, we can essentially just return it as a pd.Series. Practically, in the backend, these will all be wrapped in some kind of object, so that another object using it, won't have to know which return type a function had. | mutable |
+| `function_type` | enum | whether the function is a `validation` function, where the point of the function is to check whether a column or the table passes a set of checks, or a `transform` function, where the function aims to change the values in the dataset. This is determined by a function that takes in the `function_class`, `function_return_type` and checks whether the function returns a `boolean` \| `pd.Series[bool]`, which makes it a validation, or returns non-boolean data types (transform). | mutable |
+| `module_path` | string | the path to where the actual function lives in the app, so that the function can be used and pulled. The idea is that this table gets called, with the functions that are tied to the report, and we pull the actual python function to run through this module_path field. | mutable |
+| `function_signature` | string | stores the function's `param_name: type` signature (the form `inspect.signature` produces, including the return annotation), captured at registration. Its purpose is to make argument binding easier: the attach step binds arguments by keyword to these parameters (see `alias_map`). The `parameter` table holds the queryable per-parameter decomposition; this field is the canonical signature string. | mutable |
 
 ### column_registry
 - we're going to assume if a `column_name` and `column_type` are the same between different reports, then they are treated as essentially the same column when it comes to aliases and table creation. Meaning, if the column `Foo: str` is in Table A and Table B, for alias_map and table creation purposes, Foo is the same in both. This is important when we use alias_map
 - Used when inferring a new source's data type for a specific column
 
-| field name        | type   | description                                                                                                                        | mutable or immutable |
-| ----------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `content_hash_id` | UUID   | UUID created from the `column_name`, `column_type`                                                                                 | mutable              |
-| `column_id`       | UUID   | the primary UUID generated from a random hash                                                                                      | immutable            |
-| `column_name`     | string | the name of the column in the report. Taken directly from the spreadsheet.                                                         | mutable              |
-| `column_type`     | enum   | used to determine the column data type for validation and table creation. Note that mismatches will cause errors during ingestion. | mutable              |
+| field name | type | description | mutable or immutable |
+| --- | --- | --- | --- |
+| `content_hash_id` | UUID | UUID created from the `column_name`, `column_type` | mutable |
+| `column_id` | UUID | the primary UUID generated from a random hash | immutable |
+| `column_name` | string | the name of the column in the report. Taken directly from the spreadsheet. | mutable |
+| `column_type` | enum | used to determine the column data type for validation and table creation. Note that mismatches will cause errors during ingestion. | mutable |
 
 ### parameter
 - this table is not a registry, in that a parameter with the different names can be the same parameter, and a parameter with the same name can be a different parameter (think `x` as the name of a parameter).
 
-| field name        | type   | description                                                                                                                                       | mutable or immutable |
-| ----------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `param_id`        | UUID   | the primary UUID generated from a random hash                                                                                                     | immutable            |
-| `content_hash_id` | UUID   | uses `param_name`, `function_id`, `paramm_type` to generate the UUID.                                                                             | mutable              |
-| `param_name`      | string | name of the parameter inside of the function definition                                                                                           | mutable              |
-| `param_type`      | enum   | the parameter data type. This is typed by the user when they define the definition in a python module.                                            | mutable              |
-| `function_id`     | UUID   | the id field from the `function_registry`. This is used to pull all parameters that are under that function, so all parameters are accounted for. | immutable            |
+| field name | type | description | mutable or immutable |
+| --- | --- | --- | --- |
+| `param_id` | UUID | the primary UUID generated from a random hash | immutable |
+| `content_hash_id` | UUID | uses `param_name`, `function_id`, `paramm_type` to generate the UUID. | mutable |
+| `param_name` | string | name of the parameter inside of the function definition | mutable |
+| `param_type` | enum | the parameter data type. This is typed by the user when they define the definition in a python module. | mutable |
+| `function_id` | UUID | the id field from the `function_registry`. This is used to pull all parameters that are under that function, so all parameters are accounted for. | immutable |
 
 ## Relational Tables
 - These are tables we need to handle the tables with many to many relationships.
@@ -79,32 +79,32 @@ The application uses a **single** DuckDB database file. The registry and relatio
 ### source_column_map
 - this relational map is used to get the columns under a single report, or to get all the reports that uses a single column
 
-| field name             | type | description                                              |
-| ---------------------- | ---- | -------------------------------------------------------- |
-| `source_column_map_id` | UUID | the UUID created using the `column_id` and `source_id`   |
-| `column_id`            | UUID | the `column_id` key tied to the `column_registry` table. |
-| `source_id`            | UUID | the `source_id` key tied to the `source_registry` table. |
+| field name | type | description |
+| --- | --- | --- |
+| `source_column_map_id` | UUID | the UUID created using the `column_id` and `source_id` |
+| `column_id` | UUID | the `column_id` key tied to the `column_registry` table. |
+| `source_id` | UUID | the `source_id` key tied to the `source_registry` table. |
 
 ### source_function_map
 - this relational map is used to help the backend get a list of functions that are needed that is tied to a given report. This would be a request when we want to validate the data with the user created functions and we need to determine which functions to run
 - this map is also used when the user wants to edit a function, and wants to see all the source files that will be affected by the change
 
-| field name               | type | description                                   |
-| ------------------------ | ---- | --------------------------------------------- |
+| field name | type | description |
+| --- | --- | --- |
 | `source_function_map_id` | UUID | UUID using the `source_id` and `function_id`. |
-| `source_id`              | UUID | id from the `source_registry`                 |
-| `function_id`            | UUID | id from the `function_registry`               |
+| `source_id` | UUID | id from the `source_registry` |
+| `function_id` | UUID | id from the `function_registry` |
 
 ### alias_map
 - this is likely the most important table in the entire app, as it allows the user to run a single function, on multiple columns, on a single report. It also allows the user to be able to reuse parameters and their column mapping across multiple reports
 - the parameter uuid, is created from the function_id, so in this way, makes the parameter_id tied to a function, and not necessarily an orphan parameter in isolation from the function. The parameter_id ties back to a specific function, even if the name and type are shared.
 
-| field name     | type | description                                                          |
-| -------------- | ---- | -------------------------------------------------------------------- |
+| field name | type | description |
+| --- | --- | --- |
 | `alias_map_id` | UUID | the UUID using `parameter_id` and `column_id`, `source_id` as inputs |
-| `column_id`    | UUID | the ID from the `column_registry` table                              |
-| `parameter_id` | UUID | the id from the `parameter` table                                    |
-| `source_id`    | UUID | the id from the `source` table                                       |
+| `column_id` | UUID | the ID from the `column_registry` table |
+| `parameter_id` | UUID | the id from the `parameter` table |
+| `source_id` | UUID | the id from the `source` table |
 
 ## Validation Objects - python
 - Python objects used to validate incoming data from a user, and cleanly push the create record entry into its respective table.
@@ -113,13 +113,13 @@ The application uses a **single** DuckDB database file. The registry and relatio
 - tied to the `source_registry` table, and represents a python data object that validates any entries going into the `source_registry` table.
 - will have all the fields that the `source_registry` table has, as it's the python validation reflection of the table.
 - `SourceRegistryEntry` has a method that generates the `table_url` url, pointing to where the `source_registry` table is, and where the entry is going to get stored. Will update itself accordingly.
-- Does not communicate with anything other than the cache table that gets created when the user is creating a new source, and maybe a config that has the database URL.
+- Does not communicate with anything other than the cache table that gets created when the user is creating a new source, and maybe a config that has the database URL. It does not read other table rows.
 - `SourceRegistryEntry` also has a method that generates the `content_hash_id` UUID based on the `content_hash_id` logic in the `source_registry` table
 
 ### SourceRegistryUpdate
 - Exactly the same as the `SourceRegistryEntry`, but all the fields are optional, so that when the user wants to make an update to a registry field, the update can be pushed without needing to validate everything over again, or the user doesn't need to refill everything, and just make changes to what they want to change
 - Any request on updates, will go through this object instead of the `SourceRegistryEntry` objects.
-- When an update touches a field that feeds the `content_hash_id` (`source_name`, `primary_key`, `ingestion_method`), this object recomputes the `content_hash_id`. The surrogate `source_id` is never changed by an update.
+- When an update touches a field that feeds the `content_hash_id` (`source_name`, `primary_key`, `ingestion_method`), this object recomputes the `content_hash_id`. The surrogate `source_id` is never changed by an update. The collision check (item 3 above) is not done here — it happens at the write boundary, because this object does not read other rows.
 
 ### ColumnRegistryEntry
 - tied to the `column_registry` table and has the same fields, since it's the Python validation layer of the table.
@@ -135,7 +135,7 @@ The application uses a **single** DuckDB database file. The registry and relatio
 ### FailedRegistryEntry
 - Used for entries that failed to be added to the table. This object is specific to registry tables (tables with `registry` in the name, that we have defined in this design doc). We don't have to specify that in the logic but something to keep in mind in order to keep responsibilities separate.
 - Stores the table entry object (`SourceRegistryEntry`, `ColumnRegistryEntry`), which has the values of what the backend tried to add to the table. Having the object also tells the user which table the entry attempted to add to
-- Stores the error message, and why the entry failed validation or failed to be added to the table
+- Stores the error message, and why the entry failed validation or failed to be added to the table. This includes a `content_hash_id` collision on edit (item 3 above), which is rejected.
 - This object should trigger or request a rollback if there was an error on the data entry. Because the source-creation writes are committed as a single transaction (see "Initializing a new source", backend steps 3–5), this rollback unwinds the entire set — the `source_registry` row, every `column_registry` row, and every `source_column_map` row — so a source is never left half-registered.
 
 ### FailedFunctionEntry
@@ -168,7 +168,7 @@ This task is for when the user opens up the app, and wants to register a new rep
 	1. if a user wants to add checks to the report before moving forward with ingestion, then they would select the template option
 	2. if the user does not care to validate it when the data comes in, they go skip to ingest data after the creation
 	3. The user will also get asked which of the columns is the primary key. The user will select a column from a list, and the selected column will be highlighted
-	4. The user also gets asked how they want the ingestion process. Whether they want to `upsert` or `skip` on duplicate entries. More ingestion types will come in the future
+	4. The user also gets asked how they want the ingestion process. Whether they want to `upsert`, `append`, or `skip` on duplicate entries. More ingestion types may come in the future
 4. After confirming their selection, the app loads. It's validating the data and the user sees the progress on the screen, which shows the number of spreadsheets they have selected, percentage complete, which files have completed and was successful, which files were not successful.
 5. For the successful files, the user confirms, or edits, the data types to ensure they are correct. All subsequent uploads will use this data type as the source of truth. The user should be able to edit the data type at any time though via `edit` -> `source`
 6. The source can now be used as a raw file to create deliverables and run checks on. The source is available to use and is selectable in different tabs, including the `Sources` and `Deliverable` tabs.
@@ -178,7 +178,7 @@ This task is for when the user opens up the app, and wants to register a new rep
 1. The backend reads the spreadsheets that the user has selected to upload. Reading the spreadsheet consists of the following:
 	1. reads the filename and tries to create a regex `pattern`, which is a field in the `source_registry` table. This can be used in the future to identify new reports with the same convention being saved down
 	2. The column names should be available when we read_csv or read_excel with duckdb, any columns that are not in the `column_registry` should be added to that table for future reference.
-	3. should gather sample data from the uploaded report (should try to use duckdb native features) to try and infer the `column_type`. If we are not able to infer, either through an error or not enough data is available, then make it `var`. Alternatively, could try to search for the `column_name` in the `column_registry` table to try and infer the data type.
+	3. should gather sample data from the uploaded report (should try to use duckdb native features) to try and infer the `column_type`. If we are not able to infer, either through an error or not enough data is available, then make it `VARCHAR` (matching DuckDB's own type name). Alternatively, could try to search for the `column_name` in the `column_registry` table to try and infer the data type.
 	4. We store what we have so far in a temporary cache, and request from the user the primary key column (3.3 from the previous User Perspective section). The cache is a transient DuckDB staging table (created via DuckDB's built-in temp/staging functionality): writes are staged into it during an operation, and on any error in the set the transaction aborts and the database returns to its last working state (see step 10). The same staging pattern is reused at ingestion. Note the two uses hold different contents — this create-flow cache holds *registration metadata* (column names, confirmed types, PK choice), while the ingestion staging holds *actual rows* — but it is the same mechanism.
 		1. Since the user also updates the column data types as part of the request on the user side, any updates or changes the user makes there, should be reflected before the values get pulled into the python object.
 		2. The user's final confirmation is the source of truth, and any changes the user makes, should also update the cache.
@@ -208,6 +208,7 @@ This task is for when the user opens up the app, and wants to register a new rep
 	1. Sql code for these user generated files should be stored in a `sql_user_table` folder, and each user table should have it's own python module named after the table, with `sql` appended at the end (ie. `foo_source_sql.py`)
 9. On ingestion, the application creates a per-source data table (the JIT instance table built from `source_registry` and `column_registry`) and keeps track of it. This is an end-user-dependent table: its schema and contents come from what the user uploads, not from a fixed schema we define up front.
 	1. The ingested data is retained in this table so it stays available for summaries and final deliverables.
+	2. On duplicate ids the `ingestion_method` decides: `upsert` (update existing or insert new), `append` (straight insert), or `skip` (skip the duplicate and report the skipped rows back to the user).
 10. Ingestion is atomic. The application first loads each upload into a temporary table and only writes into the source's actual DuckDB table if the load completes successfully. If anything fails during the process, the upload is aborted via DuckDB's built-in transaction rollback (`BEGIN` / `COMMIT` / `ROLLBACK`), leaving the existing table at its last good state. Schema changes (table creation/alteration) are transactional in DuckDB, so they fall under the same all-or-nothing guarantee. Throughout the app, "rollback" always means this: a DuckDB transaction abort that returns the database to its last committed (working) state. Reverting to an *earlier* ingestion (time-travel to a previous load) is explicitly out of scope — there is no per-ingestion history.
 
 ## Initializing and using a new user-created function
@@ -257,7 +258,7 @@ Multiple tables also tie to these user generated functions.
 			1. For example, if we define a function `def foo(bar: str)` where `bar` is a `column_backed` string. Let's say that the report we attach this to has 3 columns eligible as arguments for this parameter based on the `alias_map` (`raz`, `raz_bar`, `foo_bar`).
 			2. We can essentially then, run this function 3 times on a single report, where we run the same function for each eligible argument, which results in 3 different results. These results get aggregated in the summary
 			3. So we run the function 3 times for each eligible function when they were mapped together
-2. Any functions that have the same `function_name`, `function_class`, and `function_return_type` will collapse onto the same `content_hash_id`. The collapse is strictly on `content_hash_id`, not on the random surrogate `function_id`. This is intentional. On a `content_hash_id` collision, the existing surrogate `function_id` is preserved and only the mutable columns are overwritten in the table — this keeps `source_function_map`, `alias_map`, and the derived `parameter.content_hash_id` values intact across a re-upload.
+2. Any functions that have the same `function_name`, `function_class`, and `function_return_type` will collapse onto the same `content_hash_id`. The collapse is strictly on `content_hash_id`, not on the random surrogate `function_id`. This is intentional. On a `content_hash_id` collision, the existing surrogate `function_id` is preserved and only the mutable columns are overwritten in the table — this keeps `source_function_map`, `alias_map`, and the derived `parameter.content_hash_id` values intact across a re-upload. (Note: this function re-upload collapse is distinct from the registry edit-collision in "A note on tables" item 3, which *rejects*.)
 3. Function writes are transactional and grouped into two separate atomic units, since they happen at different times:
 	1. **Registration** (uploading a `.py`) writes the `function_registry` row plus all of that function's `parameter` rows as one transaction.
 	2. **Attaching** a function to a source writes the `source_function_map` row plus its `alias_map` rows as a separate transaction.

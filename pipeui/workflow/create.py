@@ -7,7 +7,7 @@ from pathlib import Path
 
 import duckdb
 
-from pipeui.validation.ids import content_hash_id
+from pipeui.ids import content_hash_id
 from pipeui.schema.constants import IngestionMethod
 from pipeui.duckdb import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern
@@ -25,10 +25,9 @@ def create_source(
     """Execute the source-create flow as one atomic transaction."""
     failed = FailedRegistryEntry()
 
-    # Check if ingestion method is valid
     if not IngestionMethod.accepted(ingestion_method):
-        print(IngestionMethod.__members__.values())
-        raise ValueError(f"Invalid ingestion method: {ingestion_method}")
+        failed.add(None, f"Invalid ingestion method: {ingestion_method!r}")
+        return None, failed
 
     # Try to infer the pattern of the filename for future searches
     pattern = infer_pattern(Path(file_path).name)

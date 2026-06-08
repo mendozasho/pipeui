@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from pipeui.validation.ids import content_hash_id
+from pipeui.ids import content_hash_id
 from pipeui.duckdb import create_schema, get_connection
 
 
