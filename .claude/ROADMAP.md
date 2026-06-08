@@ -212,6 +212,40 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
+### Phase B2 — Data View & Ingest UX Polish
+
+*Builds directly on Phase B. No gating decisions.*
+
+- [ ] **`fix/ingest-modal-double-picker`** *(priority)* — `frontend/screen-data.jsx`.
+  The `IngestModal` overlay lacks `e.stopPropagation()`, so clicks bubble into the
+  `Drawer` backdrop and trigger a second file dialog or close the drawer
+  unexpectedly. Add `onClick={e => e.stopPropagation()}` on both the overlay div
+  and the inner panel div of `IngestModal`.
+  *Also:* remove the ingestion method selector from `IngestModal` — the method is
+  stored on the source at registration and should not be re-asked on every ingest.
+  The stored value is already used automatically by the backend when no override is
+  sent. Method changes belong in a future "edit source settings" flow.
+  *Guarantees:* clicking the file picker does not close the drawer; the modal never
+  sends an `ingestion_method` override.
+
+- [ ] **`feat/source-data-preview`** — §9 (workflow), §14 (API + frontend).
+  `pipeui/workflow/ingestion.py`: `get_source_rows(conn, source_id, limit=200) →
+  list[dict]` — queries the JIT instance table directly, returns up to `limit` rows
+  as plain dicts.
+  `pipeui/api/sources.py`: `GET /sources/{id}/rows?limit=200` — calls
+  `get_source_rows`, returns `{"columns": [...], "rows": [...]}`. Returns 404 if
+  source not found, empty rows if not yet ingested.
+  *Frontend:* `screen-data.jsx` drawer — "Data" section below "Columns"; fetches
+  on open when `date_ingested` is set and after a successful ingest; renders rows
+  in a horizontally-scrollable `DataTable`. Cap displayed at 200 rows; expandable
+  to search/filter in a future phase.
+  *Note: no new files — one workflow function, one route, one drawer section.*
+  *Future expansion:* `?search=`, `?col=`, `?min=`, `?max=` query params and a
+  health-check endpoint (`null counts`, type distribution, duplicate PK check) can
+  be added without architectural changes.
+
+---
+
 ### Phase C — Column Type Migration
 
 *Gated by: `column_type` enum decision (CLAUDE.md → Active Deferred Work).*
@@ -302,6 +336,8 @@ Phase A:   api-sources-register  (wires Phase 1 backend to Data screen)
 Phase A2:  app-settings  (Settings screen + config file; clears DB_PATH debt)
              │
 Phase B:   jit-instance-table ── ingestion ── api-sources-ingest
+             │
+Phase B2:  fix/ingest-modal-double-picker  feat/source-data-preview
              │
 Phase C:   column-migration ── api-sources-migrate       [gated: column_type enum]
              │
