@@ -8,11 +8,11 @@ from pathlib import Path
 import duckdb
 
 from pipeui.ids import content_hash_id
-from pipeui.schema.constants import IngestionMethod
+from pipeui.schema.constants import IngestionMethod, DUCKDB_TO_PYTHON
 from pipeui.duckdb import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern
 from pipeui.workflow.staging import CreateFlowCache
-from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, ColumnRegistryEntry
+from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, SourceRegistryUpdate, ColumnRegistryEntry
 
 
 def create_source(
@@ -33,7 +33,9 @@ def create_source(
     pattern = infer_pattern(Path(file_path).name)
 
     # Try to infer column types from the file. Will later add the ones not in the column registry
-    columns = infer_column_types(conn, file_path)
+    raw_columns = infer_column_types(conn, file_path)
+    # Defensive fallback: any type not in our known set (e.g. from a mock or future DuckDB type)
+    columns = [(name, t if t in DUCKDB_TO_PYTHON else "VARCHAR") for name, t in raw_columns]
 
     # [1] [stage in create-flow cache]
     # We stage so that any errors can be rolled back to previous working state.
@@ -123,4 +125,65 @@ def create_source(
     except Exception as exc:
         conn.execute("ROLLBACK")
         failed.add(entry, str(exc))
+        return None, failed
+
+
+def update_source(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    **updates,
+) -> tuple[uuid.UUID | None, FailedRegistryEntry]:
+    """Update a source registry row, rejecting edits that collide on content_hash_id."""
+    failed = FailedRegistryEntry()
+
+    row = conn.execute(
+        """SELECT source_id, source_name, date_ingested, date_registered,
+                  ingestion_method, pattern, primary_key, table_url
+           FROM source_registry WHERE source_id = ?""",
+        [source_id],
+    ).fetchone()
+
+    if row is None:
+        failed.add(None, f"source_id {source_id!r} not found")
+        return None, failed
+
+    existing = SourceRegistryEntry(
+        source_id=row[0],
+        source_name=row[1],
+        date_ingested=row[2],
+        date_registered=row[3],
+        ingestion_method=row[4],
+        pattern=row[5],
+        primary_key=row[6],
+        table_url=row[7],
+    )
+
+    update = SourceRegistryUpdate.from_existing(existing, **updates)
+
+    # Collision check: new hash must not already exist on a different row (Principle 1)
+    collision = conn.execute(
+        "SELECT 1 FROM source_registry WHERE content_hash_id = ? AND source_id != ?",
+        [update.content_hash_id, source_id],
+    ).fetchone()
+
+    if collision:
+        failed.add(existing, "content_hash_id collision")
+        return None, failed
+
+    set_fields: dict[str, object] = {k: v for k, v in updates.items()}
+    set_fields["content_hash_id"] = update.content_hash_id
+    set_clause = ", ".join(f"{k} = ?" for k in set_fields)
+    values = list(set_fields.values()) + [source_id]
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            f"UPDATE source_registry SET {set_clause} WHERE source_id = ?",
+            values,
+        )
+        conn.execute("COMMIT")
+        return source_id, failed
+    except Exception as exc:
+        conn.execute("ROLLBACK")
+        failed.add(existing, str(exc))
         return None, failed
