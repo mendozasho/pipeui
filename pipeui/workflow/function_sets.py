@@ -232,3 +232,27 @@ def update_function_set(
         return failed
 
     return get_function_set(conn, set_id)
+
+
+def delete_function_set(conn: duckdb.DuckDBPyConnection, set_id: str) -> bool | None:
+    """Delete a function set and all its map rows.
+
+    Returns True on success, None when set_id is not found (caller converts to 404).
+    Member functions in function_registry are untouched.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM function_set WHERE set_id = ?", [set_id]
+    ).fetchone()
+    if exists is None:
+        return None
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM function_set_map WHERE set_id = ?", [set_id])
+        conn.execute("DELETE FROM function_set WHERE set_id = ?", [set_id])
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    return True

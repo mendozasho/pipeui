@@ -8,6 +8,7 @@ import pytest
 
 from pipeui.workflow.function_sets import (
     create_function_set,
+    delete_function_set,
     get_function_set,
     list_function_sets,
     update_function_set,
@@ -283,3 +284,46 @@ class TestUpdateFunctionSet:
         updated = update_function_set(db, result["set_id"], set_name="preserve_set_v2")
         assert updated["set_description"] == "keep me"
         assert len(updated["members"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# delete_function_set
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteFunctionSet:
+    @pytest.mark.integration
+    def test_returns_none_for_unknown_id(self, db, tmp_path):
+        """Guarantee: delete_function_set returns None when set_id does not exist."""
+        assert delete_function_set(db, str(uuid.uuid4())) is None
+
+    @pytest.mark.integration
+    def test_deletes_set_and_map_rows(self, db, tmp_path):
+        """Guarantee: delete removes function_set and all function_set_map rows."""
+        fn_ids = _register_functions(db, tmp_path, """
+            def fn_a(x: int) -> int: return x
+        """)
+        result = create_function_set(db, "to_delete", None, fn_ids)
+        set_id = result["set_id"]
+
+        ok = delete_function_set(db, set_id)
+        assert ok is True
+
+        set_row = db.execute("SELECT 1 FROM function_set WHERE set_id = ?", [set_id]).fetchone()
+        assert set_row is None
+        map_rows = db.execute("SELECT 1 FROM function_set_map WHERE set_id = ?", [set_id]).fetchall()
+        assert map_rows == []
+
+    @pytest.mark.integration
+    def test_member_functions_survive_deletion(self, db, tmp_path):
+        """Guarantee: deleting a set does not remove member functions from function_registry."""
+        fn_ids = _register_functions(db, tmp_path, """
+            def fn_a(x: int) -> int: return x
+        """)
+        result = create_function_set(db, "survivor_set", None, fn_ids)
+        delete_function_set(db, result["set_id"])
+
+        fn_row = db.execute(
+            "SELECT 1 FROM function_registry WHERE function_id = ?", [fn_ids[0]]
+        ).fetchone()
+        assert fn_row is not None

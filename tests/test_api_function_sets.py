@@ -210,3 +210,43 @@ class TestPatchFunctionSet:
         members = res.json()["set"]["members"]
         assert len(members) == 1
         assert members[0]["function_id"] == fn_ids[1]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /function-sets/{id}
+# ---------------------------------------------------------------------------
+
+class TestDeleteFunctionSet:
+    @pytest.mark.integration
+    def test_returns_404_for_unknown_id(self, fs_client):
+        """Guarantee: DELETE /function-sets/{id} returns 404 for unknown id."""
+        client, conn, _ = fs_client
+        res = client.delete(f"/function-sets/{uuid.uuid4()}")
+        assert res.status_code == 404
+
+    @pytest.mark.integration
+    def test_returns_204_and_set_is_gone(self, fs_client):
+        """Guarantee: DELETE returns 204 and the set no longer appears in GET /function-sets."""
+        client, conn, _ = fs_client
+        post = client.post("/function-sets", json={"set_name": "bye", "members": []})
+        set_id = post.json()["set"]["set_id"]
+        res = client.delete(f"/function-sets/{set_id}")
+        assert res.status_code == 204
+        sets = client.get("/function-sets").json()
+        assert all(s["set_id"] != set_id for s in sets)
+
+    @pytest.mark.integration
+    def test_member_functions_survive(self, fs_client):
+        """Guarantee: DELETE does not remove member functions from function_registry."""
+        client, conn, tmp_path = fs_client
+        fn_ids = _register_functions(conn, tmp_path, """
+            def fn_a(x: int) -> int: return x
+        """)
+        post = client.post("/function-sets", json={"set_name": "survivor", "members": fn_ids})
+        set_id = post.json()["set"]["set_id"]
+        client.delete(f"/function-sets/{set_id}")
+        # Check DB directly — function must still exist in function_registry
+        row = conn.execute(
+            "SELECT 1 FROM function_registry WHERE function_id = ?", [fn_ids[0]]
+        ).fetchone()
+        assert row is not None

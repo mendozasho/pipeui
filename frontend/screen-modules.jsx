@@ -269,6 +269,23 @@ function SetsTab({ flash, allFunctions }) {
         }}>
           <div style={{ fontWeight: 600, fontSize: 16 }}>{editingSetId ? "Edit Set" : "New Set"}</div>
           <div style={{ display: "flex", gap: 8 }}>
+            {editingSetId && (
+              <Btn onClick={() => {
+                fetch(`/function-sets/${editingSetId}`, { method: "DELETE" })
+                  .then(r => {
+                    if (r.status === 204) {
+                      setEditorOpen(false); setEditingSetId(null);
+                      loadSets();
+                      flash && flash("Set deleted.", "success");
+                    } else {
+                      flash && flash("Failed to delete set.", "error");
+                    }
+                  })
+                  .catch(() => flash && flash("Failed to delete set.", "error"));
+              }}>
+                Delete
+              </Btn>
+            )}
             <Btn onClick={() => { setEditorOpen(false); setEditingSetId(null); }}>Cancel</Btn>
             <Btn icon="check" onClick={handleSave} disabled={saving}>
               {saving ? "Saving…" : "Save"}

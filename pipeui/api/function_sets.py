@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from pipeui.helpers import get_conn
 from pipeui.workflow.function_sets import (
     create_function_set,
+    delete_function_set,
     get_function_set,
     list_function_sets,
     update_function_set,
@@ -103,3 +104,18 @@ def post_function_set(
         reasons = [reason for _, reason in result.failures]
         return JSONResponse(status_code=422, content={"ok": False, "errors": reasons})
     return {"ok": True, "set": result}
+
+
+@router.delete("/{set_id}", status_code=204)
+def delete_function_set_route(
+    set_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Delete a function set and its membership rows. 404 if not found.
+
+    Member functions in function_registry are never removed.
+    """
+    from fastapi import HTTPException
+    result = delete_function_set(conn, set_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Function set not found")
