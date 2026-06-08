@@ -167,8 +167,94 @@ function IngestModal({ source, onConfirm, onCancel }) {
 
 const COLUMN_TYPES = ["INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "VARCHAR", "DATE", "TIMESTAMP"];
 
+function MigrationConfirmModal({ uncastable, sharedSources, onConfirm, onCancel }) {
+  const { Btn } = window.__UI__;
+  const [scope, setScope] = React.useState("this_source");
+
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 400,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--panel)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)", padding: 24, width: 420,
+          boxShadow: "0 16px 48px rgba(0,0,0,.6)",
+        }}
+      >
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 16 }}>Confirm type migration</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+          {uncastable > 0 && (
+            <div style={{
+              background: "var(--panel-2)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13,
+              color: "var(--text-2)",
+            }}>
+              <span style={{ fontWeight: 600, color: "var(--text)" }}>{uncastable}</span>
+              {` value${uncastable !== 1 ? "s" : ""} will become NULL after migration.`}
+            </div>
+          )}
+
+          {sharedSources.length > 0 && (
+            <div style={{
+              background: "var(--panel-2)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13,
+            }}>
+              <div style={{ color: "var(--text-2)", marginBottom: 8 }}>This will also update:</div>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+                {sharedSources.map(name => (
+                  <li key={name} style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)" }}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {sharedSources.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Apply to</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { value: "this_source", label: "This source only" },
+                  { value: "all_shared", label: "All shared sources" },
+                ].map(opt => (
+                  <label key={opt.value} style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    fontSize: 13, cursor: "pointer", color: "var(--text)",
+                  }}>
+                    <input
+                      type="radio"
+                      name="migration-scope"
+                      value={opt.value}
+                      checked={scope === opt.value}
+                      onChange={() => setScope(opt.value)}
+                      style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+          <Btn variant="primary" onClick={() => onConfirm(scope)}>Migrate anyway</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ColumnTypeRow({ col, sourceId, onMigrated }) {
   const [selected, setSelected] = React.useState(col.column_type);
+  const [pendingMigration, setPendingMigration] = React.useState(null); // { newType, prev, uncastable, sharedSources }
 
   async function handleChange(e) {
     const newType = e.target.value;
@@ -190,7 +276,7 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
 
       if (!dryData.ok) { setSelected(prev); return; }
 
-      // Step 2: happy path only — no uncastable rows and no shared sources
+      // Step 2: happy path — no uncastable rows and no shared sources
       if (dryData.uncastable === 0 && dryData.shared_sources.length === 0) {
         const commitRes = await fetch(
           `/sources/${sourceId}/columns/${col.column_id}`,
@@ -203,11 +289,15 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
         if (!commitRes.ok) { setSelected(prev); return; }
         const commitData = await commitRes.json();
         if (!commitData.ok) { setSelected(prev); return; }
-        // Refresh drawer — parent handler re-fetches detail + rows
         await onMigrated();
       } else {
-        // Confirmation modal is next slice (#19) — revert for now
-        setSelected(prev);
+        // Show confirmation modal
+        setPendingMigration({
+          newType,
+          prev,
+          uncastable: dryData.uncastable,
+          sharedSources: dryData.shared_sources,
+        });
       }
     } catch (err) {
       console.error("Column type migration error:", err);
@@ -215,27 +305,65 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
     }
   }
 
+  async function handleConfirmMigration(scope) {
+    const { newType, prev } = pendingMigration;
+    setPendingMigration(null);
+    try {
+      const commitRes = await fetch(
+        `/sources/${sourceId}/columns/${col.column_id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ column_type: newType, scope, on_uncastable: "nullify" }),
+        }
+      );
+      if (!commitRes.ok) { setSelected(prev); return; }
+      const commitData = await commitRes.json();
+      if (!commitData.ok) { setSelected(prev); return; }
+      await onMigrated();
+    } catch (err) {
+      console.error("Column type migration commit error:", err);
+      setSelected(prev);
+    }
+  }
+
+  function handleCancelMigration() {
+    setSelected(pendingMigration.prev);
+    setPendingMigration(null);
+  }
+
   return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
-    }}>
-      <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
-      <select
-        value={selected}
-        onChange={handleChange}
-        style={{
-          fontSize: 11, padding: "2px 7px", borderRadius: 99,
-          background: "var(--panel-3)", color: "var(--text-3)",
-          fontFamily: "'Geist Mono', monospace",
-          border: "1px solid var(--border)", cursor: "pointer", outline: "none",
-        }}
-      >
-        {COLUMN_TYPES.map(t => (
-          <option key={t} value={t}>{t}</option>
-        ))}
-      </select>
-    </div>
+    <>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
+      }}>
+        <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
+        <select
+          value={selected}
+          onChange={handleChange}
+          style={{
+            fontSize: 11, padding: "2px 7px", borderRadius: 99,
+            background: "var(--panel-3)", color: "var(--text-3)",
+            fontFamily: "'Geist Mono', monospace",
+            border: "1px solid var(--border)", cursor: "pointer", outline: "none",
+          }}
+        >
+          {COLUMN_TYPES.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </div>
+
+      {pendingMigration && (
+        <MigrationConfirmModal
+          uncastable={pendingMigration.uncastable}
+          sharedSources={pendingMigration.sharedSources}
+          onConfirm={handleConfirmMigration}
+          onCancel={handleCancelMigration}
+        />
+      )}
+    </>
   );
 }
 
