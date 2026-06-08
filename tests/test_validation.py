@@ -6,7 +6,7 @@ Marker: unit — pure logic, no DB, no subprocess.
 import pytest
 from pydantic import ValidationError
 
-from pipeui.validation.ids import content_hash_id
+from pipeui.ids import content_hash_id
 from pipeui.validation import (
     ColumnRegistryEntry,
     ColumnRegistryUpdate,

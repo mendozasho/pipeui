@@ -7,7 +7,7 @@ from pathlib import Path
 
 import duckdb
 
-from pipeui.validation.ids import content_hash_id
+from pipeui.ids import content_hash_id
 from pipeui.schema.constants import IngestionMethod
 from pipeui.duckdb import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern

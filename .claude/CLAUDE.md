@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-06
+updated: 2026-06-07
 purpose: >
   Project operating document — "what to build and why." Read first for every
   conversation. Design decisions and rationale live here; implementation
@@ -15,9 +15,8 @@ purpose: >
 
 `CLAUDE.md` (this file) answers *what to build and why*. `CLAUDE_REFERENCE.md`
 answers *how a specific thing is implemented*. When editing a source file, read
-the matching reference section first. The reference file does not exist yet; its
-section numbers are reserved here and will be populated next session. §13 is
-fixed as Testing Conventions by the `use-file` skill.
+the matching reference section first. §13 is fixed as Testing Conventions by the
+`use-file` skill.
 
 | Topic | CLAUDE_REFERENCE.md § |
 | ----- | --------------------- |
@@ -37,6 +36,9 @@ fixed as Testing Conventions by the `use-file` skill.
 | CLI visual layer | §14 |
 | Package structure | §15 |
 | Completed work history | §16 |
+
+Move/rename/fix debt left by the implementation+reorg session is tracked in
+**REFACTOR_PLAN.md** (consult it before moving, creating, or renaming functions).
 
 ---
 
@@ -86,6 +88,11 @@ fixed as Testing Conventions by the `use-file` skill.
     and writes results back itself.
   - Relational map rows are written directly (no Python validation object between
     them and the table); the registry rows go through `*Entry` / `*Update` objects.
+  - Validation objects (`*Entry` / `*Update`) do **not** read other rows — they
+    hold no DB handle and talk only to the create-flow cache + DB-URL config.
+    Anything that needs to look at the table (e.g. the collision check in
+    Principle 1) lives in the workflow layer, which owns the connection and the
+    transaction.
 
 ---
 
@@ -100,16 +107,22 @@ primary key and the only thing maps and writes reference. A **`content_hash_id`*
 in different tables never collide. Because every write and every map reference
 uses the surrogate, recomputing a `content_hash_id` never orphans a map row.
 
-*Open:* a mutable + unique hash means an edit can recompute onto a value that
-already exists on another row in the same table; the collision rule (reject vs
-merge) is undecided — see Active Deferred Work.
+*Decided (edit-collision rule):* a mutable + unique hash means an edit can
+recompute onto a value that already exists on another row in the same table. On
+such a collision the **edit is rejected and surfaced as a failure** — no merge.
+The `*Update` object recomputes the hash; the collision **check is enforced at the
+write boundary** (the workflow layer owns the connection), because the validation
+objects do not read other rows (see Architecture → module boundaries). Mechanics:
+CLAUDE_REFERENCE.md §2/§3.
 
 ### 2. Function collapse on `content_hash_id`
 Re-uploading the "same" function (same `function_name`, `function_class`,
 `function_return_type`) collapses **strictly on `content_hash_id`**. On collision
 the **existing surrogate `function_id` is preserved** and only the mutable columns
 are overwritten. This is what keeps `source_function_map`, `alias_map`, and the
-derived `parameter.content_hash_id` values intact across a re-upload.
+derived `parameter.content_hash_id` values intact across a re-upload. (This is
+the function re-upload collapse, distinct from the registry edit-collision in
+Principle 1.)
 
 ### 3. Transaction boundaries; "rollback" has one meaning
 Writes are grouped into atomic sets (`BEGIN` / `COMMIT` / `ROLLBACK`):
@@ -121,7 +134,8 @@ Writes are grouped into atomic sets (`BEGIN` / `COMMIT` / `ROLLBACK`):
 - **Function attach** (tying a function to a source) — the `source_function_map`
   row + its `alias_map` rows are a separate transaction.
 - **Ingestion** — staged into a temp table, written to the real table only on
-  success.
+  success. On duplicate ids the `ingestion_method` (`upsert` / `append` / `skip`)
+  decides the behavior — see CLAUDE_REFERENCE.md §9.
 
 Throughout the app, **"rollback" always means a DuckDB transaction abort that
 returns the database to its last committed state.** Reverting to an *earlier*
@@ -135,7 +149,9 @@ plus the `alias_map`, not persisted as a fact about the function:
   granularity); anything above `scalar` is `multi_select_eligible`.
 - `column_backed` (a `str` param tied to an `alias_map` row) is resolved **at
   attach time** from metadata.
-- Arguments are bound **by keyword** via `param_name`.
+- Arguments are bound **by keyword** via `param_name`; `function_signature`
+  (CLAUDE_REFERENCE.md §1) is the canonical captured `param_name: type` signature
+  that this binding follows.
 - A `scalar` param uses its **Python default**; the user may override it per-run
   in the UI, but in v1 that override is **not persisted** (v2: a per-source scalar
   store — see Active Deferred Work).
@@ -169,19 +185,24 @@ Undecided or out-of-scope-for-now. Do not encode an answer in code without a
 decision.
 
 - **`column_type` enum** — the concrete set of allowed column types is unspecified.
+  (The *uninferable fallback* is pinned to `VARCHAR`; only the full allowed set is
+  still open.)
 - **Return-type vocabulary** — reconcile `vector`/`matrix` (function-classification
   prose) with `pd.series`/`pd.dataframe` (`function_class`). Pick one vocabulary.
-- **`function_signature` field** — present in `function_registry` but undefined
-  (no type, no description). Decide what it stores or drop it.
 - **Single-column PK / no uniqueness check (M4)** — design assumes the first column
   is the PK when one can't be determined; there is no validation that the chosen
   PK is unique. Decide whether to enforce.
-- **`content_hash_id` edit-collision rule (1.3)** — reject the edit vs merge the
-  rows when a recompute hits an existing hash in the same table.
 - **v2 scalar persistence** — a table storing per-source scalar argument overrides
   so they survive across runs.
 - **Results & Summary layer** — deferred until the rest of the codebase exists;
   shape depends on the user's data.
+
+*Resolved since the last revision (no longer deferred):*
+- **`content_hash_id` edit-collision rule** → **reject** (surface as failure), enforced
+  at the write boundary — now Principle 1.
+- **`function_signature` field** → **retained and defined**: canonical `param_name: type`
+  signature for keyword binding — §1, §12. (It was never deliberately dropped.)
+- **`column_type` uninferable fallback** → **`VARCHAR`** (was written as `var`).
 
 ---
 
