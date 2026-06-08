@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Generator
 
 import duckdb
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
