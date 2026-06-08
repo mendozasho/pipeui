@@ -95,6 +95,7 @@ function ScreenModules() {
                     fontFamily: "'Geist Mono', monospace",
                     color: entry.status === "added" ? "var(--good)"
                       : entry.status === "re-registered" ? "var(--accent)"
+                      : entry.status === "file_missing" ? "var(--warn, #e8a020)"
                       : "var(--text-3)",
                     fontWeight: 600, minWidth: 90,
                   }}>
@@ -109,6 +110,11 @@ function ScreenModules() {
                   {entry.status.startsWith("skipped:") && (
                     <span style={{ color: "var(--bad)", fontSize: 11 }}>
                       {entry.status.slice("skipped: ".length)}
+                    </span>
+                  )}
+                  {entry.status === "file_missing" && (
+                    <span style={{ color: "var(--warn, #e8a020)", fontSize: 11 }}>
+                      file no longer on disk
                     </span>
                   )}
                 </div>
@@ -154,10 +160,23 @@ function ScreenModules() {
               <div key={fn.function_id} style={{
                 padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: 12,
                 borderBottom: "1px solid var(--border-soft)",
+                opacity: fn.is_active ? 1 : 0.5,
               }}>
                 <KindTag kind={fn.function_type} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 500, marginBottom: 2 }}>{fn.function_name}</div>
+                  <div style={{ fontWeight: 500, marginBottom: 2, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: fn.is_active ? undefined : "var(--text-3)" }}>{fn.function_name}</span>
+                    {!fn.is_active && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: "1px 6px",
+                        borderRadius: 4, background: "var(--panel-2)",
+                        color: "var(--text-3)", border: "1px solid var(--border)",
+                        letterSpacing: "0.03em",
+                      }}>
+                        Unavailable
+                      </span>
+                    )}
+                  </div>
                   {fn.function_doc && (
                     <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 4 }}>
                       {fn.function_doc.split("\n")[0]}

@@ -2,6 +2,20 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Generator
+
+import duckdb
+
+
+def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    from pipeui.duckdb import create_schema, get_connection
+    from pipeui.main import DB_PATH
+    conn = get_connection(str(DB_PATH))
+    create_schema(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def infer_pattern(filename: str) -> str | None:
