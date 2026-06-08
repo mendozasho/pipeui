@@ -334,9 +334,25 @@ types + PK). This is an end-user-dependent table: its schema and contents come
 from the upload, not a fixed schema. Once built, files tied to the source are
 written directly via SQL (§9 governs atomicity).
 
-The generated SQL for each user table is stored in a **`sql_user_table/`**
-folder, one Python module per table named `<source>_source_sql.py` (e.g.
-`foo_source_sql.py`). *(Not yet created — see §15 / ROADMAP.md.)*
+`sql_user_table/` is a **fixed module containing a pure DDL generator function**
+— no per-source files are written to disk. The generator takes plain data and
+returns a SQL string; it holds no DB connection and knows nothing about the
+registry.
+
+```python
+def build_create_table_sql(
+    table_name: str,
+    columns: list[tuple[str, str]],  # (column_name, column_type)
+    primary_key: str,
+) -> str:
+```
+
+DDL uses `CREATE TABLE IF NOT EXISTS` (defensive — safe to call on re-ingest) and
+a table-level `PRIMARY KEY (col)` constraint (straightforward to extend to
+composite PKs in a future phase without changing the generator's interface).
+
+The workflow layer (ingestion) is responsible for reading the registry and
+assembling the arguments; the generator never sees the registry or the connection.
 
 **Boundary:** the instance table has no reference back to the registry; the
 registry knows about the instance table, not vice versa.
