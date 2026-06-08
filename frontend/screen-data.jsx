@@ -171,6 +171,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [showIngest, setShowIngest] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [skipReport, setSkipReport] = useState(null);
+  const [previewData, setPreviewData] = useState(null); // { columns, rows } | null
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -182,7 +183,35 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     }
   }
 
-  useEffect(() => { loadDetail(); setSkipReport(null); }, [sourceId]);
+  async function loadRows(src) {
+    // src is the detail object we just fetched; skip the fetch when not ingested yet.
+    if (!src?.date_ingested) { setPreviewData(null); return; }
+    try {
+      const res = await fetch(`/sources/${sourceId}/rows?limit=200`);
+      if (res.ok) setPreviewData(await res.json());
+    } catch {
+      // Non-fatal — the Columns section still works fine without row preview.
+    }
+  }
+
+  useEffect(() => {
+    setDetail(null);
+    setPreviewData(null);
+    setSkipReport(null);
+    if (!sourceId) return;
+    (async () => {
+      try {
+        const res = await fetch(`/sources/${sourceId}`);
+        if (res.ok) {
+          const src = await res.json();
+          setDetail(src);
+          await loadRows(src);
+        }
+      } catch {
+        flash("Could not load source detail.", "error");
+      }
+    })();
+  }, [sourceId]);
 
   async function handleIngest({ file }) {
     setIngesting(true);
@@ -195,7 +224,15 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
       if (data.ok) {
         flash(`Ingested ${data.rows_ingested} row${data.rows_ingested !== 1 ? "s" : ""}.`, "ok");
         if (data.rows_skipped?.length) setSkipReport(data.rows_skipped);
-        await loadDetail();
+        // Refresh detail then rows after a successful ingest
+        try {
+          const dres = await fetch(`/sources/${sourceId}`);
+          if (dres.ok) {
+            const src = await dres.json();
+            setDetail(src);
+            await loadRows(src);
+          }
+        } catch { /* ignore */ }
         onIngested();
       } else {
         flash(data.errors?.join("; ") || "Ingestion failed.", "error");
@@ -212,7 +249,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
 
   return (
     <>
-      <Drawer open={!!sourceId} onClose={onClose} title={source?.source_name ?? "…"} width={440}>
+      <Drawer open={!!sourceId} onClose={onClose} title={source?.source_name ?? "…"} width={560}>
         {source && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -266,6 +303,50 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                 </div>
               ))}
             </Section>
+
+            {/* Data preview — only shown when the source has been ingested and rows exist */}
+            {source.date_ingested && previewData && previewData.rows.length > 0 && (
+              <Section title={`Data (up to 200 rows)`}>
+                <div style={{ overflowX: "auto", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+                  <table style={{
+                    borderCollapse: "collapse", width: "100%", fontSize: 12,
+                    fontFamily: "'Geist Mono', monospace",
+                  }}>
+                    <thead>
+                      <tr style={{ background: "var(--panel-2)" }}>
+                        {previewData.columns.map(col => (
+                          <th key={col} style={{
+                            padding: "6px 10px", textAlign: "left", fontWeight: 600,
+                            borderBottom: "1px solid var(--border)", color: "var(--text-2)",
+                            whiteSpace: "nowrap",
+                          }}>{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewData.rows.map((row, i) => (
+                        <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : "var(--panel-2)" }}>
+                          {previewData.columns.map(col => (
+                            <td key={col} style={{
+                              padding: "5px 10px", borderBottom: "1px solid var(--border-soft)",
+                              color: "var(--text)", whiteSpace: "nowrap", maxWidth: 200,
+                              overflow: "hidden", textOverflow: "ellipsis",
+                            }}>{row[col] == null ? <span style={{ color: "var(--text-4)" }}>null</span> : String(row[col])}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Section>
+            )}
+
+            {/* Empty-state when ingested but no rows returned */}
+            {source.date_ingested && previewData && previewData.rows.length === 0 && (
+              <Section title="Data">
+                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
+              </Section>
+            )}
           </div>
         )}
       </Drawer>

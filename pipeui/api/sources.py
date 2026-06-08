@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
 from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import get_source_detail, ingest_source
+from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
@@ -142,6 +142,35 @@ def get_source(
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
     return detail
+
+
+@router.get("/{source_id}/rows")
+def get_rows(
+    source_id: str,
+    limit: int = 200,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Return up to `limit` rows from the instance table.
+
+    404 if the source is not registered.
+    Returns {"columns": [...], "rows": [...]} with an empty rows list when not
+    yet ingested or when the table has no data (§9 Row preview note).
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    # 404 when source is not in source_registry at all
+    exists = conn.execute(
+        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
+    ).fetchone()
+    if exists is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    rows = get_source_rows(conn, sid, limit=limit)
+    columns = list(rows[0].keys()) if rows else []
+    return {"columns": columns, "rows": rows}
 
 
 @router.post("/{source_id}/ingest")
