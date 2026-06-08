@@ -593,13 +593,14 @@ server. Key files at `frontend/`:
 | file | role |
 | --- | --- |
 | `index.html` | CSS design tokens, font imports (Geist / Geist Mono), script tags |
-| `app.jsx` | App shell — navigation (sidebar/rail/tabs), global state, flash notifications, tweaks panel |
-| `data.jsx` | Mock data (SOURCES, REPORTS, MODULES, FUNCTION_SETS) — replaced per phase with real `fetch()` calls |
+| `app.jsx` | App shell — navigation rail (4 items: Data, Functions, Builder, Settings), global state, flash notifications |
+| `data.jsx` | Mock data (MODULES, FUNCTION_SETS) — replaced per phase with real `fetch()` calls |
 | `ui.jsx` | Shared primitives: `Icon`, `Btn`, `KindTag`, `StatusPill`, `SourceBadge`, `DataTable` |
-| `tweaks-panel.jsx` | Dev-time tweak panel (accent colour, nav layout, density, builder interaction mode) |
+| `tweaks-panel.jsx` | **Retired in Phase A2** — content moved to `screen-settings.jsx` |
 | `screen-data.jsx` | Data screen |
 | `screen-modules.jsx` | Functions screen |
 | `screen-builder.jsx` | Report Builder screen |
+| `screen-settings.jsx` | Settings screen — two sections: Appearance (accent, density) and App (DB path) |
 
 **CSS tokens (defined in `index.html` `:root`):**
 - Backgrounds: `--bg` `--panel` `--panel-2` `--panel-3`
@@ -619,6 +620,7 @@ FastAPI route modules — one file per screen domain. Route modules call
 | module | routes | phase |
 | --- | --- | --- |
 | `sources.py` | `GET /sources` · `POST /sources` · `POST /sources/{id}/ingest` · `GET /sources/{id}` · `PATCH /sources/{id}/columns/{col_id}` | A, B, C |
+| `settings.py` | `GET /settings` · `PATCH /settings` | A2 |
 | `functions.py` | `GET /functions` · `POST /functions` · `GET /functions/{id}` | D |
 | `pipelines.py` | `GET /pipelines/{source_id}` · `POST /pipelines/{source_id}/steps` · `DELETE /pipelines/{source_id}/steps/{step_id}` · `POST /pipelines/{source_id}/run` | E |
 
@@ -630,10 +632,24 @@ FastAPI also mounts `frontend/` as a `StaticFiles` directory so a single
 | Phase | Screen | Replaces mock | Real endpoints used |
 | --- | --- | --- | --- |
 | A | Data | `REPORTS` list + source badges | `GET /sources` · `POST /sources` |
+| A2 | Settings | `tweaks-panel.jsx` retired | `GET /settings` · `PATCH /settings` |
 | B | Data | Row counts, status pills, skip report | `POST /sources/{id}/ingest` · `GET /sources/{id}` |
 | C | Data drawer | Schema type dropdowns + castability modal | `PATCH /sources/{id}/columns/{col_id}` |
 | D | Functions | Module list + function cards | `GET /functions` · `POST /functions` |
 | E | Builder | Reports rail, function palette, pipeline steps, run results | all `pipelines.py` routes |
+
+### Settings config (`pipeui.config.json`)
+
+Written to the repo root; added to `.gitignore` by Phase A2 so it is never committed.
+Read at startup into an `AppSettings` pydantic model; written back on `PATCH /settings`.
+
+| field | type | default | notes |
+| --- | --- | --- | --- |
+| `db_path` | string | `"pipeui.db"` | Path to the DuckDB file; change requires server restart |
+| `accent` | string | `"#7c6cf5"` | CSS hex colour applied to `--accent` token on load |
+| `density` | string | `"regular"` | One of `compact` \| `regular` \| `comfy`; applied as body class on load |
+
+**Restart-required rule.** `PATCH /settings` always writes to `pipeui.config.json` and returns the updated values plus a `restart_required: true` flag when `db_path` changed. The Settings screen surfaces this as a persistent notice. Appearance fields (`accent`, `density`) apply immediately in the frontend without a restart — the saved values are just loaded on the next boot so they persist.
 
 ---
 
@@ -740,3 +756,16 @@ pyproject.toml
   annotations, and restructured ROADMAP.md from horizontal phases (backend-then-
   frontend) into vertical phases (A–F), each delivering backend + API + frontend
   together.
+- **Phase A session (2026-06-08)** — shipped `feat/api-sources-register`.
+  Backend: `pipeui/main.py` (FastAPI entry-point, static file mount),
+  `pipeui/api/sources.py` (`GET /sources`, `POST /sources`) using
+  `Depends(get_conn)` for connection injection and `dependency_overrides` in
+  tests. Fixed `create_source` to reuse existing `column_registry` rows when two
+  sources share a column definition (same name+type → same `content_hash_id`),
+  rather than hitting the `UNIQUE` constraint. Frontend: full React 18 CDN shell
+  — `index.html`, `app.jsx`, `ui.jsx`, `tweaks-panel.jsx`, `screen-data.jsx`
+  (live), `screen-modules.jsx` and `screen-builder.jsx` (Phase D/E placeholders).
+  Added `httpx` to dev dependencies for `TestClient`. `DB_PATH` left as a
+  hardcoded constant; env-var and app-settings approaches deferred. Layout stays
+  flat (`pipeui/` not `src/pipeui/`); `src/` move deferred to production
+  packaging. 5 behavioral-guarantee tests added; 46/46 passing.

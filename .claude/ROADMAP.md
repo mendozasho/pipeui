@@ -139,15 +139,45 @@ frontend design system before working on any frontend or API unit.
 
 *Backend already done (Phase 1). This phase wires the API and Data screen.*
 
-- [ ] **`feat/api-sources-register`** — §14 (API), §6 (workflow).
-  `src/pipeui/api/sources.py`: `GET /sources`, `POST /sources`. FastAPI app
-  entry-point + static file mount for `frontend/`. Wire `create_source()` from
-  `workflow/create.py` to the POST route.
-  *Frontend:* `screen-data.jsx` — dropzone posts to `POST /sources`; reports
-  table reads from `GET /sources`; drawer shows real column schema + row preview.
-  Replace `REPORTS` and `SOURCES` mock data in `data.jsx` with `fetch()`.
-  *Guarantees:* `POST /sources` returns a `FailedRegistryEntry` payload (not a
-  500) when source creation fails; the Data screen renders the failure inline.
+- [x] **`feat/api-sources-register`** — §14 (API), §6 (workflow).
+  `pipeui/api/sources.py`: `GET /sources`, `POST /sources`. FastAPI app
+  entry-point (`pipeui/main.py`) + static file mount for `frontend/`. Wires
+  `create_source()` from `workflow/create.py` to the POST route via
+  `Depends(get_conn)` injection. Fixed a bug in `create_source` where shared
+  column definitions (same name+type across two sources) hit the `UNIQUE`
+  constraint — existing `column_registry` rows are now reused.
+  *Frontend:* `screen-data.jsx` — dropzone (CSV + xlsx) posts to `POST /sources`;
+  reports table reads from `GET /sources`; drawer shows column schema. Full UI
+  shell shipped: `index.html`, `app.jsx`, `ui.jsx`, `tweaks-panel.jsx`,
+  `screen-modules.jsx` (Phase D placeholder), `screen-builder.jsx` (Phase E
+  placeholder). `data.jsx` retains only Phase D–E mock stubs.
+  *Note:* flat layout (`pipeui/` not `src/pipeui/`) retained; move deferred to
+  production packaging. `DB_PATH` is a hardcoded constant; will become an app
+  setting when that feature is wired.
+  *Guarantees met:* `POST /sources` returns a `FailedRegistryEntry` payload (not
+  a 500) when source creation fails; Data screen renders the failure inline.
+
+---
+
+### Phase A2 — App Settings
+
+*Builds directly on Phase A's frontend shell. Resolves `DB_PATH` / `os` import
+cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
+
+- [ ] **`feat/app-settings`** — §14 (API + frontend).
+  `pipeui/api/settings.py`: `GET /settings`, `PATCH /settings`. Read and write
+  `pipeui.config.json` at the repo root via an `AppSettings` pydantic model
+  (`db_path`, `accent`, `density`). Add `pipeui.config.json` to `.gitignore`.
+  Replace hardcoded `DB_PATH` in `main.py` and `sources.py` with the settings
+  object (clears REFACTOR_PLAN.md debt). `get_conn` reads `db_path` from
+  `AppSettings` at startup.
+  *Frontend:* `screen-settings.jsx` — fourth nav item triggered from the gear
+  icon. Two sections: **Appearance** (accent colour picker + density selector,
+  apply immediately, persist on save) and **App** (DB path text input, shows
+  "restart required" notice when changed). Retire `tweaks-panel.jsx`.
+  Update `app.jsx` nav rail to four items (Data, Functions, Builder, Settings).
+  *Guarantees:* `PATCH /settings` with a changed `db_path` returns
+  `restart_required: true`; appearance changes persist across restarts.
 
 ---
 
@@ -258,15 +288,17 @@ frontend design system before working on any frontend or API unit.
 Phases 0–1:  [done] id-generation, db-schema, test-harness,
                      validation-objects, staging, source-create
 
-Phase A:  api-sources-register  (wires Phase 1 backend to Data screen)
-            │
-Phase B:  jit-instance-table ── ingestion ── api-sources-ingest
-            │
-Phase C:  column-migration ── api-sources-migrate        [gated: column_type enum]
-            │
-Phase D:  function-worker ── function-registration ── api-functions
-            │                                              [gated: return-type vocab]
-Phase E:  function-attach ── api-pipelines               [needs Phase B + Phase D]
-            │
-Phase F:  results & summary (deferred)
+Phase A:   api-sources-register  (wires Phase 1 backend to Data screen)
+             │
+Phase A2:  app-settings  (Settings screen + config file; clears DB_PATH debt)
+             │
+Phase B:   jit-instance-table ── ingestion ── api-sources-ingest
+             │
+Phase C:   column-migration ── api-sources-migrate       [gated: column_type enum]
+             │
+Phase D:   function-worker ── function-registration ── api-functions
+             │                                             [gated: return-type vocab]
+Phase E:   function-attach ── api-pipelines              [needs Phase B + Phase D]
+             │
+Phase F:   results & summary (deferred)
 ```

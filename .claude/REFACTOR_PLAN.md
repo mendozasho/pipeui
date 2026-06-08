@@ -1,6 +1,6 @@
 ---
 created: 2026-06-07
-updated: 2026-06-08
+updated: 2026-06-09
 purpose: >
   Tracks specific code items to move, rename, unify, add, or fix — the debt left
   by the implementation + directory-reorg session. Consult before moving,
@@ -15,6 +15,18 @@ purpose: >
 The docs (design.md, CLAUDE.md, CLAUDE_REFERENCE.md, ROADMAP.md) already describe
 the intended end state. This file lists the concrete code edits needed to make
 the code match those docs. Group order is roughly safest-first.
+
+## Clean up in Phase A2 (`feat/app-settings`)
+
+- [ ] **Remove `os` import and `DB_PATH` env-var fallback from `pipeui/main.py`.**
+  `main.py` currently reads `DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))`,
+  a leftover from an intermediate refactor. The decision was to keep `DB_PATH` as a
+  plain hardcoded constant until a proper app settings feature is built. When that
+  feature lands, replace the constant (and the `os` import) with a settings object
+  and remove the env-var path entirely. Same applies to the matching `DB_PATH` in
+  `pipeui/api/sources.py` — both should read from the settings object at that point.
+
+---
 
 ## Move / rename
 
