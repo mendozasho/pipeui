@@ -289,7 +289,7 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
         if (!commitRes.ok) { setSelected(prev); return; }
         const commitData = await commitRes.json();
         if (!commitData.ok) { setSelected(prev); return; }
-        await onMigrated();
+        await onMigrated(commitData.nullified || []);
       } else {
         // Show confirmation modal
         setPendingMigration({
@@ -320,7 +320,7 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
       if (!commitRes.ok) { setSelected(prev); return; }
       const commitData = await commitRes.json();
       if (!commitData.ok) { setSelected(prev); return; }
-      await onMigrated();
+      await onMigrated(commitData.nullified || []);
     } catch (err) {
       console.error("Column type migration commit error:", err);
       setSelected(prev);
@@ -374,6 +374,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [ingesting, setIngesting] = useState(false);
   const [skipReport, setSkipReport] = useState(null);
   const [previewData, setPreviewData] = useState(null); // { columns, rows } | null
+  const [nullifiedRows, setNullifiedRows] = useState([]); // [{pk, column}] after migration
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -400,6 +401,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     setDetail(null);
     setPreviewData(null);
     setSkipReport(null);
+    setNullifiedRows([]);
     if (!sourceId) return;
     (async () => {
       try {
@@ -496,7 +498,8 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                   key={col.column_id}
                   col={col}
                   sourceId={sourceId}
-                  onMigrated={async () => {
+                  onMigrated={async (nullified) => {
+                    setNullifiedRows(nullified || []);
                     const dres = await fetch(`/sources/${sourceId}`);
                     if (dres.ok) {
                       const src = await dres.json();
@@ -507,6 +510,25 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                 />
               ))}
             </Section>
+
+            {/* Nullified values — shown only after a migration that produced nullified rows */}
+            {nullifiedRows.length > 0 && (
+              <Section title={`Nullified values (${nullifiedRows.length})`}>
+                {nullifiedRows.map((entry, i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
+                  }}>
+                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)" }}>
+                      {entry.column}
+                    </span>
+                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text)" }}>
+                      {entry.pk}
+                    </span>
+                  </div>
+                ))}
+              </Section>
+            )}
 
             {/* Data preview — only shown when the source has been ingested and rows exist */}
             {source.date_ingested && previewData && previewData.rows.length > 0 && (
