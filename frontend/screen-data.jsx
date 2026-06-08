@@ -141,7 +141,7 @@ function IngestModal({ source, onConfirm, onCancel }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="File (CSV or Excel)">
             <div
-              onClick={() => inputRef.current?.click()}
+              onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
               style={{
                 ...inputStyle, cursor: "pointer",
                 color: file ? "var(--text)" : "var(--text-3)",
