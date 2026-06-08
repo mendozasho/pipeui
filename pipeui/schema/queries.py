@@ -62,5 +62,19 @@ CREATE TABLE IF NOT EXISTS alias_map (
     parameter_id UUID NOT NULL,  -- references parameter(param_id)
     source_id    UUID NOT NULL   -- references source_registry(source_id)
 );
+
+CREATE TABLE IF NOT EXISTS function_set (
+    set_id          UUID PRIMARY KEY,
+    content_hash_id UUID NOT NULL UNIQUE,
+    set_name        VARCHAR NOT NULL,
+    set_description VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS function_set_map (
+    set_map_id  UUID PRIMARY KEY,
+    set_id      UUID NOT NULL,  -- references function_set(set_id)
+    function_id UUID NOT NULL,  -- references function_registry(function_id)
+    position    INTEGER NOT NULL
+);
 """
 """Creates the base application tables on initialization."""

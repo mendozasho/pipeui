@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from pipeui.api.function_sets import router as function_sets_router
 from pipeui.api.functions import router as functions_router
 from pipeui.api.settings import load_settings, router as settings_router
 from pipeui.api.sources import router as sources_router
@@ -21,6 +22,7 @@ app = FastAPI(title="PipeUI")
 app.include_router(settings_router)
 app.include_router(sources_router)
 app.include_router(functions_router)
+app.include_router(function_sets_router)
 
 # Serve the React frontend from the root after routes are registered
 if FRONTEND_DIR.exists():
