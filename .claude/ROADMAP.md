@@ -266,63 +266,66 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
-### Phase D — Function Registration
+### Phase D — Function Registration *(complete)*
 
-- [ ] **`feat/function-worker`** — §10. Per-call worker process; wall-clock
-  timeout; unconditional `setrlimit` CPU/memory caps (Unix-only, no Windows
-  guard); Arrow IPC data boundary; per-user venv + lockfile; data-only interface.
-  *Guarantees:* worker receives data only; timeout kills a looping function; a
-  crashing function takes the worker not the app (surfaced via
-  `FailedFunctionEntry`); `setrlimit` memory cap kills an allocate-big function.
-  (Integration tests run on Linux CI.)
+- [x] **`feat/phase-d-functions-paths-setting`** (#23) — `function_signature` (NOT NULL) + `is_active` columns added to `function_registry` DDL; `functions_paths: list[str]` added to `AppSettings`; Settings screen "Functions" subsection for add/remove path list.
 
-- [ ] **`feat/function-registration`** — §10 (registration txn), §11. Load a
-  `.py`, validate typed params/returns, derive `function_class` /
-  `function_type` / `function_return_type`, capture `function_signature`, write
-  `function_registry` + `parameter` rows as **one** transaction, collapse on
-  `content_hash_id`.
-  *Gated by:* return-type vocabulary (CLAUDE.md → Active Deferred Work).
-  *Guarantees:* derivation table (§11); collapse preserves surrogate
-  `function_id` and overwrites only mutables; registration atomicity.
+- [x] **`feat/phase-d-worker`** (#24) — Per-call worker subprocess; wall-clock timeout; unconditional `setrlimit` CPU/memory caps (Unix-only); Arrow IPC data boundary; `FailedFunctionEntry` on timeout/crash/OOM.
 
-- [ ] **`feat/api-functions`** — §14 (API), §10–§11 (workflow).
-  `src/pipeui/api/functions.py`: `POST /functions`, `GET /functions`,
-  `GET /functions/{id}`.
-  *Frontend:* `screen-modules.jsx` — `.py` upload, module list, function cards
-  with real sig/doc/params; `FailedFunctionEntry` errors surface inline. Replace
-  `MODULES` mock data with `fetch()`.
+- [x] **`feat/phase-d-scan-and-list`** (#25) — Scan workflow: discovers eligible functions in `functions_paths`, derives `function_class`/`function_type`/`function_return_type`/`param_type`, writes `function_registry` + `parameter` rows in one transaction per function, collapses on `content_hash_id` (Principle 2). `POST /functions/scan` + `GET /functions`. Functions screen replaces `MODULES` mock; "Rescan" button + collapsible scan log.
+
+- [x] **`feat/phase-d-inactive-functions`** (#26) — Rescan flips `is_active = false` for missing files; restores on reappearance; scan log includes `file_missing` entries; inactive cards show muted style + "Unavailable" badge.
+
+- [x] **`feat/phase-d-function-detail-drawer`** (#27) — `GET /functions/{id}` with `attached_sources` join; detail drawer on Functions screen (signature, doc, params, attached sources).
 
 ---
 
-### Phase E — Function Attach & Execution *(convergence)*
+### Phase D2 — Function Sets
 
-- [ ] **`feat/function-attach`** — §12. Validate the `alias_map` mapping
-  (unmapped parameter/column fails the attach with a message), write
-  `source_function_map` + `alias_map` as **one** transaction, keyword binding
-  via `param_name`, multi-select loop (N eligible columns → N runs).
-  **Convergence point:** needs a registered source (Phase A/B) and a registered
-  function (Phase D).
-  *Guarantees:* attach atomicity; unmapped param/column fails the attach;
-  multi-select runs once per eligible column.
+*Builds on Phase D. Adds the Sets tab to the Functions screen.*
 
-- [ ] **`feat/api-pipelines`** — §14 (API), §12 (workflow).
-  `src/pipeui/api/pipelines.py`: `GET /pipelines/{source_id}`,
-  `POST /pipelines/{source_id}/steps`,
-  `DELETE /pipelines/{source_id}/steps/{step_id}`,
-  `POST /pipelines/{source_id}/run`.
-  *Frontend:* `screen-builder.jsx` — Reports rail reads real sources; Function
-  palette reads real functions; drag-and-drop adds real steps; column mapping
-  binds real `alias_map`; Run executes real functions and shows pass/fail per
-  step. Replace all remaining mock data in `data.jsx` with `fetch()`.
+- [ ] **`feat/phase-d2-function-sets`** — Schema: `function_set` (`set_id` UUID4, `set_name` VARCHAR NOT NULL, `set_description` VARCHAR, `content_hash_id` UUID5) + `function_set_map` (`set_map_id` UUID4, `set_id`, `function_id`, `position` INTEGER). Dual-id identity (Principle 1) on `function_set`. API: `GET /function-sets`, `POST /function-sets`, `GET /function-sets/{id}`, `PATCH /function-sets/{id}`, `DELETE /function-sets/{id}`. Frontend: Functions screen gains a **Sets tab** alongside the Functions tab. Two-panel create/edit layout — left panel: filterable registered function list; right panel: ordered pipeline for this set (drag to reorder, click to remove). Set card shows name, description, function count, warning marker when any member function has `is_active = false`. Replace `FUNCTION_SETS` mock in `data.jsx` with real `fetch()`.
+  *Guarantees:* set creation atomicity (set row + all set_map rows in one transaction); position ordering is preserved on read; deleting a set does not delete member functions.
 
 ---
 
-### Phase F — Results & Summary *(deferred)*
+### Phase E1 — Function Attach *(convergence)*
 
-- [ ] **Results & Summary layer** — shape depends on the user's data; deferred
-  until Phases A–E exist (CLAUDE.md → Active Deferred Work).
-- [ ] **v2 scalar persistence** — per-source scalar-override store so UI
-  overrides survive across runs (CLAUDE.md → Active Deferred Work).
+*Needs a registered source (Phase B) and registered functions (Phase D).*
+
+- [ ] **`feat/phase-e1-function-attach`** — §12. Attach individual functions or all functions in a set to a source: writes `source_function_map` + `alias_map` rows in one transaction per function. Validates that all non-scalar parameters have an alias_map binding — unmapped required param fails the attach with a message. Auto-suggests bindings when the new source shares a `column_id` with an existing binding on another source (same `column_name + column_type` → same `column_id`). Keyword binding via `param_name`. Multi-select: when a function's `function_class` is `column_backed`/`pd.Series`/`pd.dataframe`, it can be run once per eligible mapped column.
+  API: `POST /sources/{source_id}/attach` (body: `{function_id}` or `{set_id}`), `DELETE /sources/{source_id}/attach/{function_id}`, `GET /sources/{source_id}/pipeline` (returns ordered attached functions with bindings).
+  *Frontend:* attach UI lives in the Builder screen — source selector + function/set palette on the left, pipeline steps on the right; column binding dropdowns per parameter; auto-fill highlighted; save writes the attach.
+  *Guarantees:* attach atomicity; unmapped required param fails; multi-select runs once per eligible column; detach removes `source_function_map` + all `alias_map` rows in one transaction.
+
+---
+
+### Phase E2 — Builder Execution *(thin v1)*
+
+*Needs Phase E1 (attach) to be complete.*
+
+- [ ] **`feat/phase-e2-pipeline-run`** — Execute the pipeline for a source: call each attached function in `position` order via the Phase D worker, collect results. Validation functions (`function_type = validation`) produce pass/fail rows; transform functions write results back to the instance table (or to a session-only staging table). API: `POST /pipelines/{source_id}/run` → returns `{steps: [{function_name, status, rows_passed, rows_failed, error}]}`.
+  *Frontend:* Builder screen "Run" button triggers the pipeline; per-step status shown inline. Two new nav items added as **placeholders**: **Validations** (pass/fail summary — "coming in F1") and **Staging** (post-run transformed tables — "coming in F2"). `data.jsx` mock data fully retired after this phase.
+  *Guarantees:* a crashing function step surfaces as a failed step (not a 500); subsequent steps still run; pipeline result is returned even if some steps fail.
+
+---
+
+### Phase F1 — Validations Screen
+
+- [ ] **Validations screen** — Full implementation of the pass/fail summary view for validation function results. Per-source, per-function breakdown of rows passing/failing. Export capability (CSV). Replaces the Phase E2 placeholder.
+
+---
+
+### Phase F2 — Staging Screen
+
+- [ ] **Staging screen** — Full implementation of the post-run transformed table view. In v1: session-only ephemeral tables (not persisted to main DB). Shows sources that have been run through transformations, ready to combine with other reports or export. Replaces the Phase E2 placeholder.
+  *Deferred to v2:* persistent staging table so results survive across sessions; cross-source join UI.
+
+---
+
+### Phase F3 — Deferred
+
+- [ ] **v2 scalar persistence** — per-source scalar-override store so UI overrides survive across runs (CLAUDE.md → Active Deferred Work).
 
 ---
 
@@ -332,19 +335,26 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 Phases 0–1:  [done] id-generation, db-schema, test-harness,
                      validation-objects, staging, source-create
 
-Phase A:   api-sources-register  (wires Phase 1 backend to Data screen)
+Phase A:   api-sources-register                                          [done]
              │
-Phase A2:  app-settings  (Settings screen + config file; clears DB_PATH debt)
+Phase A2:  app-settings                                                  [done]
              │
-Phase B:   jit-instance-table ── ingestion ── api-sources-ingest
+Phase B:   jit-instance-table ── ingestion ── api-sources-ingest        [done]
              │
-Phase B2:  fix/ingest-modal-double-picker  feat/source-data-preview     [done]
+Phase B2:  fix/ingest-modal  feat/source-data-preview                   [done]
              │
-Phase C:   column-migration ── api-sources-migrate                       [done]
+Phase C:   column-migration ── api-sources-migrate                      [done]
              │
-Phase D:   function-worker ── function-registration ── api-functions
-             │                                             [gated: return-type vocab]
-Phase E:   function-attach ── api-pipelines              [needs Phase B + Phase D]
+Phase D:   functions-paths-setting ── worker ── scan-and-list           [done]
+             └── inactive-functions ── function-detail-drawer           [done]
              │
-Phase F:   results & summary (deferred)
+Phase D2:  function-sets  (Sets tab on Functions screen)
+             │
+Phase E1:  function-attach  (needs Phase B + Phase D + Phase D2)
+             │
+Phase E2:  pipeline-run  (thin: run + placeholder Validations/Staging nav)
+             │
+Phase F1:  validations-screen  (full pass/fail UI + export)
+Phase F2:  staging-screen      (full post-run table view + export)
+Phase F3:  v2 scalar persistence  (deferred)
 ```
