@@ -42,9 +42,7 @@ These are CLAUDE.md → Active Deferred Work items. Each one blocks clean
 implementation of the unit(s) noted; resolve before (or at the start of) that
 unit rather than encoding an answer in code.
 
-- **`column_type` enum** — concrete allowed set. Gates `feat/column-migration`
-  (Phase C). (The *fallback* is resolved → `VARCHAR`; only the full allowed set
-  is still open.)
+- ~~**`column_type` enum**~~ — **resolved**: `INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`. No longer gates Phase C.
 - **PK uniqueness enforcement** — whether to validate the chosen/assumed PK is
   unique. Relevant to Phase A (`POST /sources`) if enforcement is added.
 - **Return-type vocabulary** (`vector`/`matrix` vs `pd.series`/`pd.dataframe`) —
