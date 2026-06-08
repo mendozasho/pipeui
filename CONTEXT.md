@@ -48,3 +48,17 @@ A derived classification for a `str` parameter that has an alias_map row mapping
 ## function_type
 
 Derived from `function_return_type`. `validation` when return is `boolean` or `pd.Series[bool]`; `transform` otherwise.
+
+---
+
+## functions_path
+
+A setting in `pipeui.config.json` (alongside `db_path`) that points to the folder on the user's machine where their `.py` function modules live. The app does not copy or upload files — `module_path` in `function_registry` stores the user's actual file path.
+
+## function scanning (rescan model)
+
+Functions are registered by scanning `functions_path`, not by file upload. The user triggers a rescan explicitly (via a "Rescan" button in the Functions screen). On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. The registry always reflects what was last scanned — it does not auto-update when files change on disk. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
+
+## worker Python interpreter
+
+The worker process uses `sys.executable` — the same Python interpreter running the app. Because the user installs pipeui into their project environment, their project's dependencies (pandas, numpy, etc.) are already available. No separate venv is created or managed by the app.
