@@ -16,6 +16,25 @@ The docs (design.md, CLAUDE.md, CLAUDE_REFERENCE.md, ROADMAP.md) already describ
 the intended end state. This file lists the concrete code edits needed to make
 the code match those docs. Group order is roughly safest-first.
 
+## Fix (§3 compliance)
+
+- [ ] **`migration.py` — use `ColumnRegistryUpdate` at the write boundary.**
+  `migrate_column()` imports `ColumnRegistryUpdate` but never uses it: the hash
+  recomputation and collision check are done inline with bare `_content_hash_id()`
+  calls (lines ~164–180) instead of constructing a `ColumnRegistryUpdate` object
+  and letting it recompute `content_hash_id`. Fix: build a `ColumnRegistryUpdate`
+  from the existing `ColumnRegistryEntry`, pass the new `column_type`, and read
+  `update_obj.content_hash_id` for the collision check and the final UPDATE — same
+  pattern as `update_function_set()` in `workflow/function_sets.py`.
+
+- [ ] **`AppSettings` — move from `api/settings.py` to `validation/`.**
+  `AppSettings` is a pydantic model that describes the shape of `pipeui.config.json`.
+  It lives in `pipeui/api/settings.py` (line 22), which violates the module-boundary
+  rule that `api/` must not own validation/schema objects. Move `AppSettings` (and
+  `DEFAULTS`) to a new `pipeui/validation/settings.py`, export it from
+  `pipeui/validation/__init__.py`, and update the import in `api/settings.py`.
+  `SettingsPatch` (the request-body model) stays in `api/settings.py`.
+
 ## Move / rename
 
 - [ ] *(Optional, low priority)* **Rename `pipeui/duckdb.py`** to avoid shadowing
