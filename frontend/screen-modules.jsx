@@ -1,13 +1,170 @@
-// Functions screen — Phase D: wired to real API data
+// Functions screen — Phase D: wired to real API data, with function detail drawer
 const { useState, useEffect } = React;
 
-function ScreenModules() {
+// ---------------------------------------------------------------------------
+// FunctionDrawer — detail drawer following the same pattern as SourceDrawer
+// ---------------------------------------------------------------------------
+
+function FnSection({ title, children }) {
+  return (
+    <div>
+      <div style={{
+        fontSize: 11, color: "var(--text-3)", fontWeight: 600,
+        letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 10,
+      }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function FnKV({ label, children }) {
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between", padding: "5px 0",
+      borderBottom: "1px solid var(--border-soft)", fontSize: 13,
+    }}>
+      <span style={{ color: "var(--text-3)" }}>{label}</span>
+      <span style={{ color: "var(--text)", fontWeight: 500 }}>{children}</span>
+    </div>
+  );
+}
+
+function FunctionDrawer({ functionId, onClose, flash }) {
+  const { Drawer, KindTag } = window.__UI__;
+  const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    setDetail(null);
+    if (!functionId) return;
+    fetch(`/functions/${functionId}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => setDetail(data))
+      .catch(() => flash && flash("Could not load function detail.", "error"));
+  }, [functionId]);
+
+  if (!functionId) return null;
+  const fn = detail;
+
+  return (
+    <Drawer open={!!functionId} onClose={onClose} title={fn?.function_name ?? "…"} width={560}>
+      {fn && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+          {/* Header: kind badge + active status */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <KindTag kind={fn.function_type} />
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: "2px 8px",
+              borderRadius: 99,
+              background: fn.is_active ? "var(--good-soft, rgba(0,200,100,.12))" : "var(--panel-3)",
+              color: fn.is_active ? "var(--good, #00c864)" : "var(--text-3)",
+              border: `1px solid ${fn.is_active ? "var(--good, #00c864)" : "var(--border)"}`,
+            }}>
+              {fn.is_active ? "active" : "inactive"}
+            </span>
+          </div>
+
+          {/* Signature */}
+          <FnSection title="Signature">
+            <div style={{
+              fontFamily: "'Geist Mono', monospace", fontSize: 12,
+              background: "var(--panel-2)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius)", padding: "10px 14px",
+              color: "var(--text)", wordBreak: "break-all",
+            }}>
+              {fn.function_name}{fn.function_signature}
+            </div>
+          </FnSection>
+
+          {/* Docstring */}
+          {fn.function_doc && (
+            <FnSection title="Documentation">
+              <div style={{
+                fontSize: 13, color: "var(--text-2)", lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+              }}>
+                {fn.function_doc}
+              </div>
+            </FnSection>
+          )}
+
+          {/* Parameters */}
+          <FnSection title={`Parameters (${fn.parameters?.length ?? 0})`}>
+            {(!fn.parameters || fn.parameters.length === 0) ? (
+              <div style={{ color: "var(--text-3)", fontSize: 12, padding: "4px 0" }}>No parameters.</div>
+            ) : (
+              <div style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "'Geist Mono', monospace" }}>
+                  <thead>
+                    <tr style={{ background: "var(--panel-2)" }}>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontWeight: 600, color: "var(--text-2)", borderBottom: "1px solid var(--border)" }}>param_name</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontWeight: 600, color: "var(--text-2)", borderBottom: "1px solid var(--border)" }}>param_type</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fn.parameters.map((p, i) => (
+                      <tr key={p.param_id} style={{ background: i % 2 === 0 ? "transparent" : "var(--panel-2)" }}>
+                        <td style={{ padding: "5px 12px", borderBottom: "1px solid var(--border-soft)", color: "var(--text)" }}>{p.param_name}</td>
+                        <td style={{ padding: "5px 12px", borderBottom: "1px solid var(--border-soft)", color: "var(--text-3)" }}>{p.param_type}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </FnSection>
+
+          {/* Metadata */}
+          <FnSection title="Details">
+            <FnKV label="Return type">{fn.function_return_type}</FnKV>
+            <FnKV label="Function type">{fn.function_type}</FnKV>
+            <FnKV label="Function class">{fn.function_class}</FnKV>
+            <FnKV label="Source file">
+              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, wordBreak: "break-all" }}>
+                {fn.module_path}
+              </span>
+            </FnKV>
+          </FnSection>
+
+          {/* Attached sources */}
+          <FnSection title="Attached to">
+            {(!fn.attached_sources || fn.attached_sources.length === 0) ? (
+              <div style={{ color: "var(--text-3)", fontSize: 12, padding: "4px 0" }}>
+                Not attached to any sources yet.
+              </div>
+            ) : (
+              fn.attached_sources.map(s => (
+                <div key={s.source_id} style={{
+                  padding: "6px 0", borderBottom: "1px solid var(--border-soft)",
+                  fontSize: 13, color: "var(--text)",
+                }}>
+                  {s.source_name}
+                </div>
+              ))
+            )}
+          </FnSection>
+
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScreenModules
+// ---------------------------------------------------------------------------
+
+function ScreenModules({ flash }) {
   const { KindTag, Icon, Btn } = window.__UI__;
   const [functions, setFunctions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanLog, setScanLog] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const [selectedFunction, setSelectedFunction] = useState(null);
 
   function loadFunctions() {
     return fetch("/functions")
@@ -155,7 +312,7 @@ function ScreenModules() {
                 {fns.length} function{fns.length !== 1 ? "s" : ""}
               </span>
             </div>
-            {/* Function cards */}
+            {/* Function cards — clickable to open drawer */}
             {fns.map(fn => (
               <div key={fn.function_id} style={{
                 padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: 12,
@@ -191,6 +348,13 @@ function ScreenModules() {
           </div>
         ))}
       </div>
+
+      {/* Function detail drawer */}
+      <FunctionDrawer
+        functionId={selectedFunction?.function_id}
+        onClose={() => setSelectedFunction(null)}
+        flash={flash}
+      />
     </div>
   );
 }

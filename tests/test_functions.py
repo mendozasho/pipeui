@@ -12,6 +12,7 @@ from pipeui.workflow.functions import (
     derive_function_return_type,
     derive_function_type,
     discover_functions_in_file,
+    get_function,
     list_functions,
     scan_functions,
     _inspect_function,
