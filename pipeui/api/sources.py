@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
-import uuid
 from pathlib import Path
 
 import duckdb
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from pipeui.duckdb import create_schema, get_connection, get_db_path
+from pipeui.duckdb import create_schema, get_connection
 from pipeui.workflow.create import create_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-DB_PATH = Path(__file__).parent.parent.parent / "pipeui.db"
+# Resolve DB path from env var; default to pipeui.db in the working directory.
+DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 

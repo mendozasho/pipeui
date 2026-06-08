@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,8 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from pipeui.api.sources import router as sources_router
 from pipeui.duckdb import get_connection, create_schema
 
-FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
-DB_PATH = Path(__file__).parent.parent.parent / "pipeui.db"
+# frontend/ is a sibling of the pipeui package, two levels up from this file
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))
 
 app = FastAPI(title="PipeUI")
 app.include_router(sources_router)
