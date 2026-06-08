@@ -695,7 +695,6 @@ frontend/              # React UI — no build step (CDN React 18 + Babel standa
   app.jsx              # Shell: 4-item nav rail, global state, flash notifications
   data.jsx             # Mock data stubs for Phases D–E — shrinks per phase
   ui.jsx               # Shared primitives: Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable
-  tweaks-panel.jsx     # [retired Phase A2] — content moved to screen-settings.jsx
   screen-data.jsx      # Data screen (Phase A + B + C)
   screen-modules.jsx   # Functions screen (Phase D)
   screen-builder.jsx   # Report Builder screen (Phase E)
@@ -774,3 +773,19 @@ pyproject.toml
   hardcoded constant; env-var and app-settings approaches deferred. Layout stays
   flat (`pipeui/` not `src/pipeui/`); `src/` move deferred to production
   packaging. 5 behavioral-guarantee tests added; 46/46 passing.
+- **Phase A2 session (2026-06-08)** — shipped `feat/app-settings`.
+  Backend: `pipeui/api/settings.py` (`GET /settings`, `PATCH /settings`) with
+  partial-merge semantics (`model.model_copy(update=...)`); `restart_required:
+  true` returned only when `db_path` changes. Config file (`pipeui.config.json`)
+  eagerly created at repo root on first startup with hardcoded defaults; loaded
+  once into `DB_PATH` at startup in `main.py`. Cleared REFACTOR_PLAN.md debt:
+  removed `os` import and `DB_PATH` env-var fallback from `main.py`; removed
+  duplicate `DB_PATH` from `sources.py` (now reads from `main.DB_PATH`).
+  Frontend: `screen-settings.jsx` — Appearance section (accent colour picker +
+  density selector, live CSS-var apply on click) and App section (db_path input);
+  Save button fires `PATCH /settings`; persistent warning banner when
+  `restart_required`. Retired `tweaks-panel.jsx` (deleted); promoted its
+  accent/density logic into `screen-settings.jsx`. Updated `app.jsx` to a
+  4-item nav rail (Data, Functions, Builder, Settings); removed TweaksPanel
+  wiring. Added `pipeui.config.json` to `.gitignore`. 6 behavioral-guarantee
+  tests added; 52/52 passing.

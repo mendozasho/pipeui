@@ -164,7 +164,7 @@ frontend design system before working on any frontend or API unit.
 *Builds directly on Phase A's frontend shell. Resolves `DB_PATH` / `os` import
 cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
-- [ ] **`feat/app-settings`** — §14 (API + frontend).
+- [x] **`feat/app-settings`** — §14 (API + frontend).
   `pipeui/api/settings.py`: `GET /settings`, `PATCH /settings`. Read and write
   `pipeui.config.json` at the repo root via an `AppSettings` pydantic model
   (`db_path`, `accent`, `density`). Add `pipeui.config.json` to `.gitignore`.
