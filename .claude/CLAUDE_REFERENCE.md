@@ -740,3 +740,16 @@ pyproject.toml
   annotations, and restructured ROADMAP.md from horizontal phases (backend-then-
   frontend) into vertical phases (A–F), each delivering backend + API + frontend
   together.
+- **Phase A session (2026-06-08)** — shipped `feat/api-sources-register`.
+  Backend: `pipeui/main.py` (FastAPI entry-point, static file mount),
+  `pipeui/api/sources.py` (`GET /sources`, `POST /sources`) using
+  `Depends(get_conn)` for connection injection and `dependency_overrides` in
+  tests. Fixed `create_source` to reuse existing `column_registry` rows when two
+  sources share a column definition (same name+type → same `content_hash_id`),
+  rather than hitting the `UNIQUE` constraint. Frontend: full React 18 CDN shell
+  — `index.html`, `app.jsx`, `ui.jsx`, `tweaks-panel.jsx`, `screen-data.jsx`
+  (live), `screen-modules.jsx` and `screen-builder.jsx` (Phase D/E placeholders).
+  Added `httpx` to dev dependencies for `TestClient`. `DB_PATH` left as a
+  hardcoded constant; env-var and app-settings approaches deferred. Layout stays
+  flat (`pipeui/` not `src/pipeui/`); `src/` move deferred to production
+  packaging. 5 behavioral-guarantee tests added; 46/46 passing.

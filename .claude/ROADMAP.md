@@ -139,15 +139,23 @@ frontend design system before working on any frontend or API unit.
 
 *Backend already done (Phase 1). This phase wires the API and Data screen.*
 
-- [ ] **`feat/api-sources-register`** — §14 (API), §6 (workflow).
-  `src/pipeui/api/sources.py`: `GET /sources`, `POST /sources`. FastAPI app
-  entry-point + static file mount for `frontend/`. Wire `create_source()` from
-  `workflow/create.py` to the POST route.
-  *Frontend:* `screen-data.jsx` — dropzone posts to `POST /sources`; reports
-  table reads from `GET /sources`; drawer shows real column schema + row preview.
-  Replace `REPORTS` and `SOURCES` mock data in `data.jsx` with `fetch()`.
-  *Guarantees:* `POST /sources` returns a `FailedRegistryEntry` payload (not a
-  500) when source creation fails; the Data screen renders the failure inline.
+- [x] **`feat/api-sources-register`** — §14 (API), §6 (workflow).
+  `pipeui/api/sources.py`: `GET /sources`, `POST /sources`. FastAPI app
+  entry-point (`pipeui/main.py`) + static file mount for `frontend/`. Wires
+  `create_source()` from `workflow/create.py` to the POST route via
+  `Depends(get_conn)` injection. Fixed a bug in `create_source` where shared
+  column definitions (same name+type across two sources) hit the `UNIQUE`
+  constraint — existing `column_registry` rows are now reused.
+  *Frontend:* `screen-data.jsx` — dropzone (CSV + xlsx) posts to `POST /sources`;
+  reports table reads from `GET /sources`; drawer shows column schema. Full UI
+  shell shipped: `index.html`, `app.jsx`, `ui.jsx`, `tweaks-panel.jsx`,
+  `screen-modules.jsx` (Phase D placeholder), `screen-builder.jsx` (Phase E
+  placeholder). `data.jsx` retains only Phase D–E mock stubs.
+  *Note:* flat layout (`pipeui/` not `src/pipeui/`) retained; move deferred to
+  production packaging. `DB_PATH` is a hardcoded constant; will become an app
+  setting when that feature is wired.
+  *Guarantees met:* `POST /sources` returns a `FailedRegistryEntry` payload (not
+  a 500) when source creation fails; Data screen renders the failure inline.
 
 ---
 
