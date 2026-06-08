@@ -51,7 +51,7 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
    before writing rather than guessing (see Architecture → module boundaries).
 3. **design.md is the source of design intent.** Reference it; this file is its
    distilled form. Keep the two consistent.
-4. **One branch per unit of work.** Each piece of work happens on its own branch.
+4. **One branch per unit of work.** Each piece of work happens on its own branch. When the work is complete, open a pull request with `Closes #<issue-number>` in the body so the issue is auto-closed on merge.
 5. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
    go in CLAUDE_REFERENCE.md. Split criterion: *what to build and why* → CLAUDE.md,
    *how it is implemented* → CLAUDE_REFERENCE.md.

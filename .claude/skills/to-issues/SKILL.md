@@ -60,6 +60,10 @@ Publish issues in dependency order (blockers first) so you can reference real is
 
 A reference to the parent issue on the issue tracker (if the source was an existing issue, otherwise omit this section).
 
+## Branch
+
+`feat/<short-slug>` — the branch name the implementing agent must create and push to. Derived from the issue title.
+
 ## What to build
 
 A concise description of this vertical slice. Describe the end-to-end behavior, not layer-by-layer implementation.
@@ -77,6 +81,11 @@ Avoid specific file paths or code snippets — they go stale fast. Exception: if
 - A reference to the blocking ticket (if any)
 
 Or "None - can start immediately" if no blockers.
+
+## Implementation notes for the agent
+
+- Work on the branch listed above.
+- When all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body so the issue is auto-closed on merge.
 
 </issue-template>
 
