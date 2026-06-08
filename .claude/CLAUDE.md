@@ -66,6 +66,11 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
    file must have corresponding tests.
 10. **Don't silently resolve open questions.** Items under Active Deferred Work are
     undecided; surface them rather than encoding an answer in code.
+11. **Parallel agents for unblocked work; approval gate for blocked work.** When
+    multiple issues have no dependency between them, launch them as parallel agents
+    in a single message. When a slice is blocked by another, surface it explicitly
+    and wait for user approval before starting it — do not proceed past a blocker
+    without confirmation.
 
 ---
 
