@@ -59,6 +59,18 @@ A setting in `pipeui.config.json` (alongside `db_path`) that points to the folde
 
 Functions are registered by scanning `functions_path`, not by file upload. The registry does **not** auto-update on app startup or when files change on disk. A rescan is triggered explicitly in two ways: (1) saving a changed `functions_path` in Settings, or (2) pressing "Rescan" on the Functions screen. On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
 
+## is_active
+
+A mutable boolean column on `function_registry` (default `true`). Set to `false` when a rescan finds the function's `module_path` file no longer exists on disk; restored to `true` when the file reappears on a subsequent rescan. Does not contribute to `content_hash_id`. Inactive functions remain in the registry and in any existing `source_function_map` bindings — they are never auto-deleted.
+
+## scan log
+
+A session-only in-memory record of what changed during a rescan (functions added, re-registered, or found missing). Not persisted to DuckDB. Shown in the Functions screen so the user can see the diff from the last rescan. Resets on server restart. Durable state is captured by `is_active` on `function_registry`.
+
+## function detail drawer
+
+The detail view for a registered function, opened from the Functions screen. Shows: signature, docstring, parameters and their types, `function_class`, `function_type`, `function_return_type`, active/inactive status, and the list of sources the function is currently attached to (joined from `source_function_map` → `source_registry`). Mirrors the drawer pattern used on the Data screen for source detail.
+
 ## worker Python interpreter
 
 The worker process uses `sys.executable` — the same Python interpreter running the app. Because the user installs pipeui into their project environment, their project's dependencies (pandas, numpy, etc.) are already available. No separate venv is created or managed by the app.
