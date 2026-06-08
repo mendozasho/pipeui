@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from pipeui.api.settings import load_settings, router as settings_router
 from pipeui.api.sources import router as sources_router
 from pipeui.duckdb import get_connection, create_schema
 
 # frontend/ is a sibling of the pipeui package, two levels up from this file
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
-DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))
+
+# Load (and eagerly create if absent) the config file at startup
+_settings = load_settings()
+DB_PATH = Path(_settings.db_path)
 
 app = FastAPI(title="PipeUI")
+app.include_router(settings_router)
 app.include_router(sources_router)
 
 # Serve the React frontend from the root after routes are registered

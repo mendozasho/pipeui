@@ -16,13 +16,11 @@ from pipeui.workflow.ingestion import get_source_detail, ingest_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-# Hardcoded for now; will become an app setting when that feature is wired up.
-DB_PATH = Path("pipeui.db")
-
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 
 
 def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    from pipeui.main import DB_PATH
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
     try:
