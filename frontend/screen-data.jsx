@@ -1,4 +1,4 @@
-// Data screen — Phase A: dropzone → POST /sources, reports table → GET /sources
+// Data screen — Phase B: ingestion → POST /sources/{id}/ingest, drawer → GET /sources/{id}
 const { useState, useRef, useEffect, useCallback } = React;
 
 function DropZone({ onFiles }) {
@@ -112,37 +112,175 @@ const inputStyle = {
   color: "var(--text)", outline: "none", width: "100%",
 };
 
-function SourceDrawer({ source, onClose }) {
-  const { Drawer, StatusPill } = window.__UI__;
-  if (!source) return null;
-  return (
-    <Drawer open={!!source} onClose={onClose} title={source.source_name} width={440}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        <Section title="Details">
-          <KV label="Primary key">{source.primary_key}</KV>
-          <KV label="Ingestion">{source.ingestion_method}</KV>
-          <KV label="Registered">{source.date_registered}</KV>
-          <KV label="Last ingested">{source.date_ingested || "—"}</KV>
-          <KV label="Pattern">{source.pattern || "—"}</KV>
-        </Section>
+function IngestModal({ source, onConfirm, onCancel }) {
+  const { Btn, Icon } = window.__UI__;
+  const [file, setFile] = useState(null);
+  const [method, setMethod] = useState(source.ingestion_method);
+  const inputRef = useRef(null);
 
-        <Section title={`Columns (${source.columns?.length ?? 0})`}>
-          {(source.columns || []).map(col => (
-            <div key={col.column_id} style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
-            }}>
-              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
-              <span style={{
-                fontSize: 11, padding: "2px 7px", borderRadius: 99,
-                background: "var(--panel-3)", color: "var(--text-3)",
-                fontFamily: "'Geist Mono', monospace",
-              }}>{col.column_type}</span>
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 300,
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div style={{
+        background: "var(--panel)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)", padding: 24, width: 400,
+        boxShadow: "0 16px 48px rgba(0,0,0,.6)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <Icon name="upload" size={18} style={{ color: "var(--text-3)" }} />
+          <span style={{ fontWeight: 600, fontSize: 15 }}>Ingest into "{source.source_name}"</span>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="File (CSV or Excel)">
+            <div
+              onClick={() => inputRef.current?.click()}
+              style={{
+                ...inputStyle, cursor: "pointer",
+                color: file ? "var(--text)" : "var(--text-3)",
+              }}
+            >
+              {file ? file.name : "Click to choose file…"}
             </div>
-          ))}
-        </Section>
+            <input ref={inputRef} type="file" accept=".csv,.xlsx" style={{ display: "none" }}
+              onChange={e => { if (e.target.files[0]) setFile(e.target.files[0]); e.target.value = ""; }} />
+          </Field>
+          <Field label="Ingestion method">
+            <select value={method} onChange={e => setMethod(e.target.value)} style={inputStyle}>
+              <option value="upsert">Upsert</option>
+              <option value="append">Append</option>
+              <option value="skip">Skip duplicates</option>
+            </select>
+          </Field>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 24 }}>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+          <Btn variant="primary" onClick={() => onConfirm({ file, method })} disabled={!file}>
+            Ingest
+          </Btn>
+        </div>
       </div>
-    </Drawer>
+    </div>
+  );
+}
+
+function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
+  const { Drawer, StatusPill, Btn, Icon } = window.__UI__;
+  const [detail, setDetail] = useState(null);
+  const [showIngest, setShowIngest] = useState(false);
+  const [ingesting, setIngesting] = useState(false);
+  const [skipReport, setSkipReport] = useState(null);
+
+  async function loadDetail() {
+    if (!sourceId) return;
+    try {
+      const res = await fetch(`/sources/${sourceId}`);
+      if (res.ok) setDetail(await res.json());
+    } catch {
+      flash("Could not load source detail.", "error");
+    }
+  }
+
+  useEffect(() => { loadDetail(); setSkipReport(null); }, [sourceId]);
+
+  async function handleIngest({ file, method }) {
+    setIngesting(true);
+    setShowIngest(false);
+    const fd = new FormData();
+    fd.append("file", file);
+    if (method) fd.append("ingestion_method", method);
+    try {
+      const res = await fetch(`/sources/${sourceId}/ingest`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.ok) {
+        flash(`Ingested ${data.rows_ingested} row${data.rows_ingested !== 1 ? "s" : ""}.`, "ok");
+        if (data.rows_skipped?.length) setSkipReport(data.rows_skipped);
+        await loadDetail();
+        onIngested();
+      } else {
+        flash(data.errors?.join("; ") || "Ingestion failed.", "error");
+      }
+    } catch {
+      flash("Network error during ingestion.", "error");
+    } finally {
+      setIngesting(false);
+    }
+  }
+
+  if (!sourceId) return null;
+  const source = detail;
+
+  return (
+    <>
+      <Drawer open={!!sourceId} onClose={onClose} title={source?.source_name ?? "…"} width={440}>
+        {source && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <StatusPill status={source.date_ingested ? "ingested" : "registered"} />
+              <span style={{ fontSize: 13, color: "var(--text-3)" }}>
+                {source.row_count} row{source.row_count !== 1 ? "s" : ""}
+              </span>
+              <Btn
+                variant="ghost"
+                style={{ marginLeft: "auto", fontSize: 12 }}
+                onClick={() => setShowIngest(true)}
+                disabled={ingesting}
+              >
+                {ingesting ? "Ingesting…" : "Ingest file"}
+              </Btn>
+            </div>
+
+            {skipReport && (
+              <div style={{
+                background: "var(--panel-2)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 12,
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--text-2)" }}>
+                  {skipReport.length} row{skipReport.length !== 1 ? "s" : ""} skipped (duplicate key)
+                </div>
+                <div style={{ color: "var(--text-3)", fontFamily: "'Geist Mono', monospace", lineHeight: 1.7 }}>
+                  {skipReport.join(", ")}
+                </div>
+              </div>
+            )}
+
+            <Section title="Details">
+              <KV label="Primary key">{source.primary_key}</KV>
+              <KV label="Ingestion">{source.ingestion_method}</KV>
+              <KV label="Registered">{source.date_registered}</KV>
+              <KV label="Last ingested">{source.date_ingested || "—"}</KV>
+            </Section>
+
+            <Section title={`Columns (${source.columns?.length ?? 0})`}>
+              {(source.columns || []).map(col => (
+                <div key={col.column_id} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
+                }}>
+                  <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
+                  <span style={{
+                    fontSize: 11, padding: "2px 7px", borderRadius: 99,
+                    background: "var(--panel-3)", color: "var(--text-3)",
+                    fontFamily: "'Geist Mono', monospace",
+                  }}>{col.column_type}</span>
+                </div>
+              ))}
+            </Section>
+          </div>
+        )}
+      </Drawer>
+
+      {showIngest && source && (
+        <IngestModal
+          source={source}
+          onConfirm={handleIngest}
+          onCancel={() => setShowIngest(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -285,7 +423,12 @@ function ScreenData({ flash }) {
       )}
 
       {/* Source drawer */}
-      <SourceDrawer source={selectedSource} onClose={() => setSelectedSource(null)} />
+      <SourceDrawer
+        sourceId={selectedSource?.source_id}
+        onClose={() => setSelectedSource(null)}
+        flash={flash}
+        onIngested={loadSources}
+      />
     </div>
   );
 }

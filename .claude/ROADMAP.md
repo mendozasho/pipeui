@@ -183,23 +183,32 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ### Phase B — Data Ingestion
 
-- [ ] **`feat/jit-instance-table`** — §8. `src/pipeui/sql_user_table/`: JIT
-  per-source DDL generator, one module per registered source named
-  `<source>_source_sql.py`.
-  *Boundary guarantee:* the instance table never references the registry.
+- [x] **`feat/jit-instance-table`** — §8. `pipeui/sql_user_table/`: fixed module
+  with a pure `build_create_table_sql(table_name, columns, primary_key)` DDL
+  generator + `instance_table_name(source_id)` helper. No per-source files
+  written to disk; no DB connection or registry knowledge in the module.
+  DDL uses `CREATE TABLE IF NOT EXISTS` and a table-level `PRIMARY KEY`
+  constraint (safe to extend to composite PKs).
+  *Boundary guarantee met:* the instance table never references the registry.
 
-- [ ] **`feat/ingestion`** — §9. `src/pipeui/workflow/ingestion.py`: staged
-  load → write-to-real-table-on-success; `upsert` / `append` / `skip` on
-  duplicate ids; `skip` reports the dropped rows.
-  *Guarantees:* ingestion atomicity; `skip` reports dropped rows (rule 9 — owes
-  a test in `tests/test_ingestion.py`).
+- [x] **`feat/ingestion`** — §9. `pipeui/workflow/ingestion.py`: `ingest_source`
+  (staged load via DuckDB native readers → JIT table create → upsert / append /
+  skip → `date_ingested` update in `source_registry`) + `get_source_detail`
+  (live row_count + columns, shaped for drawer and Phase E).
+  `ingestion_method` override parameter falls back to stored value.
+  *Guarantees met:* ingestion atomicity (append PK collision rolls back; table
+  untouched); `skip` returns PK values of dropped rows; JIT create is idempotent
+  (`IF NOT EXISTS`). Tests in `tests/test_ingestion.py` (9 tests).
 
-- [ ] **`feat/api-sources-ingest`** — §14 (API), §9 (workflow).
-  `src/pipeui/api/sources.py`: `POST /sources/{id}/ingest`, `GET /sources/{id}`.
-  *Frontend:* `screen-data.jsx` — ingestion method selector in the post-drop
-  confirmation step; status pill and row count reflect real state; drawer shows
-  real skip report when rows were dropped. Replace ingestion-related mock data
-  with `fetch()`.
+- [x] **`feat/api-sources-ingest`** — §14 (API), §9 (workflow).
+  `pipeui/api/sources.py`: `POST /sources/{id}/ingest` (multipart file +
+  optional `ingestion_method` override; returns `rows_ingested` + `rows_skipped`
+  or a structured failure payload), `GET /sources/{id}` (source detail +
+  row_count + columns).
+  *Frontend:* `screen-data.jsx` — drawer fetches `GET /sources/{id}` for live
+  row_count; "Ingest file" button opens `IngestModal` (file picker + method
+  selector); status pill updates after ingest; skip report rendered inline in
+  drawer when rows were dropped.
 
 ---
 

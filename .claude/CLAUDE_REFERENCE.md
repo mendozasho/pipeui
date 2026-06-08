@@ -334,9 +334,25 @@ types + PK). This is an end-user-dependent table: its schema and contents come
 from the upload, not a fixed schema. Once built, files tied to the source are
 written directly via SQL (§9 governs atomicity).
 
-The generated SQL for each user table is stored in a **`sql_user_table/`**
-folder, one Python module per table named `<source>_source_sql.py` (e.g.
-`foo_source_sql.py`). *(Not yet created — see §15 / ROADMAP.md.)*
+`sql_user_table/` is a **fixed module containing a pure DDL generator function**
+— no per-source files are written to disk. The generator takes plain data and
+returns a SQL string; it holds no DB connection and knows nothing about the
+registry.
+
+```python
+def build_create_table_sql(
+    table_name: str,
+    columns: list[tuple[str, str]],  # (column_name, column_type)
+    primary_key: str,
+) -> str:
+```
+
+DDL uses `CREATE TABLE IF NOT EXISTS` (defensive — safe to call on re-ingest) and
+a table-level `PRIMARY KEY (col)` constraint (straightforward to extend to
+composite PKs in a future phase without changing the generator's interface).
+
+The workflow layer (ingestion) is responsible for reading the registry and
+assembling the arguments; the generator never sees the registry or the connection.
 
 **Boundary:** the instance table has no reference back to the registry; the
 registry knows about the instance table, not vice versa.
@@ -348,19 +364,29 @@ registry knows about the instance table, not vice versa.
 *Implements: CLAUDE.md → Principle 3 ("rollback" has one meaning). Design intent:
 design.md step 10.*
 
-Each upload is first loaded into a **temporary table** (§5 ingestion staging) and
-written into the source's real instance table only if the load completes. Any
-failure aborts via DuckDB transaction rollback (`BEGIN`/`COMMIT`/`ROLLBACK`),
-leaving the existing table at its last committed state. Schema changes (table
-create/alter) are transactional in DuckDB and fall under the same all-or-nothing
-guarantee.
+Each upload is first loaded into a **temporary table** (§5 ingestion staging) via
+DuckDB's native file readers (`read_csv_auto` / `read_xlsx`) and written into the
+source's real instance table only if the load completes. Any failure aborts via
+DuckDB transaction rollback (`BEGIN`/`COMMIT`/`ROLLBACK`), leaving the existing
+table at its last committed state. Schema changes (table create/alter) are
+transactional in DuckDB and fall under the same all-or-nothing guarantee.
 
 On duplicate ids during ingestion, `ingestion_method` decides:
-- **`upsert`** — update the existing row, or insert if new.
-- **`append`** — straight insert; no duplicate handling (insert whatever loads).
-- **`skip`** — skip rows whose id already exists, **and report the skipped rows
-  back to the user** so dropped lines are visible (this report is a behavioral
-  guarantee — rule 9 — and owes a test; see ROADMAP.md `feat/ingestion`).
+- **`upsert`** — `INSERT OR REPLACE`: update the existing row, or insert if new.
+- **`append`** — straight `INSERT`; a PK collision raises a constraint violation
+  and the whole transaction rolls back (the failure is surfaced via
+  `FailedRegistryEntry`, not a 500).
+- **`skip`** — `INSERT ... ON CONFLICT DO NOTHING`; the PK values of the skipped
+  rows are collected **before** the insert and returned to the caller so dropped
+  rows are visible (behavioral guarantee — rule 9; tested in `test_ingestion.py`).
+
+On success, `source_registry.date_ingested` is updated inside the same transaction
+so the list view and status pill reflect live state immediately.
+
+`ingestion_method` is stored in `source_registry` as the default for that source.
+The `ingest_source` workflow function accepts an optional override so the caller
+(API layer) can pass a per-call value; it falls back to the stored method when
+none is given.
 
 Ingested rows are retained for summaries and deliverables.
 
@@ -572,8 +598,7 @@ committing user-shaped data.
 
 **Known test debt (REFACTOR_PLAN.md):** `patch_new_id` and
 `test_source_create_var_fallback` carry stale pre-reorg patch targets
-(`pipeui.ids.new_id`, `pipeui.source_create.*`); the ingestion-method validation
-paths need unifying before their atomicity test passes; the edit-collision check
+(`pipeui.ids.new_id`, `pipeui.source_create.*`); the edit-collision check
 is currently simulated inline in `test_validation.py` rather than exercising real
 code.
 
@@ -681,9 +706,8 @@ pipeui/
     create.py          # create_source() — one-transaction source-create flow (§6)
     ingestion.py       # [Phase B] staged load + upsert/append/skip (§9)
     migration.py       # [Phase C] TRY_CAST pre-check + recreate-and-copy + atomic swap (§7)
-  sql_user_table/      # [Phase B] JIT per-source DDL modules — one per registered source (§8)
-    __init__.py
-    # <source>_source_sql.py files generated here at ingestion time
+  sql_user_table/      # [Phase B] pure DDL generator — no per-source files (§8)
+    __init__.py        # build_create_table_sql() + instance_table_name()
   api/
     __init__.py
     sources.py         # /sources routes (Phase A + B + C) (§14)
@@ -761,6 +785,13 @@ pyproject.toml
   annotations, and restructured ROADMAP.md from horizontal phases (backend-then-
   frontend) into vertical phases (A–F), each delivering backend + API + frontend
   together.
+- **Phase B session (2026-06-08)** — shipped `feat/jit-instance-table`,
+  `feat/ingestion`, and `feat/api-sources-ingest`. Added `pipeui/sql_user_table/`
+  (pure DDL generator; corrected §8 from the per-file misconception),
+  `pipeui/workflow/ingestion.py` (`ingest_source` + `get_source_detail`), and
+  wired `POST /sources/{id}/ingest` + `GET /sources/{id}`. Frontend: drawer
+  fetches live detail; `IngestModal` for file + method; skip report rendered
+  inline. 17 new behavioral-guarantee tests; 63/63 passing.
 - **Phase A session (2026-06-08)** — shipped `feat/api-sources-register`.
   Backend: `pipeui/main.py` (FastAPI entry-point, static file mount),
   `pipeui/api/sources.py` (`GET /sources`, `POST /sources`) using

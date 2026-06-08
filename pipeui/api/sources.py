@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Generator
 
 import duckdb
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
 from pipeui.workflow.create import create_source
+from pipeui.workflow.ingestion import get_source_detail, ingest_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
@@ -123,6 +125,70 @@ async def register_source(
         rows = _source_rows(conn)
         record = next((r for r in rows if r["source_id"] == str(source_id)), None)
         return {"ok": True, "source": record}
+
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.get("/{source_id}")
+def get_source(
+    source_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    detail = get_source_detail(conn, sid)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+    return detail
+
+
+@router.post("/{source_id}/ingest")
+async def ingest_source_route(
+    source_id: str,
+    file: UploadFile,
+    ingestion_method: str | None = Form(default=None),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type '{suffix}'. Accepted: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        rows_ingested, skipped_pks, failed = ingest_source(
+            conn=conn,
+            source_id=sid,
+            file_path=tmp_path,
+            ingestion_method=ingestion_method,
+        )
+
+        if failed.has_failures():
+            reasons = [reason for _, reason in failed.failures]
+            return JSONResponse(
+                status_code=422,
+                content={"ok": False, "errors": reasons},
+            )
+
+        return {
+            "ok": True,
+            "rows_ingested": rows_ingested,
+            "rows_skipped": [str(pk) for pk in skipped_pks],
+        }
 
     finally:
         Path(tmp_path).unlink(missing_ok=True)
