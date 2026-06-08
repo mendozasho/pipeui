@@ -165,6 +165,80 @@ function IngestModal({ source, onConfirm, onCancel }) {
   );
 }
 
+const COLUMN_TYPES = ["INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "VARCHAR", "DATE", "TIMESTAMP"];
+
+function ColumnTypeRow({ col, sourceId, onMigrated }) {
+  const [selected, setSelected] = React.useState(col.column_type);
+
+  async function handleChange(e) {
+    const newType = e.target.value;
+    const prev = selected;
+    setSelected(newType);
+
+    try {
+      // Step 1: dry-run
+      const dryRes = await fetch(
+        `/sources/${sourceId}/columns/${col.column_id}?dry_run=true`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ column_type: newType, scope: "this_source", on_uncastable: "abort" }),
+        }
+      );
+      if (!dryRes.ok) { setSelected(prev); return; }
+      const dryData = await dryRes.json();
+
+      if (!dryData.ok) { setSelected(prev); return; }
+
+      // Step 2: happy path only — no uncastable rows and no shared sources
+      if (dryData.uncastable === 0 && dryData.shared_sources.length === 0) {
+        const commitRes = await fetch(
+          `/sources/${sourceId}/columns/${col.column_id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ column_type: newType, scope: "this_source", on_uncastable: "nullify" }),
+          }
+        );
+        if (!commitRes.ok) { setSelected(prev); return; }
+        const commitData = await commitRes.json();
+        if (!commitData.ok) { setSelected(prev); return; }
+        // Refresh drawer — parent handler re-fetches detail + rows
+        await onMigrated();
+      } else {
+        // Confirmation modal is next slice (#19) — revert for now
+        setSelected(prev);
+      }
+    } catch (err) {
+      console.error("Column type migration error:", err);
+      setSelected(prev);
+    }
+  }
+
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
+    }}>
+      <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
+      <select
+        value={selected}
+        onChange={handleChange}
+        style={{
+          fontSize: 11, padding: "2px 7px", borderRadius: 99,
+          background: "var(--panel-3)", color: "var(--text-3)",
+          fontFamily: "'Geist Mono', monospace",
+          border: "1px solid var(--border)", cursor: "pointer", outline: "none",
+        }}
+      >
+        {COLUMN_TYPES.map(t => (
+          <option key={t} value={t}>{t}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const { Drawer, StatusPill, Btn, Icon } = window.__UI__;
   const [detail, setDetail] = useState(null);
@@ -290,17 +364,19 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
 
             <Section title={`Columns (${source.columns?.length ?? 0})`}>
               {(source.columns || []).map(col => (
-                <div key={col.column_id} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
-                }}>
-                  <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{col.column_name}</span>
-                  <span style={{
-                    fontSize: 11, padding: "2px 7px", borderRadius: 99,
-                    background: "var(--panel-3)", color: "var(--text-3)",
-                    fontFamily: "'Geist Mono', monospace",
-                  }}>{col.column_type}</span>
-                </div>
+                <ColumnTypeRow
+                  key={col.column_id}
+                  col={col}
+                  sourceId={sourceId}
+                  onMigrated={async () => {
+                    const dres = await fetch(`/sources/${sourceId}`);
+                    if (dres.ok) {
+                      const src = await dres.json();
+                      setDetail(src);
+                      await loadRows(src);
+                    }
+                  }}
+                />
               ))}
             </Section>
 

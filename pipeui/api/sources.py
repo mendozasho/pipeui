@@ -4,15 +4,17 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Literal
 
 import duckdb
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from pipeui.duckdb import create_schema, get_connection
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
+from pipeui.workflow.migration import migrate_column
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
@@ -171,6 +173,80 @@ def get_rows(
     rows = get_source_rows(conn, sid, limit=limit)
     columns = list(rows[0].keys()) if rows else []
     return {"columns": columns, "rows": rows}
+
+
+class ColumnMigrateBody(BaseModel):
+    column_type: str
+    scope: Literal["this_source", "all_shared"] = "this_source"
+    on_uncastable: Literal["nullify", "abort"] = "abort"
+
+
+@router.patch("/{source_id}/columns/{col_id}")
+def migrate_column_route(
+    source_id: str,
+    col_id: str,
+    body: ColumnMigrateBody,
+    dry_run: bool = False,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """PATCH /sources/{source_id}/columns/{col_id}?dry_run=false
+
+    Migrate a column to a new type (§7). The route validates IDs, checks the
+    column belongs to the source, then delegates to migrate_column().
+
+    Dry-run returns castable/uncastable counts + shared_sources without mutating.
+    Commit returns ok=True + rows_migrated on success, or a structured failure
+    payload (never a 500) on validation error or aborted migration.
+    """
+    # Validate UUIDs
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+    try:
+        cid = uuid.UUID(col_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid col_id: {col_id!r}")
+
+    # 404 if source not found
+    source_exists = conn.execute(
+        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
+    ).fetchone()
+    if source_exists is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    # 404 if column not found in column_registry at all
+    col_exists = conn.execute(
+        "SELECT 1 FROM column_registry WHERE column_id = ?", [cid]
+    ).fetchone()
+    if col_exists is None:
+        raise HTTPException(status_code=404, detail=f"Column {col_id!r} not found")
+
+    # 404 if column does not belong to this source
+    mapping_exists = conn.execute(
+        "SELECT 1 FROM source_column_map WHERE source_id = ? AND column_id = ?",
+        [sid, cid],
+    ).fetchone()
+    if mapping_exists is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Column {col_id!r} does not belong to source {source_id!r}",
+        )
+
+    result = migrate_column(
+        conn=conn,
+        source_id=sid,
+        column_id=cid,
+        new_type=body.column_type,
+        scope=body.scope,
+        on_uncastable=body.on_uncastable,
+        dry_run=dry_run,
+    )
+
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+
+    return result
 
 
 @router.post("/{source_id}/ingest")
