@@ -655,59 +655,64 @@ Read at startup into an `AppSettings` pydantic model; written back on `PATCH /se
 
 ## §15 — Package structure
 
-The repository uses a `src`-style layout. The Python package lives under `src/`
-and the React frontend is a peer directory at the repo root (CLAUDE.md →
-Architecture). Current layout after Phases 0–1, with planned additions annotated:
+The Python package uses a flat layout (`pipeui/` at the repo root). The `src/`
+move is deferred to production packaging. The React frontend is a peer directory
+at the repo root. Current layout after Phase A, with planned additions annotated:
 
 ```
-src/
-  pipeui/
+pipeui/
+  __init__.py
+  ids.py               # surrogate new_id() (uuid4) + two-level uuid5 content_hash_id (§2)
+  duckdb.py            # get_connection, create_schema, DuckDB-native type inference, db-path resolution
+  helpers.py           # filename → regex pattern inference (§6.1)
+  main.py              # FastAPI app entry-point, static file mount, run() console script (§14)
+  schema/
     __init__.py
-    ids.py               # surrogate new_id() (uuid4) + two-level uuid5 content_hash_id (§2)
-    duckdb.py            # get_connection, create_schema, DuckDB-native type inference, db-path resolution
-    helpers.py           # filename → regex pattern inference (§6.1)
-    schema/
-      __init__.py
-      constants.py       # DUCKDB_TO_PYTHON / PYTHON_TO_DUCKDB maps, IngestionMethod enum
-      queries.py         # DDL for the 4 registries + 3 map tables (§1)
-    validation/
-      __init__.py
-      source.py          # SourceRegistryEntry / SourceRegistryUpdate (pydantic v2, §3)
-      column.py          # ColumnRegistryEntry / ColumnRegistryUpdate (pydantic v2, §3)
-      fails.py           # FailedRegistryEntry / FailedFunctionEntry stacks (§4)
-    workflow/
-      __init__.py
-      staging.py         # CreateFlowCache — transient temp-table staging (§5)
-      create.py          # create_source() — one-transaction source-create flow (§6)
-      ingestion.py       # [Phase B] staged load + upsert/append/skip (§9)
-      migration.py       # [Phase C] TRY_CAST pre-check + recreate-and-copy + atomic swap (§7)
-    sql_user_table/      # [Phase B] JIT per-source DDL modules — one per registered source (§8)
-      __init__.py
-      # <source>_source_sql.py files generated here at ingestion time
-    api/                 # [Phase A] FastAPI routes — one module per screen domain (§14)
-      __init__.py
-      sources.py         # /sources routes (Phase A + B + C)
-      functions.py       # /functions routes (Phase D)
-      pipelines.py       # /pipelines routes (Phase E)
-frontend/                # React UI — no build step (CDN React 18 + Babel standalone) (§14)
-  index.html             # CSS design tokens, font imports, script tags
-  app.jsx                # Shell: navigation, global state, flash notifications
-  data.jsx               # Mock data — replaced per phase with real fetch() calls
-  ui.jsx                 # Shared primitives: Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable
-  tweaks-panel.jsx       # Dev-time accent/density/layout tweak panel
-  screen-data.jsx        # Data screen (Phase A + B + C)
-  screen-modules.jsx     # Functions screen (Phase D)
-  screen-builder.jsx     # Report Builder screen (Phase E)
+    constants.py       # DUCKDB_TO_PYTHON / PYTHON_TO_DUCKDB maps, IngestionMethod enum
+    queries.py         # DDL for the 4 registries + 3 map tables (§1)
+  validation/
+    __init__.py
+    source.py          # SourceRegistryEntry / SourceRegistryUpdate (pydantic v2, §3)
+    column.py          # ColumnRegistryEntry / ColumnRegistryUpdate (pydantic v2, §3)
+    fails.py           # FailedRegistryEntry / FailedFunctionEntry stacks (§4)
+  workflow/
+    __init__.py
+    staging.py         # CreateFlowCache — transient temp-table staging (§5)
+    create.py          # create_source() — one-transaction source-create flow (§6)
+    ingestion.py       # [Phase B] staged load + upsert/append/skip (§9)
+    migration.py       # [Phase C] TRY_CAST pre-check + recreate-and-copy + atomic swap (§7)
+  sql_user_table/      # [Phase B] JIT per-source DDL modules — one per registered source (§8)
+    __init__.py
+    # <source>_source_sql.py files generated here at ingestion time
+  api/
+    __init__.py
+    sources.py         # /sources routes (Phase A + B + C) (§14)
+    settings.py        # /settings routes (Phase A2) (§14)
+    functions.py       # /functions routes (Phase D) (§14)
+    pipelines.py       # /pipelines routes (Phase E) (§14)
+frontend/              # React UI — no build step (CDN React 18 + Babel standalone) (§14)
+  index.html           # CSS design tokens, font imports, script tags
+  app.jsx              # Shell: 4-item nav rail, global state, flash notifications
+  data.jsx             # Mock data stubs for Phases D–E — shrinks per phase
+  ui.jsx               # Shared primitives: Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable
+  tweaks-panel.jsx     # [retired Phase A2] — content moved to screen-settings.jsx
+  screen-data.jsx      # Data screen (Phase A + B + C)
+  screen-modules.jsx   # Functions screen (Phase D)
+  screen-builder.jsx   # Report Builder screen (Phase E)
+  screen-settings.jsx  # [Phase A2] Settings screen — Appearance + App sections
+pipeui.config.json     # [Phase A2] runtime config (db_path, accent, density) — gitignored
 tests/
   __init__.py
-  conftest.py            # db / db_file / patch_new_id fixtures + make_registered_source seeding helper
-  test_ids.py            # §2
-  test_validation.py     # §3, §4
-  test_staging.py        # §5
-  test_schema.py         # §1
+  conftest.py          # db / db_file / patch_new_id fixtures + make_registered_source seeding helper
+  test_ids.py          # §2
+  test_validation.py   # §3, §4
+  test_staging.py      # §5
+  test_schema.py       # §1
   test_source_create.py  # §6
-  test_ingestion.py      # [Phase B] §9
-  test_migration.py      # [Phase C] §7
+  test_api_sources.py  # §14 Phase A guarantees
+  test_api_settings.py # [Phase A2] §14 Phase A2 guarantees
+  test_ingestion.py    # [Phase B] §9
+  test_migration.py    # [Phase C] §7
 pyproject.toml
 ```
 

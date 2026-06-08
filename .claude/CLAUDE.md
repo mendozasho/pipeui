@@ -234,13 +234,15 @@ The application is a browser-based React UI served by a FastAPI backend. There
 is no CLI. Implementation detail (design system, route map, screen-to-endpoint
 wiring) lives in CLAUDE_REFERENCE.md §14.
 
-**Three screens** (matching the frontend design):
+**Four screens** (matching the frontend design):
 - **Data** — import files / connect sources, browse registered reports, inspect
   schema and preview rows, edit column types.
 - **Functions** — upload `.py` modules, browse registered functions with
   signature / doc / params.
 - **Report Builder** — select a report, assemble a pipeline of functions via
   drag-and-drop, map columns to parameters, run, export.
+- **Settings** — Appearance (accent colour, density) and App settings (DB path);
+  changes persist to `pipeui.config.json`; DB path change shows restart notice.
 
 **Vertical delivery order (Phases A–F in ROADMAP.md).** Each phase ships all
 three layers together — backend workflow + API route + frontend feature wired to
