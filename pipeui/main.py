@@ -25,3 +25,8 @@ def get_db():
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
     return conn
+
+
+def run():
+    import uvicorn
+    uvicorn.run("pipeui.main:app", host="127.0.0.1", port=8000, reload=True)
