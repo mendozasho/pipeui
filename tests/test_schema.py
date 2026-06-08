@@ -49,6 +49,60 @@ def test_source_registry_columns(db):
 
 
 @pytest.mark.integration
+def test_function_registry_has_signature_and_is_active_columns(db):
+    # §1 (Phase D): function_registry must have function_signature (nullable VARCHAR)
+    # and is_active (BOOLEAN DEFAULT TRUE)
+    rows = db.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'function_registry'"
+    ).fetchall()
+    col_names = {r[0] for r in rows}
+    assert "function_signature" in col_names, "function_registry must have function_signature"
+    assert "is_active" in col_names, "function_registry must have is_active"
+
+
+@pytest.mark.integration
+def test_function_registry_is_active_defaults_true(db):
+    # §1 (Phase D): is_active DEFAULT TRUE — a row inserted without is_active gets True
+    import uuid
+    fid = str(uuid.uuid4())
+    chid = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO function_registry
+            (function_id, content_hash_id, function_class, function_name,
+             function_return_type, function_type, module_path)
+        VALUES (?, ?, 'scalar', 'fn', 'bool', 'validation', '/tmp/fn.py')
+        """,
+        [fid, chid],
+    )
+    row = db.execute(
+        "SELECT is_active FROM function_registry WHERE function_id = ?", [fid]
+    ).fetchone()
+    assert row[0] is True
+
+
+@pytest.mark.integration
+def test_function_registry_function_signature_nullable(db):
+    # §1 (Phase D): function_signature is nullable — a row without it must insert cleanly
+    import uuid
+    fid = str(uuid.uuid4())
+    chid = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO function_registry
+            (function_id, content_hash_id, function_class, function_name,
+             function_return_type, function_type, module_path)
+        VALUES (?, ?, 'scalar', 'fn2', 'bool', 'validation', '/tmp/fn2.py')
+        """,
+        [fid, chid],
+    )
+    row = db.execute(
+        "SELECT function_signature FROM function_registry WHERE function_id = ?", [fid]
+    ).fetchone()
+    assert row[0] is None
+
+
+@pytest.mark.integration
 def test_create_schema_idempotent(db):
     # §1 / Principle 3: CREATE TABLE IF NOT EXISTS — calling twice must not raise
     create_schema(db)

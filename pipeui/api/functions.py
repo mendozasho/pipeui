@@ -1,0 +1,45 @@
+"""API routes for function registration and listing — Phase D.
+
+§14: api/ calls workflow/ only; never touches schema/, validation/, or sql_user_table/.
+"""
+from __future__ import annotations
+
+from typing import Generator
+
+import duckdb
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+
+from pipeui.duckdb import create_schema, get_connection
+from pipeui.workflow.functions import list_functions, scan_functions
+
+router = APIRouter(prefix="/functions", tags=["functions"])
+
+
+def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    from pipeui.main import DB_PATH
+    conn = get_connection(str(DB_PATH))
+    create_schema(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@router.get("")
+def get_functions(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    """Return all registered functions with their parameters, ordered by function_name."""
+    return list_functions(conn)
+
+
+@router.post("/scan")
+def scan(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    """Scan all directories in functions_paths and register/update eligible functions.
+
+    Returns {"log": [...]} with one entry per discovered function (added,
+    re-registered, or skipped with reason).
+    """
+    from pipeui.api.settings import load_settings
+    settings = load_settings()
+    log = scan_functions(conn, settings.functions_paths)
+    return JSONResponse({"log": log})

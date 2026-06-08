@@ -88,3 +88,64 @@ class TestPatchSettings:
         client.patch("/settings", json={"density": "comfy"})
         res = client.get("/settings")
         assert res.json()["density"] == "comfy"
+
+
+class TestFunctionsPaths:
+    """GET /settings returns functions_paths; PATCH /settings persists list changes."""
+
+    def test_get_returns_empty_list_by_default(self, settings_client):
+        # Guarantee: GET /settings always includes functions_paths as a list
+        client, mod = settings_client
+        res = client.get("/settings")
+        assert res.status_code == 200
+        data = res.json()
+        assert "functions_paths" in data
+        assert data["functions_paths"] == []
+
+    def test_patch_sets_functions_paths(self, settings_client):
+        # Guarantee: PATCH /settings with functions_paths persists the list
+        client, mod = settings_client
+        client.get("/settings")
+
+        res = client.patch("/settings", json={"functions_paths": ["/a/b", "/c/d"]})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["ok"] is True
+        assert data["settings"]["functions_paths"] == ["/a/b", "/c/d"]
+
+    def test_patch_functions_paths_persists_across_reads(self, settings_client):
+        # Guarantee: functions_paths set via PATCH is returned on subsequent GET
+        client, mod = settings_client
+        client.get("/settings")
+
+        client.patch("/settings", json={"functions_paths": ["/x/y"]})
+        res = client.get("/settings")
+        assert res.json()["functions_paths"] == ["/x/y"]
+
+    def test_patch_empty_functions_paths_clears_list(self, settings_client):
+        # Guarantee: PATCH with an empty list overwrites an existing list
+        client, mod = settings_client
+        client.get("/settings")
+        client.patch("/settings", json={"functions_paths": ["/a/b"]})
+
+        res = client.patch("/settings", json={"functions_paths": []})
+        assert res.json()["settings"]["functions_paths"] == []
+
+    def test_patch_omitting_functions_paths_leaves_it_unchanged(self, settings_client):
+        # Guarantee: omitting functions_paths from a PATCH does not clear the list
+        client, mod = settings_client
+        client.get("/settings")
+        client.patch("/settings", json={"functions_paths": ["/keep/me"]})
+
+        client.patch("/settings", json={"accent": "#34d399"})
+        res = client.get("/settings")
+        assert res.json()["functions_paths"] == ["/keep/me"]
+
+    def test_existing_config_without_functions_paths_returns_empty_list(self, settings_client, tmp_path):
+        # Guarantee: config files that predate functions_paths default to []
+        client, mod = settings_client
+        config_path = tmp_path / "pipeui.config.json"
+        config_path.write_text(json.dumps({"db_path": "pipeui.db", "accent": "#7c6cf5", "density": "regular"}))
+
+        res = client.get("/settings")
+        assert res.json()["functions_paths"] == []

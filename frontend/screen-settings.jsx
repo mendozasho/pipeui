@@ -36,6 +36,8 @@ function ScreenSettings({ flash }) {
   const [density, setDensity] = useState("regular");
   const [dbPath, setDbPath] = useState("pipeui.db");
   const [originalDbPath, setOriginalDbPath] = useState("pipeui.db");
+  const [functionsPaths, setFunctionsPaths] = useState([]);
+  const [newPathInput, setNewPathInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [restartBanner, setRestartBanner] = useState(false);
 
@@ -47,6 +49,7 @@ function ScreenSettings({ flash }) {
         setDensity(data.density);
         setDbPath(data.db_path);
         setOriginalDbPath(data.db_path);
+        setFunctionsPaths(data.functions_paths || []);
         applyAccent(data.accent);
         applyDensity(data.density);
         setLoaded(true);
@@ -63,12 +66,25 @@ function ScreenSettings({ flash }) {
     applyDensity(d);
   }
 
+  function handleAddPath() {
+    const trimmed = newPathInput.trim();
+    if (trimmed && !functionsPaths.includes(trimmed)) {
+      setFunctionsPaths([...functionsPaths, trimmed]);
+    }
+    setNewPathInput("");
+  }
+
+  function handleRemovePath(path) {
+    setFunctionsPaths(functionsPaths.filter(p => p !== path));
+  }
+
   async function handleSave() {
     setSaving(true);
     const patch = {};
     if (accent !== undefined) patch.accent = accent;
     if (density !== undefined) patch.density = density;
     if (dbPath !== originalDbPath) patch.db_path = dbPath;
+    patch.functions_paths = functionsPaths;
 
     try {
       const res = await fetch("/settings", {
@@ -158,7 +174,7 @@ function ScreenSettings({ flash }) {
         </div>
 
         {/* App */}
-        <div style={{ marginBottom: "var(--sp-6)" }}>
+        <div style={{ marginBottom: "var(--sp-6)", paddingBottom: "var(--sp-6)", borderBottom: "1px solid var(--border)" }}>
           <SectionHeader title="App" />
 
           <div>
@@ -175,6 +191,52 @@ function ScreenSettings({ flash }) {
             <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 5 }}>
               Relative to the server's working directory. Requires restart to take effect.
             </div>
+          </div>
+        </div>
+
+        {/* Functions */}
+        <div style={{ marginBottom: "var(--sp-6)" }}>
+          <SectionHeader title="Functions" />
+
+          <div style={{ marginBottom: "var(--sp-3)" }}>
+            <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 8 }}>Function scan paths</div>
+            {functionsPaths.length === 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-4)", marginBottom: 8 }}>No paths configured.</div>
+            )}
+            {functionsPaths.map(p => (
+              <div key={p} style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "5px 10px", marginBottom: 4,
+                background: "var(--panel-3)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius)", fontSize: 13,
+              }}>
+                <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{p}</span>
+                <button onClick={() => handleRemovePath(p)} style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "var(--text-3)", fontSize: 14, lineHeight: 1, padding: "0 2px",
+                }} title="Remove path">
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              value={newPathInput}
+              onChange={e => setNewPathInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleAddPath()}
+              placeholder="/path/to/functions"
+              style={{
+                flex: 1, padding: "7px 10px",
+                background: "var(--panel-3)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius)", color: "var(--text)", fontSize: 13,
+              }}
+            />
+            <Btn variant="secondary" onClick={handleAddPath}>Add</Btn>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 5 }}>
+            Directories the app will scan for .py function modules.
           </div>
         </div>
 
