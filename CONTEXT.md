@@ -57,7 +57,7 @@ A setting in `pipeui.config.json` (alongside `db_path`) that points to the folde
 
 ## function scanning (rescan model)
 
-Functions are registered by scanning `functions_path`, not by file upload. The user triggers a rescan explicitly (via a "Rescan" button in the Functions screen). On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. The registry always reflects what was last scanned — it does not auto-update when files change on disk. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
+Functions are registered by scanning `functions_path`, not by file upload. The registry does **not** auto-update on app startup or when files change on disk. A rescan is triggered explicitly in two ways: (1) saving a changed `functions_path` in Settings, or (2) pressing "Rescan" on the Functions screen. On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
 
 ## worker Python interpreter
 
