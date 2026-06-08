@@ -73,7 +73,7 @@ The detail view for a registered function, opened from the Functions screen. Sho
 
 ## function set (playlist)
 
-A user-curated named group of registered functions. Created and managed on the Functions screen, where the user has full visibility of signatures, types, and docs. A set is a bag of `function_id` references with no source binding — compatibility is validated at attach time (Phase E). Stored in a `function_set` table (set_id, name) + `function_set_map` table (set_id, function_id). Built in Phase D2 (after Phase D ships function registration).
+A user-curated named ordered list of registered functions. Created and managed on the Functions screen. Functions execute in the order the user arranges them. A set contains only `function_id` references — no source binding and no column mappings. Column→parameter mapping (alias_map) happens at attach time per source. Stored in a `function_set` table (set_id, name) + `function_set_map` table (set_map_id, set_id, function_id, position). Built in Phase D2 (after Phase D ships function registration).
 
 When any member function has `is_active = false`, the set card shows a warning marker ("N function(s) unavailable"). At attach time in Phase E, inactive functions in the set are skipped — they are not attached to the source. When the function's file reappears on a subsequent rescan and `is_active` is restored to `true`, the set automatically resolves (no user action needed — the function was never removed from the set).
 
