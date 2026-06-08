@@ -16,7 +16,7 @@ The docs (design.md, CLAUDE.md, CLAUDE_REFERENCE.md, ROADMAP.md) already describ
 the intended end state. This file lists the concrete code edits needed to make
 the code match those docs. Group order is roughly safest-first.
 
-## Clean up when app settings lands (future phase — not yet lettered)
+## Clean up in Phase A2 (`feat/app-settings`)
 
 - [ ] **Remove `os` import and `DB_PATH` env-var fallback from `pipeui/main.py`.**
   `main.py` currently reads `DB_PATH = Path(os.environ.get("PIPEUI_DB", "pipeui.db"))`,

@@ -159,6 +159,28 @@ frontend design system before working on any frontend or API unit.
 
 ---
 
+### Phase A2 — App Settings
+
+*Builds directly on Phase A's frontend shell. Resolves `DB_PATH` / `os` import
+cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
+
+- [ ] **`feat/app-settings`** — §14 (API + frontend).
+  `pipeui/api/settings.py`: `GET /settings`, `PATCH /settings`. Read and write
+  `pipeui.config.json` at the repo root via an `AppSettings` pydantic model
+  (`db_path`, `accent`, `density`). Add `pipeui.config.json` to `.gitignore`.
+  Replace hardcoded `DB_PATH` in `main.py` and `sources.py` with the settings
+  object (clears REFACTOR_PLAN.md debt). `get_conn` reads `db_path` from
+  `AppSettings` at startup.
+  *Frontend:* `screen-settings.jsx` — fourth nav item triggered from the gear
+  icon. Two sections: **Appearance** (accent colour picker + density selector,
+  apply immediately, persist on save) and **App** (DB path text input, shows
+  "restart required" notice when changed). Retire `tweaks-panel.jsx`.
+  Update `app.jsx` nav rail to four items (Data, Functions, Builder, Settings).
+  *Guarantees:* `PATCH /settings` with a changed `db_path` returns
+  `restart_required: true`; appearance changes persist across restarts.
+
+---
+
 ### Phase B — Data Ingestion
 
 - [ ] **`feat/jit-instance-table`** — §8. `src/pipeui/sql_user_table/`: JIT
@@ -266,15 +288,17 @@ frontend design system before working on any frontend or API unit.
 Phases 0–1:  [done] id-generation, db-schema, test-harness,
                      validation-objects, staging, source-create
 
-Phase A:  api-sources-register  (wires Phase 1 backend to Data screen)
-            │
-Phase B:  jit-instance-table ── ingestion ── api-sources-ingest
-            │
-Phase C:  column-migration ── api-sources-migrate        [gated: column_type enum]
-            │
-Phase D:  function-worker ── function-registration ── api-functions
-            │                                              [gated: return-type vocab]
-Phase E:  function-attach ── api-pipelines               [needs Phase B + Phase D]
-            │
-Phase F:  results & summary (deferred)
+Phase A:   api-sources-register  (wires Phase 1 backend to Data screen)
+             │
+Phase A2:  app-settings  (Settings screen + config file; clears DB_PATH debt)
+             │
+Phase B:   jit-instance-table ── ingestion ── api-sources-ingest
+             │
+Phase C:   column-migration ── api-sources-migrate       [gated: column_type enum]
+             │
+Phase D:   function-worker ── function-registration ── api-functions
+             │                                             [gated: return-type vocab]
+Phase E:   function-attach ── api-pipelines              [needs Phase B + Phase D]
+             │
+Phase F:   results & summary (deferred)
 ```
