@@ -7,11 +7,11 @@ from __future__ import annotations
 from typing import Generator
 
 import duckdb
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
-from pipeui.workflow.functions import list_functions, scan_functions
+from pipeui.workflow.functions import get_function, list_functions, scan_functions
 
 router = APIRouter(prefix="/functions", tags=["functions"])
 
@@ -30,6 +30,19 @@ def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
 def get_functions(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
     """Return all registered functions with their parameters, ordered by function_name."""
     return list_functions(conn)
+
+
+@router.get("/{function_id}")
+def get_function_detail(function_id: str, conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    """Return full detail for one function including parameters and attached sources.
+
+    Returns 404 if the function_id is not found.
+    attached_sources is an empty list (not an error) when no source_function_map rows exist.
+    """
+    detail = get_function(conn, function_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Function not found")
+    return detail
 
 
 @router.post("/scan")

@@ -12,6 +12,7 @@ from pipeui.workflow.functions import (
     derive_function_return_type,
     derive_function_type,
     discover_functions_in_file,
+    get_function,
     list_functions,
     scan_functions,
     _inspect_function,
@@ -525,3 +526,140 @@ class TestPostScan:
         scan_functions(conn, [str(py_dir)])
         res = client.get("/functions")
         assert any(f["function_name"] == "process" for f in res.json())
+
+
+# ---------------------------------------------------------------------------
+# Workflow unit tests — get_function()
+# ---------------------------------------------------------------------------
+
+
+class TestGetFunction:
+    """get_function() returns correct detail or None (§10, §13)."""
+
+    @pytest.mark.integration
+    def test_returns_none_for_unknown_id(self, db):
+        """Guarantee: get_function returns None for an unknown function_id."""
+        result = get_function(db, str(uuid.uuid4()))
+        assert result is None
+
+    @pytest.mark.integration
+    def test_returns_full_detail(self, db, tmp_path):
+        """Guarantee: get_function returns all registry fields plus parameters."""
+        write_py(tmp_path, "mod.py", """
+            def greet(name: str) -> str:
+                \"\"\"Say hello.\"\"\"
+                return name
+        """)
+        scan_functions(db, [str(tmp_path)])
+        fn_id = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'greet'"
+        ).fetchone()[0]
+
+        result = get_function(db, str(fn_id))
+        assert result is not None
+        assert result["function_name"] == "greet"
+        assert result["function_doc"] == "Say hello."
+        assert result["is_active"] is True
+        assert len(result["parameters"]) == 1
+        assert result["parameters"][0]["param_name"] == "name"
+
+    @pytest.mark.integration
+    def test_attached_sources_empty_when_no_map_rows(self, db, tmp_path):
+        """Guarantee: attached_sources is [] (not error) when no source_function_map rows exist."""
+        write_py(tmp_path, "mod.py", """
+            def lone(x: int) -> int:
+                return x
+        """)
+        scan_functions(db, [str(tmp_path)])
+        fn_id = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'lone'"
+        ).fetchone()[0]
+
+        result = get_function(db, str(fn_id))
+        assert result is not None
+        assert result["attached_sources"] == []
+
+
+# ---------------------------------------------------------------------------
+# API tests — GET /functions/{id}
+# ---------------------------------------------------------------------------
+
+
+class TestGetFunctionDetail:
+    @pytest.mark.integration
+    def test_returns_404_for_unknown_id(self, fn_client):
+        """Guarantee: GET /functions/{id} returns 404 for unknown function_id."""
+        client, conn, _ = fn_client
+        res = client.get(f"/functions/{uuid.uuid4()}")
+        assert res.status_code == 404
+
+    @pytest.mark.integration
+    def test_returns_full_detail_with_parameters(self, fn_client, tmp_path):
+        """Guarantee: GET /functions/{id} returns all fields including parameter list."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def double(x: int) -> int:
+                \"\"\"Double a value.\"\"\"
+                return x * 2
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'double'"
+        ).fetchone()[0]
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["function_name"] == "double"
+        assert data["function_doc"] == "Double a value."
+        assert data["function_signature"] is not None
+        assert data["function_type"] == "transform"
+        assert data["function_return_type"] == "scalar"
+        assert data["module_path"] is not None
+        assert data["is_active"] is True
+        assert len(data["parameters"]) == 1
+        assert data["parameters"][0]["param_name"] == "x"
+        assert data["parameters"][0]["param_type"] == "int"
+
+    @pytest.mark.integration
+    def test_attached_sources_empty_list_when_no_map_rows(self, fn_client, tmp_path):
+        """Guarantee: GET /functions/{id} returns empty attached_sources list (not error) when no map rows."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns3"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def solo(x: int) -> int:
+                return x
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'solo'"
+        ).fetchone()[0]
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        assert res.json()["attached_sources"] == []
+
+    @pytest.mark.integration
+    def test_inactive_function_returns_correct_status(self, fn_client, tmp_path):
+        """Guarantee: GET /functions/{id} works for inactive functions and shows is_active=False."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns4"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def dormant(x: int) -> int:
+                return x
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'dormant'"
+        ).fetchone()[0]
+
+        # Manually mark inactive
+        conn.execute("UPDATE function_registry SET is_active = FALSE WHERE function_id = ?", [fn_id])
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        assert res.json()["is_active"] is False
