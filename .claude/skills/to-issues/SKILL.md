@@ -53,6 +53,11 @@ For each approved slice, publish a new issue to the issue tracker. Use the issue
 
 Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
 
+**After publishing, identify which slices can be implemented in parallel (no blocker relationship between them) and which are blocked.** Present a concise execution plan:
+
+- Unblocked slices: launch as parallel agents immediately (one Agent call per unblocked issue in a single message).
+- Blocked slices: surface them explicitly and **wait for user approval** before starting each one. Do not start a blocked slice until all its blockers are merged and the user has confirmed the next step.
+
 **Each issue must be self-contained.** The issue body carries the design decisions relevant to that slice directly — not a pointer to a separate PRD issue. The reviewer should be able to understand what was decided and why by reading the issue alone.
 
 <issue-template>
