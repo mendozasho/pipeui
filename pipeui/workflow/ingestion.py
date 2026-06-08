@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import uuid
 from pathlib import Path
 
@@ -123,6 +124,11 @@ def ingest_source(
             )
             rows_ingested = total_rows - len(skipped_pks)
 
+        # Record the time of this ingest in the registry (no per-ingest history — §9)
+        conn.execute(
+            "UPDATE source_registry SET date_ingested = ? WHERE source_id = ?",
+            [datetime.datetime.now(), source_id],
+        )
         conn.execute("COMMIT")
         return rows_ingested, skipped_pks, failed
 
