@@ -154,11 +154,304 @@ function FunctionDrawer({ functionId, onClose, flash }) {
 }
 
 // ---------------------------------------------------------------------------
+// SetsTab — create and list function sets
+// ---------------------------------------------------------------------------
+
+function SetsTab({ flash, allFunctions }) {
+  const { Icon, Btn, KindTag } = window.__UI__;
+  const [sets, setSets] = useState([]);
+  const [setsLoading, setSetsLoading] = useState(true);
+  const [editorOpen, setEditorOpen] = useState(false);
+
+  // Editor state
+  const [setName, setSetName] = useState("");
+  const [setDesc, setSetDesc] = useState("");
+  const [members, setMembers] = useState([]); // [{function_id, function_name, function_type, is_active}]
+  const [fnFilter, setFnFilter] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function loadSets() {
+    return fetch("/function-sets")
+      .then(r => r.json())
+      .then(data => { setSets(data); setSetsLoading(false); })
+      .catch(() => setSetsLoading(false));
+  }
+
+  useEffect(() => { loadSets(); }, []);
+
+  function openCreate() {
+    setSetName(""); setSetDesc(""); setMembers([]); setFnFilter(""); setEditorOpen(true);
+  }
+
+  function addMember(fn) {
+    if (members.some(m => m.function_id === fn.function_id)) return;
+    setMembers(prev => [...prev, fn]);
+  }
+
+  function removeMember(id) {
+    setMembers(prev => prev.filter(m => m.function_id !== id));
+  }
+
+  function moveMember(index, dir) {
+    setMembers(prev => {
+      const next = [...prev];
+      const target = index + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function handleSave() {
+    if (!setName.trim()) { flash && flash("Set name is required.", "error"); return; }
+    setSaving(true);
+    fetch("/function-sets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        set_name: setName.trim(),
+        set_description: setDesc.trim() || null,
+        members: members.map(m => m.function_id),
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        setSaving(false);
+        if (!data.ok) {
+          flash && flash(data.errors?.[0] || "Failed to save set.", "error");
+          return;
+        }
+        setEditorOpen(false);
+        loadSets();
+        flash && flash("Set created.", "success");
+      })
+      .catch(() => { setSaving(false); flash && flash("Failed to save set.", "error"); });
+  }
+
+  const filteredFns = allFunctions.filter(fn =>
+    fn.function_name.toLowerCase().includes(fnFilter.toLowerCase())
+  );
+
+  // ---- Editor view ----
+  if (editorOpen) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Editor header */}
+        <div style={{
+          padding: "16px 24px", borderBottom: "1px solid var(--border)",
+          display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
+        }}>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>New Set</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={() => setEditorOpen(false)}>Cancel</Btn>
+            <Btn icon="check" onClick={handleSave} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Btn>
+          </div>
+        </div>
+
+        {/* Name + description */}
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <input
+            value={setName}
+            onChange={e => setSetName(e.target.value)}
+            placeholder="Set name (required)"
+            style={{
+              width: "100%", boxSizing: "border-box",
+              padding: "8px 12px", borderRadius: "var(--radius)",
+              border: "1px solid var(--border)", background: "var(--panel-2)",
+              color: "var(--text)", fontSize: 14, marginBottom: 8,
+            }}
+          />
+          <input
+            value={setDesc}
+            onChange={e => setSetDesc(e.target.value)}
+            placeholder="Description (optional)"
+            style={{
+              width: "100%", boxSizing: "border-box",
+              padding: "8px 12px", borderRadius: "var(--radius)",
+              border: "1px solid var(--border)", background: "var(--panel-2)",
+              color: "var(--text)", fontSize: 13,
+            }}
+          />
+        </div>
+
+        {/* Two-panel body */}
+        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+          {/* Left: function picker */}
+          <div style={{
+            width: "50%", borderRight: "1px solid var(--border)",
+            display: "flex", flexDirection: "column", overflow: "hidden",
+          }}>
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-soft)", flexShrink: 0 }}>
+              <input
+                value={fnFilter}
+                onChange={e => setFnFilter(e.target.value)}
+                placeholder="Filter functions…"
+                style={{
+                  width: "100%", boxSizing: "border-box",
+                  padding: "6px 10px", borderRadius: "var(--radius)",
+                  border: "1px solid var(--border)", background: "var(--panel-2)",
+                  color: "var(--text)", fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {filteredFns.length === 0 && (
+                <div style={{ padding: 16, color: "var(--text-3)", fontSize: 12 }}>No functions.</div>
+              )}
+              {filteredFns.map(fn => {
+                const already = members.some(m => m.function_id === fn.function_id);
+                return (
+                  <div
+                    key={fn.function_id}
+                    onClick={() => addMember(fn)}
+                    style={{
+                      padding: "10px 16px", borderBottom: "1px solid var(--border-soft)",
+                      display: "flex", alignItems: "center", gap: 10,
+                      cursor: already ? "default" : "pointer",
+                      opacity: fn.is_active ? (already ? 0.4 : 1) : 0.4,
+                      background: already ? "var(--panel-2)" : undefined,
+                    }}
+                  >
+                    <KindTag kind={fn.function_type} />
+                    <span style={{ fontSize: 13, flex: 1 }}>{fn.function_name}</span>
+                    {already && <span style={{ fontSize: 11, color: "var(--text-3)" }}>added</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right: ordered members */}
+          <div style={{ width: "50%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{
+              padding: "10px 16px", borderBottom: "1px solid var(--border-soft)",
+              fontSize: 11, color: "var(--text-3)", fontWeight: 600,
+              textTransform: "uppercase", letterSpacing: ".05em", flexShrink: 0,
+            }}>
+              Pipeline ({members.length} function{members.length !== 1 ? "s" : ""})
+            </div>
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {members.length === 0 && (
+                <div style={{ padding: 16, color: "var(--text-3)", fontSize: 12 }}>
+                  Click functions on the left to add them.
+                </div>
+              )}
+              {members.map((m, i) => (
+                <div key={m.function_id} style={{
+                  padding: "10px 16px", borderBottom: "1px solid var(--border-soft)",
+                  display: "flex", alignItems: "center", gap: 8,
+                  opacity: m.is_active ? 1 : 0.5,
+                }}>
+                  <span style={{ fontSize: 11, color: "var(--text-3)", minWidth: 20, textAlign: "right" }}>
+                    {i + 1}
+                  </span>
+                  <KindTag kind={m.function_type} />
+                  <span style={{ fontSize: 13, flex: 1 }}>{m.function_name}</span>
+                  <div style={{ display: "flex", gap: 2 }}>
+                    <button
+                      onClick={() => moveMember(i, -1)} disabled={i === 0}
+                      style={{
+                        background: "none", border: "none", cursor: i === 0 ? "default" : "pointer",
+                        color: "var(--text-3)", padding: "2px 4px", opacity: i === 0 ? 0.3 : 1,
+                      }}
+                      title="Move up"
+                    >↑</button>
+                    <button
+                      onClick={() => moveMember(i, 1)} disabled={i === members.length - 1}
+                      style={{
+                        background: "none", border: "none",
+                        cursor: i === members.length - 1 ? "default" : "pointer",
+                        color: "var(--text-3)", padding: "2px 4px",
+                        opacity: i === members.length - 1 ? 0.3 : 1,
+                      }}
+                      title="Move down"
+                    >↓</button>
+                    <button
+                      onClick={() => removeMember(m.function_id)}
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        color: "var(--bad, #e85c5c)", padding: "2px 6px", fontSize: 14,
+                      }}
+                      title="Remove"
+                    >×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- List view ----
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{
+        padding: "16px 24px", borderBottom: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
+      }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>Sets</div>
+          <div style={{ color: "var(--text-3)", fontSize: 12 }}>
+            {setsLoading ? "Loading…" : `${sets.length} set${sets.length !== 1 ? "s" : ""}`}
+          </div>
+        </div>
+        <Btn icon="plus" onClick={openCreate}>New Set</Btn>
+      </div>
+
+      <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+        {!setsLoading && sets.length === 0 && (
+          <div style={{ color: "var(--text-3)", fontSize: 13 }}>
+            No sets yet. Click "New Set" to create one.
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+          {sets.map(s => (
+            <div key={s.set_id} style={{
+              background: "var(--panel)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)", padding: "16px",
+            }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{s.set_name}</div>
+                {s.has_inactive && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 99,
+                    background: "var(--warn-soft, rgba(232,160,32,.12))",
+                    color: "var(--warn, #e8a020)",
+                    border: "1px solid var(--warn, #e8a020)",
+                    whiteSpace: "nowrap", marginLeft: 8,
+                  }}>
+                    ⚠ unavailable
+                  </span>
+                )}
+              </div>
+              {s.set_description && (
+                <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 8, lineHeight: 1.4 }}>
+                  {s.set_description}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: "var(--text-4)" }}>
+                {s.member_count} function{s.member_count !== 1 ? "s" : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // ScreenModules
 // ---------------------------------------------------------------------------
 
 function ScreenModules({ flash }) {
   const { KindTag, Icon, Btn } = window.__UI__;
+  const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -199,9 +492,53 @@ function ScreenModules({ flash }) {
     byFile[key].push(fn);
   }
 
+  if (activeTab === "sets") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Tab bar */}
+        <div style={{
+          padding: "0 24px", borderBottom: "1px solid var(--border)",
+          display: "flex", gap: 0, flexShrink: 0,
+        }}>
+          {["functions", "sets"].map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)} style={{
+              padding: "14px 18px", background: "none", border: "none",
+              borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+              color: activeTab === tab ? "var(--accent)" : "var(--text-3)",
+              fontWeight: activeTab === tab ? 600 : 400,
+              fontSize: 14, cursor: "pointer", textTransform: "capitalize",
+              marginBottom: -1,
+            }}>
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+        <SetsTab flash={flash} allFunctions={functions} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {/* Header */}
+      {/* Tab bar */}
+      <div style={{
+        padding: "0 24px", borderBottom: "1px solid var(--border)",
+        display: "flex", gap: 0, flexShrink: 0,
+      }}>
+        {["functions", "sets"].map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab)} style={{
+            padding: "14px 18px", background: "none", border: "none",
+            borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+            color: activeTab === tab ? "var(--accent)" : "var(--text-3)",
+            fontWeight: activeTab === tab ? 600 : 400,
+            fontSize: 14, cursor: "pointer", textTransform: "capitalize",
+            marginBottom: -1,
+          }}>
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+          </button>
+        ))}
+      </div>
+      {/* Functions tab header */}
       <div style={{
         padding: "16px 24px", borderBottom: "1px solid var(--border)",
         display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
