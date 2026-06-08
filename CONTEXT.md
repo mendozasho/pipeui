@@ -65,7 +65,7 @@ A mutable boolean column on `function_registry` (default `true`). Set to `false`
 
 ## scan log
 
-A session-only in-memory record of what changed during a rescan (functions added, re-registered, or found missing). Not persisted to DuckDB. Shown in the Functions screen so the user can see the diff from the last rescan. Resets on server restart. Durable state is captured by `is_active` on `function_registry`.
+A session-only in-memory record of what changed during a rescan. Entries cover: functions added, re-registered, found missing (file gone → `is_active` flipped), and skipped with a reason (e.g. "missing return annotation", "untyped parameter `x`"). Not persisted to DuckDB. Shown in the Functions screen so the user can see the diff from the last rescan. Resets on server restart. Durable state is captured by `is_active` on `function_registry`.
 
 ## function detail drawer
 
