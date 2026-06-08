@@ -139,9 +139,10 @@ function IngestModal({ source, onConfirm, onCancel }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Field label="File (CSV or Excel)">
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>File (CSV or Excel)</span>
             <div
-              onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+              onClick={() => inputRef.current?.click()}
               style={{
                 ...inputStyle, cursor: "pointer",
                 color: file ? "var(--text)" : "var(--text-3)",
@@ -151,7 +152,7 @@ function IngestModal({ source, onConfirm, onCancel }) {
             </div>
             <input ref={inputRef} type="file" accept=".csv,.xlsx" style={{ display: "none" }}
               onChange={e => { if (e.target.files[0]) setFile(e.target.files[0]); e.target.value = ""; }} />
-          </Field>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 24 }}>
