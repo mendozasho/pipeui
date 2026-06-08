@@ -7,13 +7,11 @@ description: Break a plan, spec, or PRD into independently-grabbable issues on t
 
 Break a plan into independently-grabbable issues using vertical slices (tracer bullets).
 
-The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
-
 ## Process
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes an issue reference (issue number, URL, or path) as an argument, fetch it from the issue tracker and read its full body and comments.
+Work from whatever is already in the conversation context. If the user passes a local PRD path or issue reference as an argument, read it in full. The PRD is the source of truth for design decisions — each issue should carry the relevant decisions for its slice, not just a pointer to the PRD.
 
 ### 2. Explore the codebase (optional)
 
@@ -51,24 +49,26 @@ Iterate until the user approves the breakdown.
 
 ### 5. Publish the issues to the issue tracker
 
-For each approved slice, publish a new issue to the issue tracker. Use the issue body template below. These issues are considered ready for AFK agents, so publish them with the correct triage label unless instructed otherwise.
+For each approved slice, publish a new issue to the issue tracker. Use the issue body template below. These issues are considered ready for AFK agents, so publish them with the `ready-for-agent` label.
 
 Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
 
+**Each issue must be self-contained.** The issue body carries the design decisions relevant to that slice directly — not a pointer to a separate PRD issue. The reviewer should be able to understand what was decided and why by reading the issue alone.
+
 <issue-template>
-## Parent
-
-A reference to the parent issue on the issue tracker (if the source was an existing issue, otherwise omit this section).
-
 ## Branch
 
-`feat/<short-slug>` — the branch name the implementing agent must create and push to. Derived from the issue title.
+`feat/<short-slug>` — the branch the implementing agent creates and pushes to.
 
 ## What to build
 
 A concise description of this vertical slice. Describe the end-to-end behavior, not layer-by-layer implementation.
 
 Avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it here and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
+
+## Design decisions for this slice
+
+The relevant design choices from the PRD that apply to this slice — schema decisions, API contracts, classification rules, UI behaviour, transaction boundaries, etc. Carry enough context that a reviewer reading only this issue can understand what was decided and why, without needing to look elsewhere.
 
 ## Acceptance criteria
 
@@ -89,4 +89,4 @@ Or "None - can start immediately" if no blockers.
 
 </issue-template>
 
-Do NOT close or modify any parent issue.
+Do NOT create a separate parent PRD issue on GitHub.
