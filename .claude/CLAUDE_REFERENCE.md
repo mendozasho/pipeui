@@ -299,27 +299,65 @@ invalid path routed to the rejection stack.
 ## §7 — Column-type migration (recreate-and-copy + `TRY_CAST` + atomic swap)
 
 *Implements: CLAUDE.md → Principle 6 (migrate over reject). Design intent:
-design.md → Initializing a new source, step 7.*
+design.md → Initializing a new source, step 7. Implemented in
+`pipeui/workflow/migration.py`.*
 
-When a user changes a column's type (`edit` → `source`), the already-ingested
-data is migrated, keeping `column_registry` (source of truth) and the
-materialized instance table in sync.
+When a user changes a column's type, the already-ingested data is migrated,
+keeping `column_registry` (source of truth) and the materialized instance table
+in sync.
 
-Mechanism, entirely inside one transaction:
-1. **Pre-check with `TRY_CAST`** — report rows that would fail to convert so the
-   user decides how to handle un-castable values *before* committing (no silent
-   loss to NULL).
-2. **Recreate-and-copy** — create a new table with the updated column type;
-   `INSERT ... SELECT` existing rows with the changed column cast to the new
-   type; validate.
-3. **Atomic swap** — drop old, rename new.
+**Allowed `column_type` set** (resolved from Active Deferred Work):
+`INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`.
+Validated at the app layer as a constrained `VARCHAR`.
 
-Any failure rolls the whole transaction back to the last good state (§9).
+**Entry point:** `migrate_column(conn, source_id, column_id, new_type,
+scope="this_source", on_uncastable="abort", dry_run=False) → dict`
 
-In-place `ALTER ... ALTER COLUMN ... TYPE` is **not** used: DuckDB's in-place
-change fails if conflicting-type values ever existed (even if since deleted) and
-cannot alter an indexed column — which includes the PK. A fresh table carries no
-such history or dependency.
+Steps, entirely inside one transaction:
+1. **Validate `new_type`** — reject immediately if outside the allowed set.
+2. **TRY_CAST pre-check** — count rows that cannot be cast; collect their PKs
+   when `on_uncastable="nullify"`. No silent loss to NULL.
+3. **Shared-row detection** — query `source_column_map` for all sources sharing
+   the same `column_registry` UUID5 row. Return as `shared_sources`.
+4. **Dry-run mode** (`dry_run=True`) — runs steps 1–3, rolls back, returns
+   `{"castable", "uncastable", "shared_sources"}`. DB is unchanged.
+5. **`on_uncastable="abort"`** — if pre-check finds any un-castable rows, return
+   structured failure before opening a transaction. DB unchanged.
+6. **`column_registry` update (copy-on-write, `scope="this_source"`)** — look up
+   whether a row for `(column_name, new_type)` already exists by UUID5; if yes,
+   re-point `source_column_map` to it; if no, insert a new row. The old shared
+   row is left intact for other sources.
+7. **`column_registry` update (`scope="all_shared"`)** — update the single shared
+   row in place; migrate all sharing sources' instance tables in the same
+   transaction.
+8. **`content_hash_id` collision check** (Principle 1) — if `scope="all_shared"`
+   and the new hash would land on a *different* existing row, return structured
+   failure before any mutation.
+9. **Recreate-and-copy** — for each affected instance table: `CREATE TABLE`
+   (strict, not IF NOT EXISTS) with updated column type; `INSERT … SELECT` with
+   `TRY_CAST` on the changed column; `DROP` old table; `RENAME` new table.
+10. **Commit** — all the above in one `BEGIN`/`COMMIT`. Any exception triggers
+    `ROLLBACK`, leaving the DB at its last committed state.
+
+Any failure returns `{"ok": False, "error": "...", "reason": "..."}` — never raises.
+Success returns `{"ok": True, "rows_migrated": N, "nullified": [{"pk", "column"}]}`.
+
+In-place `ALTER … ALTER COLUMN … TYPE` is **not** used: DuckDB's in-place change
+fails if conflicting-type values ever existed (even if since deleted) and cannot
+alter an indexed column (which includes the PK). A fresh table carries no such
+history or dependency.
+
+**API:** `PATCH /sources/{id}/columns/{col_id}?dry_run=false` in
+`pipeui/api/sources.py`. Body: `{"column_type", "scope", "on_uncastable"}`.
+Dry-run ignores `scope`/`on_uncastable`. Returns 404 on unknown source/column;
+structured failure (not 500) on invalid type or aborted migration.
+
+**Frontend:** `ColumnTypeRow` component in `screen-data.jsx` replaces the static
+type badge with a `<select>`. On change: fires dry-run first. If zero un-castable
+and no shared sources, commits immediately. Otherwise shows `MigrationConfirmModal`
+(un-castable count + shared source names + scope selector). After commit: refreshes
+drawer columns and data preview. Nullified rows surface in an ephemeral "Nullified
+values" section (resets on drawer close).
 
 ---
 
@@ -394,14 +432,16 @@ Ingested rows are retained for summaries and deliverables.
 committed state.** Reverting to an *earlier* ingestion (time-travel) is out of
 scope — there is no per-ingestion history.
 
-**Row preview (`get_source_rows`, Phase B2).** A read-only helper that queries
-the JIT instance table directly and returns up to `limit` rows as plain dicts
-(column names from the table, values JSON-serialisable). Returns an empty list
-when the table does not yet exist (source registered but not ingested). No
-transaction needed — read-only. The API exposes this as `GET /sources/{id}/rows?limit=200`.
-Future expansion: add `?search=`, `?col=`, `?min=`, `?max=` query params and a
-separate health-check endpoint (null counts, type distribution, duplicate PK
-check) without architectural changes.
+**Row preview (`get_source_rows`, Phase B2 — implemented).** A read-only helper
+in `pipeui/workflow/ingestion.py` that queries the JIT instance table directly
+and returns up to `limit` rows as plain dicts. Returns an empty list when the
+table does not yet exist (source registered but not ingested). No transaction
+needed — read-only. Exposed as `GET /sources/{id}/rows?limit=200`; returns
+`{"columns": [...], "rows": [...]}`. The drawer "Data" section fetches on open
+and after every ingest. Tests in `tests/test_ingestion.py`.
+Future expansion: `?search=`, `?col=`, `?min=`, `?max=` query params and a
+health-check endpoint (null counts, type distribution, duplicate PK check) can
+be added without architectural changes.
 
 ---
 
