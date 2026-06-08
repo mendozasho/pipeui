@@ -140,6 +140,33 @@ def ingest_source(
         conn.execute(f"DROP TABLE IF EXISTS {temp_name}")
 
 
+def get_source_rows(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    limit: int = 200,
+) -> list[dict]:
+    """Return up to `limit` rows from the JIT instance table as plain dicts.
+
+    Returns an empty list when the instance table does not yet exist (source
+    registered but not ingested) or when the source has no rows. No transaction
+    needed — read-only. (§9 Row preview note.)
+    """
+    tname = instance_table_name(source_id)
+    try:
+        rows = conn.execute(
+            f'SELECT * FROM "{tname}" LIMIT ?', [limit]
+        ).fetchall()
+    except Exception:
+        # Table does not exist yet (not ingested) or any other read error → empty.
+        return []
+
+    if not rows:
+        return []
+
+    col_names = [desc[0] for desc in conn.description]
+    return [dict(zip(col_names, row)) for row in rows]
+
+
 def get_source_detail(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,

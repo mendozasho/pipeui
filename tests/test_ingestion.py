@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import get_source_detail, ingest_source
+from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.sql_user_table import instance_table_name
 
 
@@ -189,3 +189,48 @@ def test_get_source_detail_returns_none_for_unknown_id(db):
     """get_source_detail returns None when the source_id is not registered."""
     result = get_source_detail(db, uuid.uuid4())
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_source_rows — §9 Row preview behavioral guarantees
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_get_source_rows_empty_when_not_ingested(db, tmp_path):
+    """get_source_rows returns [] when registered but never ingested (instance table absent)."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 1]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+
+    result = get_source_rows(db, source_id)
+    assert result == []
+
+
+@pytest.mark.integration
+def test_get_source_rows_returns_correct_rows_after_ingest(db, tmp_path):
+    """get_source_rows returns the correct row dicts after ingestion."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 10], ["r2", 20]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+
+    rows = get_source_rows(db, source_id)
+    assert len(rows) == 2
+    ids = {r["id"] for r in rows}
+    vals = {r["val"] for r in rows}
+    assert ids == {"r1", "r2"}
+    assert vals == {10, 20}
+
+
+@pytest.mark.integration
+def test_get_source_rows_respects_limit(db, tmp_path):
+    """get_source_rows never returns more rows than the limit parameter."""
+    data_rows = [[f"r{i}", i] for i in range(10)]
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], data_rows)
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+
+    rows = get_source_rows(db, source_id, limit=3)
+    assert len(rows) == 3

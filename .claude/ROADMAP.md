@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-08
+updated: 2026-06-09
 purpose: >
   Build order for the codebase — the sequence of units of work that turn the
   design docs into code. Companion to design.md (intent), CLAUDE.md (what/why +
@@ -42,9 +42,7 @@ These are CLAUDE.md → Active Deferred Work items. Each one blocks clean
 implementation of the unit(s) noted; resolve before (or at the start of) that
 unit rather than encoding an answer in code.
 
-- **`column_type` enum** — concrete allowed set. Gates `feat/column-migration`
-  (Phase C). (The *fallback* is resolved → `VARCHAR`; only the full allowed set
-  is still open.)
+- ~~**`column_type` enum**~~ — **resolved**: `INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`. No longer gates Phase C.
 - **PK uniqueness enforcement** — whether to validate the chosen/assumed PK is
   unique. Relevant to Phase A (`POST /sources`) if enforcement is added.
 - **Return-type vocabulary** (`vector`/`matrix` vs `pd.series`/`pd.dataframe`) —
@@ -216,52 +214,55 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 *Builds directly on Phase B. No gating decisions.*
 
-- [ ] **`fix/ingest-modal-double-picker`** *(priority)* — `frontend/screen-data.jsx`.
-  The `IngestModal` overlay lacks `e.stopPropagation()`, so clicks bubble into the
-  `Drawer` backdrop and trigger a second file dialog or close the drawer
-  unexpectedly. Add `onClick={e => e.stopPropagation()}` on both the overlay div
-  and the inner panel div of `IngestModal`.
-  *Also:* remove the ingestion method selector from `IngestModal` — the method is
-  stored on the source at registration and should not be re-asked on every ingest.
-  The stored value is already used automatically by the backend when no override is
-  sent. Method changes belong in a future "edit source settings" flow.
-  *Guarantees:* clicking the file picker does not close the drawer; the modal never
+- [x] **`fix/ingest-modal-double-picker`** — `frontend/screen-data.jsx`.
+  `e.stopPropagation()` added to both the overlay and inner panel divs. Ingestion
+  method selector removed from `IngestModal`; the stored method is used automatically.
+  *Guarantees met:* clicking the file picker does not close the drawer; the modal never
   sends an `ingestion_method` override.
 
-- [ ] **`feat/source-data-preview`** — §9 (workflow), §14 (API + frontend).
+- [x] **`feat/source-data-preview`** — §9 (workflow), §14 (API + frontend).
   `pipeui/workflow/ingestion.py`: `get_source_rows(conn, source_id, limit=200) →
-  list[dict]` — queries the JIT instance table directly, returns up to `limit` rows
-  as plain dicts.
-  `pipeui/api/sources.py`: `GET /sources/{id}/rows?limit=200` — calls
-  `get_source_rows`, returns `{"columns": [...], "rows": [...]}`. Returns 404 if
-  source not found, empty rows if not yet ingested.
-  *Frontend:* `screen-data.jsx` drawer — "Data" section below "Columns"; fetches
-  on open when `date_ingested` is set and after a successful ingest; renders rows
-  in a horizontally-scrollable `DataTable`. Cap displayed at 200 rows; expandable
-  to search/filter in a future phase.
-  *Note: no new files — one workflow function, one route, one drawer section.*
-  *Future expansion:* `?search=`, `?col=`, `?min=`, `?max=` query params and a
-  health-check endpoint (`null counts`, type distribution, duplicate PK check) can
-  be added without architectural changes.
+  list[dict]` — queries the JIT instance table directly; returns empty list (not error)
+  when table does not yet exist.
+  `pipeui/api/sources.py`: `GET /sources/{id}/rows?limit=200` — returns
+  `{"columns": [...], "rows": [...]}`. 404 if source not found; empty rows if not ingested.
+  *Frontend:* `screen-data.jsx` drawer — "Data (up to 200 rows)" section below Columns;
+  fetches on open when `date_ingested` is set and after every successful ingest;
+  horizontally-scrollable table. Tests in `tests/test_ingestion.py`.
+  *Guarantees met:* empty list before ingestion; correct rows after; limit cap respected.
 
 ---
 
 ### Phase C — Column Type Migration
 
-*Gated by: `column_type` enum decision (CLAUDE.md → Active Deferred Work).*
+*Gating decision resolved: `column_type` enum = `INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`.*
 
-- [ ] **`feat/column-migration`** — §7. `src/pipeui/workflow/migration.py`:
-  `TRY_CAST` pre-check → recreate-and-copy with column cast → atomic swap, all
-  in one transaction.
-  *Guarantees:* migration atomicity; `TRY_CAST` reports un-castable rows before
-  commit (no silent NULL loss). Tests in `tests/test_migration.py`.
+- [x] **`feat/column-migration`** — §7. `pipeui/workflow/migration.py`:
+  `migrate_column(conn, source_id, column_id, new_type, scope, on_uncastable, dry_run)`.
+  `TRY_CAST` pre-check → copy-on-write `column_registry` update → recreate-and-copy
+  with column cast → atomic swap, all in one transaction. `dry_run=True` mode returns
+  counts and shared-source list without mutating. `scope="all_shared"` migrates every
+  source sharing the same `column_registry` UUID5 row in one transaction.
+  `on_uncastable="nullify"` proceeds and returns `nullified: [{pk, column}]`;
+  `on_uncastable="abort"` rolls back on any un-castable rows. Copy-on-write reuses an
+  existing `(column_name, new_type)` row when one is already in `column_registry`.
+  `content_hash_id` edit-collision enforced at the write boundary (Principle 1).
+  Tests in `tests/test_migration.py` (13 tests).
+  *Guarantees met:* migration atomicity; no silent NULL loss; shared-row isolation;
+  collision detection; rollback on failure.
 
-- [ ] **`feat/api-sources-migrate`** — §14 (API), §7 (workflow).
-  `src/pipeui/api/sources.py`: `PATCH /sources/{id}/columns/{col_id}`.
-  Returns un-castable row count before committing so the frontend can prompt.
-  *Frontend:* `screen-data.jsx` drawer — schema rows get editable type
-  dropdowns; un-castable row count surfaces as a warning modal before the user
-  confirms the change.
+- [x] **`feat/api-sources-migrate`** — §14 (API), §7 (workflow).
+  `pipeui/api/sources.py`: `PATCH /sources/{id}/columns/{col_id}?dry_run=false`.
+  Body: `{"column_type", "scope": "this_source"|"all_shared", "on_uncastable": "nullify"|"abort"}`.
+  Dry-run returns `{"castable", "uncastable", "shared_sources"}`. Commit returns
+  `{"ok", "rows_migrated", "nullified"}`. 404 on unknown source/column; structured
+  failure (not 500) on invalid type or aborted migration. Tests in `tests/test_api_migration.py`.
+  *Frontend:* `screen-data.jsx` — `ColumnTypeRow` component replaces static type badge
+  with a 7-option `<select>`. Happy path (zero un-castable, no shared sources) commits
+  directly. Non-happy path shows `MigrationConfirmModal` with un-castable count,
+  shared-source names, and scope radio buttons. After commit: drawer columns + data
+  preview both refresh. Nullified rows surface in a "Nullified values" section in the
+  drawer (ephemeral — resets on drawer close).
 
 ---
 
@@ -337,9 +338,9 @@ Phase A2:  app-settings  (Settings screen + config file; clears DB_PATH debt)
              │
 Phase B:   jit-instance-table ── ingestion ── api-sources-ingest
              │
-Phase B2:  fix/ingest-modal-double-picker  feat/source-data-preview
+Phase B2:  fix/ingest-modal-double-picker  feat/source-data-preview     [done]
              │
-Phase C:   column-migration ── api-sources-migrate       [gated: column_type enum]
+Phase C:   column-migration ── api-sources-migrate                       [done]
              │
 Phase D:   function-worker ── function-registration ── api-functions
              │                                             [gated: return-type vocab]
