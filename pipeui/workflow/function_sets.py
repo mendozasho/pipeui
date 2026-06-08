@@ -111,5 +111,118 @@ def _set_summary(conn: duckdb.DuckDBPyConnection, set_id: str) -> dict:
     for r in rows:
         if r["set_id"] == set_id:
             return r
-    # Fallback: return minimal dict if somehow not found (shouldn't happen)
     return {"set_id": set_id}
+
+
+def get_function_set(conn: duckdb.DuckDBPyConnection, set_id: str) -> dict | None:
+    """Return full detail for one function set including ordered members, or None if not found.
+
+    Members are returned ORDER BY position ASC with function_name, function_type, is_active.
+    """
+    row = conn.execute(
+        "SELECT set_id, set_name, set_description FROM function_set WHERE set_id = ?",
+        [set_id],
+    ).fetchone()
+    if row is None:
+        return None
+
+    members = conn.execute("""
+        SELECT
+            fsm.function_id,
+            fr.function_name,
+            fr.function_type,
+            fr.is_active,
+            fsm.position
+        FROM function_set_map fsm
+        JOIN function_registry fr ON fsm.function_id = fr.function_id
+        WHERE fsm.set_id = ?
+        ORDER BY fsm.position ASC
+    """, [set_id]).fetchall()
+
+    return {
+        "set_id": str(row[0]),
+        "set_name": row[1],
+        "set_description": row[2],
+        "members": [
+            {
+                "function_id": str(m[0]),
+                "function_name": m[1],
+                "function_type": m[2],
+                "is_active": bool(m[3]),
+                "position": m[4],
+            }
+            for m in members
+        ],
+    }
+
+
+def update_function_set(
+    conn: duckdb.DuckDBPyConnection,
+    set_id: str,
+    set_name: str | None = None,
+    set_description: str | None = None,
+    members: list[str] | None = None,
+    clear_description: bool = False,
+) -> dict | FailedRegistryEntry:
+    """Update an existing function set.
+
+    Returns full detail dict on success, FailedRegistryEntry on collision or error.
+
+    - set_name: if provided, updates name and recomputes content_hash_id; collision → reject
+    - set_description: if provided, updates description; use clear_description=True to set NULL
+    - members: if provided, replace-members (delete all existing map rows, reinsert in order)
+      All changes commit in one transaction.
+    """
+    existing = conn.execute(
+        "SELECT set_id, set_name, set_description FROM function_set WHERE set_id = ?",
+        [set_id],
+    ).fetchone()
+    if existing is None:
+        return None  # caller converts to 404
+
+    current_name = existing[1]
+    new_name = set_name if set_name is not None else current_name
+    new_hash = _set_hash(new_name)
+
+    failed = FailedRegistryEntry()
+
+    # Collision check: new name already used by a different set
+    if new_name != current_name:
+        collision = conn.execute(
+            "SELECT set_id FROM function_set WHERE content_hash_id = ? AND set_id != ?",
+            [new_hash, set_id],
+        ).fetchone()
+        if collision:
+            failed.add(set_name, f"A function set named '{new_name}' already exists.")
+            return failed
+
+    try:
+        conn.execute("BEGIN")
+
+        # Update registry fields
+        conn.execute(
+            "UPDATE function_set SET set_name = ?, content_hash_id = ?, set_description = ? WHERE set_id = ?",
+            [
+                new_name,
+                new_hash,
+                None if clear_description else (set_description if set_description is not None else existing[2]),
+                set_id,
+            ],
+        )
+
+        # Replace members if provided
+        if members is not None:
+            conn.execute("DELETE FROM function_set_map WHERE set_id = ?", [set_id])
+            for position, function_id in enumerate(members):
+                conn.execute(
+                    "INSERT INTO function_set_map (set_map_id, set_id, function_id, position) VALUES (?, ?, ?, ?)",
+                    [_map_id(set_id, function_id), set_id, function_id, position],
+                )
+
+        conn.execute("COMMIT")
+    except Exception as exc:
+        conn.execute("ROLLBACK")
+        failed.add(set_id, str(exc))
+        return failed
+
+    return get_function_set(conn, set_id)
