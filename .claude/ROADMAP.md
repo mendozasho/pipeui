@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-08
+updated: 2026-06-09
 purpose: >
   Build order for the codebase — the sequence of units of work that turn the
   design docs into code. Companion to design.md (intent), CLAUDE.md (what/why +

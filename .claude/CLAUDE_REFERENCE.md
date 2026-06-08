@@ -61,9 +61,10 @@ instance table live as tables **inside one DuckDB database file**. There is no
 **Enum storage.** Defined enums (`ingestion_method` ∈ {`upsert`, `append`,
 `skip`}, and the function enums in §11) are stored as constrained `VARCHAR`,
 validated at the app layer by the pydantic objects (§3), in v1. Promotion to
-DuckDB native `ENUM` is possible once each vocabulary is final;
-`column_registry.column_type` cannot be promoted until its set is pinned —
-**[DEFERRED]** (CLAUDE.md → Active Deferred Work: `column_type` enum).
+DuckDB native `ENUM` is possible once each vocabulary is final.
+`column_registry.column_type` set is now pinned: `INTEGER`, `BIGINT`, `DOUBLE`,
+`BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP` — promotion to DuckDB `ENUM` is
+deferred to a future cleanup pass but is no longer blocked.
 
 ### Registry tables (concrete schema)
 
@@ -102,7 +103,7 @@ DuckDB native `ENUM` is possible once each vocabulary is final;
 | `column_id` | UUID | no | PK, surrogate (uuid4) |
 | `content_hash_id` | UUID | no | uuid5 of (`column_name`, `column_type`) |
 | `column_name` | VARCHAR | no | taken verbatim from the spreadsheet |
-| `column_type` | VARCHAR(enum) | no | inferred at read; falls back to `VARCHAR` when uninferable (§6.1) — enum set **[DEFERRED]** |
+| `column_type` | VARCHAR(enum) | no | inferred at read; falls back to `VARCHAR` when uninferable (§6.1) — allowed set: `INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP` (resolved, CLAUDE.md). Validated at app layer; migration enforced in `workflow/migration.py` (§7). |
 
 `parameter`
 
