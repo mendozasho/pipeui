@@ -387,13 +387,13 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   }
 
   async function loadRows(src) {
-    // src is the detail object we just fetched; skip the fetch when not ingested yet.
     if (!src?.date_ingested) { setPreviewData(null); return; }
     try {
       const res = await fetch(`/sources/${sourceId}/rows?limit=200`);
       if (res.ok) setPreviewData(await res.json());
+      else setPreviewData({ columns: [], rows: [] });
     } catch {
-      // Non-fatal — the Columns section still works fine without row preview.
+      setPreviewData({ columns: [], rows: [] });
     }
   }
 
@@ -530,9 +530,17 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               </Section>
             )}
 
-            {/* Data preview — only shown when the source has been ingested and rows exist */}
-            {source.date_ingested && previewData && previewData.rows.length > 0 && (
-              <Section title={`Data (up to 200 rows)`}>
+            {/* Data preview */}
+            <Section title="Data">
+              {!source.date_ingested ? (
+                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>
+                  No data yet — ingest a file to preview rows.
+                </div>
+              ) : !previewData ? (
+                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>Loading…</div>
+              ) : previewData.rows.length === 0 ? (
+                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
+              ) : (
                 <div style={{ overflowX: "auto", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
                   <table style={{
                     borderCollapse: "collapse", width: "100%", fontSize: 12,
@@ -564,15 +572,8 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                     </tbody>
                   </table>
                 </div>
-              </Section>
-            )}
-
-            {/* Empty-state when ingested but no rows returned */}
-            {source.date_ingested && previewData && previewData.rows.length === 0 && (
-              <Section title="Data">
-                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
-              </Section>
-            )}
+              )}
+            </Section>
           </div>
         )}
       </Drawer>
