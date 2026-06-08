@@ -4,14 +4,14 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Generator, Literal
+from typing import Literal
 
 import duckdb
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from pipeui.duckdb import create_schema, get_connection
+from pipeui.api.deps import get_conn
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.workflow.migration import migrate_column
@@ -19,16 +19,6 @@ from pipeui.workflow.migration import migrate_column
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
-
-
-def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
-    from pipeui.main import DB_PATH
-    conn = get_connection(str(DB_PATH))
-    create_schema(conn)
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
