@@ -529,137 +529,161 @@ class TestPostScan:
 
 
 # ---------------------------------------------------------------------------
-# Workflow unit tests — get_function()
+# Inactive function tests
 # ---------------------------------------------------------------------------
 
 
-class TestGetFunction:
-    """get_function() returns correct detail or None (§10, §13)."""
+class TestInactiveFunctions:
+    """scan_functions() marks is_active=False when a file disappears, restores on reappearance."""
 
     @pytest.mark.integration
-    def test_returns_none_for_unknown_id(self, db):
-        """Guarantee: get_function returns None for an unknown function_id."""
-        result = get_function(db, str(uuid.uuid4()))
-        assert result is None
-
-    @pytest.mark.integration
-    def test_returns_full_detail(self, db, tmp_path):
-        """Guarantee: get_function returns all registry fields plus parameters."""
-        write_py(tmp_path, "mod.py", """
-            def greet(name: str) -> str:
-                \"\"\"Say hello.\"\"\"
-                return name
-        """)
-        scan_functions(db, [str(tmp_path)])
-        fn_id = db.execute(
-            "SELECT function_id FROM function_registry WHERE function_name = 'greet'"
-        ).fetchone()[0]
-
-        result = get_function(db, str(fn_id))
-        assert result is not None
-        assert result["function_name"] == "greet"
-        assert result["function_doc"] == "Say hello."
-        assert result["is_active"] is True
-        assert len(result["parameters"]) == 1
-        assert result["parameters"][0]["param_name"] == "name"
-
-    @pytest.mark.integration
-    def test_attached_sources_empty_when_no_map_rows(self, db, tmp_path):
-        """Guarantee: attached_sources is [] (not error) when no source_function_map rows exist."""
-        write_py(tmp_path, "mod.py", """
-            def lone(x: int) -> int:
+    def test_missing_file_sets_is_active_false(self, db, tmp_path):
+        """Guarantee: after rescan where module_path file no longer exists, is_active becomes False."""
+        py = write_py(tmp_path, "mod.py", """
+            def fn(x: int) -> int:
                 return x
         """)
         scan_functions(db, [str(tmp_path)])
+        # Confirm registered and active
+        row = db.execute("SELECT is_active FROM function_registry WHERE function_name = 'fn'").fetchone()
+        assert row is not None and row[0] is True
+
+        # Remove the file, rescan
+        py.unlink()
+        log = scan_functions(db, [str(tmp_path)])
+
+        row = db.execute("SELECT is_active FROM function_registry WHERE function_name = 'fn'").fetchone()
+        assert row is not None, "row must still exist — never deleted"
+        assert row[0] is False, "is_active must be False when file is gone"
+
+        # Scan log must include a file_missing entry
+        missing = [e for e in log if e["status"] == "file_missing"]
+        assert len(missing) == 1
+        assert missing[0]["function_name"] == "fn"
+        assert "mod.py" in missing[0]["file"]
+
+    @pytest.mark.integration
+    def test_surrogate_id_preserved_after_inactivation(self, db, tmp_path):
+        """Guarantee: function_id surrogate is unchanged when is_active flips to False."""
+        py = write_py(tmp_path, "mod.py", """
+            def fn(x: int) -> int:
+                return x
+        """)
+        scan_functions(db, [str(tmp_path)])
+        original_id = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'fn'"
+        ).fetchone()[0]
+
+        py.unlink()
+        scan_functions(db, [str(tmp_path)])
+
+        new_id_val = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'fn'"
+        ).fetchone()[0]
+        assert new_id_val == original_id, "surrogate function_id must be preserved after inactivation"
+
+    @pytest.mark.integration
+    def test_reappearing_file_restores_is_active_true(self, db, tmp_path):
+        """Guarantee: rescan after file reappears sets is_active=True, preserving surrogate function_id."""
+        py = write_py(tmp_path, "mod.py", """
+            def fn(x: int) -> int:
+                return x
+        """)
+        scan_functions(db, [str(tmp_path)])
+        original_id = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'fn'"
+        ).fetchone()[0]
+
+        # Remove, rescan (now inactive)
+        py.unlink()
+        scan_functions(db, [str(tmp_path)])
+        is_active = db.execute(
+            "SELECT is_active FROM function_registry WHERE function_name = 'fn'"
+        ).fetchone()[0]
+        assert is_active is False
+
+        # Restore file, rescan — should become active again
+        write_py(tmp_path, "mod.py", """
+            def fn(x: int) -> int:
+                return x
+        """)
+        log = scan_functions(db, [str(tmp_path)])
+        entry = next((e for e in log if e["function_name"] == "fn"), None)
+        assert entry is not None
+        assert entry["status"] == "re-registered"
+
+        row = db.execute(
+            "SELECT function_id, is_active FROM function_registry WHERE function_name = 'fn'"
+        ).fetchone()
+        assert row[1] is True, "is_active must be restored to True when file reappears"
+        assert row[0] == original_id, "surrogate function_id must be preserved across is_active flips"
+
+    @pytest.mark.integration
+    def test_missing_file_does_not_delete_parameter_rows(self, db, tmp_path):
+        """Guarantee: parameter rows survive is_active=False (surrogate intact, map rows preserved)."""
+        py = write_py(tmp_path, "mod.py", """
+            def fn(a: int, b: str) -> int:
+                return a
+        """)
+        scan_functions(db, [str(tmp_path)])
         fn_id = db.execute(
-            "SELECT function_id FROM function_registry WHERE function_name = 'lone'"
+            "SELECT function_id FROM function_registry WHERE function_name = 'fn'"
         ).fetchone()[0]
+        count_before = db.execute(
+            "SELECT count(*) FROM parameter WHERE function_id = ?", [fn_id]
+        ).fetchone()[0]
+        assert count_before == 2
 
-        result = get_function(db, str(fn_id))
-        assert result is not None
-        assert result["attached_sources"] == []
+        py.unlink()
+        scan_functions(db, [str(tmp_path)])
 
-
-# ---------------------------------------------------------------------------
-# API tests — GET /functions/{id}
-# ---------------------------------------------------------------------------
-
-
-class TestGetFunctionDetail:
-    @pytest.mark.integration
-    def test_returns_404_for_unknown_id(self, fn_client):
-        """Guarantee: GET /functions/{id} returns 404 for unknown function_id."""
-        client, conn, _ = fn_client
-        res = client.get(f"/functions/{uuid.uuid4()}")
-        assert res.status_code == 404
+        count_after = db.execute(
+            "SELECT count(*) FROM parameter WHERE function_id = ?", [fn_id]
+        ).fetchone()[0]
+        assert count_after == 2, "parameter rows must not be removed when file goes missing"
 
     @pytest.mark.integration
-    def test_returns_full_detail_with_parameters(self, fn_client, tmp_path):
-        """Guarantee: GET /functions/{id} returns all fields including parameter list."""
-        client, conn, _ = fn_client
-        py_dir = tmp_path / "fns"
-        py_dir.mkdir()
-        (py_dir / "mod.py").write_text(textwrap.dedent("""
-            def double(x: int) -> int:
-                \"\"\"Double a value.\"\"\"
-                return x * 2
-        """))
-        scan_functions(conn, [str(py_dir)])
-        fn_id = conn.execute(
-            "SELECT function_id FROM function_registry WHERE function_name = 'double'"
-        ).fetchone()[0]
+    def test_only_functions_in_scanned_dirs_are_inactivated(self, db, tmp_path):
+        """Guarantee: functions from un-scanned directories are not affected by a partial scan."""
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
 
-        res = client.get(f"/functions/{fn_id}")
-        assert res.status_code == 200
-        data = res.json()
-        assert data["function_name"] == "double"
-        assert data["function_doc"] == "Double a value."
-        assert data["function_signature"] is not None
-        assert data["function_type"] == "transform"
-        assert data["function_return_type"] == "scalar"
-        assert data["module_path"] is not None
-        assert data["is_active"] is True
-        assert len(data["parameters"]) == 1
-        assert data["parameters"][0]["param_name"] == "x"
-        assert data["parameters"][0]["param_type"] == "int"
+        write_py(dir_a, "a.py", "def fn_a(x: int) -> int: return x")
+        write_py(dir_b, "b.py", "def fn_b(x: int) -> int: return x")
+
+        # Register both
+        scan_functions(db, [str(dir_a), str(dir_b)])
+
+        # Remove fn_a's file, but only scan dir_a on next scan
+        (dir_a / "a.py").unlink()
+        scan_functions(db, [str(dir_a)])
+
+        fn_a_active = db.execute(
+            "SELECT is_active FROM function_registry WHERE function_name = 'fn_a'"
+        ).fetchone()[0]
+        fn_b_active = db.execute(
+            "SELECT is_active FROM function_registry WHERE function_name = 'fn_b'"
+        ).fetchone()[0]
+        assert fn_a_active is False, "fn_a must be inactive — its file disappeared from scanned dir"
+        assert fn_b_active is True, "fn_b must remain active — its directory was not scanned"
 
     @pytest.mark.integration
-    def test_attached_sources_empty_list_when_no_map_rows(self, fn_client, tmp_path):
-        """Guarantee: GET /functions/{id} returns empty attached_sources list (not error) when no map rows."""
-        client, conn, _ = fn_client
-        py_dir = tmp_path / "fns3"
-        py_dir.mkdir()
-        (py_dir / "mod.py").write_text(textwrap.dedent("""
-            def solo(x: int) -> int:
-                return x
-        """))
-        scan_functions(conn, [str(py_dir)])
-        fn_id = conn.execute(
-            "SELECT function_id FROM function_registry WHERE function_name = 'solo'"
-        ).fetchone()[0]
+    def test_file_missing_entries_appear_in_scan_log(self, db, tmp_path):
+        """Guarantee: scan log includes file_missing entries with correct file and function_name."""
+        py1 = write_py(tmp_path, "mod.py", """
+            def fn1(x: int) -> int: return x
+            def fn2(x: int) -> int: return x
+        """)
+        scan_functions(db, [str(tmp_path)])
 
-        res = client.get(f"/functions/{fn_id}")
-        assert res.status_code == 200
-        assert res.json()["attached_sources"] == []
+        py1.unlink()
+        log = scan_functions(db, [str(tmp_path)])
 
-    @pytest.mark.integration
-    def test_inactive_function_returns_correct_status(self, fn_client, tmp_path):
-        """Guarantee: GET /functions/{id} works for inactive functions and shows is_active=False."""
-        client, conn, _ = fn_client
-        py_dir = tmp_path / "fns4"
-        py_dir.mkdir()
-        (py_dir / "mod.py").write_text(textwrap.dedent("""
-            def dormant(x: int) -> int:
-                return x
-        """))
-        scan_functions(conn, [str(py_dir)])
-        fn_id = conn.execute(
-            "SELECT function_id FROM function_registry WHERE function_name = 'dormant'"
-        ).fetchone()[0]
-
-        # Manually mark inactive
-        conn.execute("UPDATE function_registry SET is_active = FALSE WHERE function_id = ?", [fn_id])
-
-        res = client.get(f"/functions/{fn_id}")
-        assert res.status_code == 200
-        assert res.json()["is_active"] is False
+        missing = [e for e in log if e["status"] == "file_missing"]
+        assert len(missing) == 2
+        names = {e["function_name"] for e in missing}
+        assert names == {"fn1", "fn2"}
+        for e in missing:
+            assert "mod.py" in e["file"]

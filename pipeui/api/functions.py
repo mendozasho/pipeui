@@ -4,26 +4,14 @@
 """
 from __future__ import annotations
 
-from typing import Generator
-
 import duckdb
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from pipeui.duckdb import create_schema, get_connection
-from pipeui.workflow.functions import get_function, list_functions, scan_functions
+from pipeui.helpers import get_conn
+from pipeui.workflow.functions import list_functions, scan_functions
 
 router = APIRouter(prefix="/functions", tags=["functions"])
-
-
-def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
-    from pipeui.main import DB_PATH
-    conn = get_connection(str(DB_PATH))
-    create_schema(conn)
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 @router.get("")

@@ -328,9 +328,12 @@ def scan_functions(
 
     Returns a session-only scan log: list of
       {"file": str, "function_name": str, "status": str}
-    where status is "added", "re-registered", or "skipped: <reason>".
+    where status is "added", "re-registered", "skipped: <reason>", or "file_missing".
     """
     log: list[dict] = []
+
+    # Track which files we actually visit so we can detect missing files afterward.
+    seen_files: set[str] = set()
 
     for dir_str in functions_paths:
         dir_path = Path(dir_str)
@@ -343,6 +346,7 @@ def scan_functions(
             continue
 
         for py_file in sorted(dir_path.glob("*.py")):
+            seen_files.add(str(py_file))
             discovered = discover_functions_in_file(py_file)
             for item in discovered:
                 fn_name = item["function_name"]
@@ -367,6 +371,34 @@ def scan_functions(
                         "function_name": fn_name,
                         "status": f"skipped: registration error: {exc}",
                     })
+
+    # After processing all discovered files, mark functions whose module_path
+    # was in one of the scanned directories but no longer exists on disk.
+    # The registry row is never deleted — only is_active is set to false.
+    scanned_dirs = {str(Path(d).resolve()) for d in functions_paths if Path(d).is_dir()}
+    if scanned_dirs:
+        active_rows = conn.execute(
+            "SELECT function_id, function_name, module_path "
+            "FROM function_registry WHERE is_active = TRUE"
+        ).fetchall()
+        for fn_id, fn_name, module_path in active_rows:
+            if module_path is None:
+                continue
+            mp = Path(module_path)
+            # Only consider functions whose module_path lives in one of the
+            # scanned directories — skip functions from directories we didn't scan.
+            if str(mp.parent.resolve()) not in scanned_dirs:
+                continue
+            if str(mp) not in seen_files:
+                conn.execute(
+                    "UPDATE function_registry SET is_active = FALSE WHERE function_id = ?",
+                    [fn_id],
+                )
+                log.append({
+                    "file": module_path,
+                    "function_name": fn_name,
+                    "status": "file_missing",
+                })
 
     return log
 

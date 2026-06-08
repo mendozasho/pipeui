@@ -11,3 +11,4 @@ dist/
 build/
 *.db
 pipeui.config.json
+.claude/worktrees/
