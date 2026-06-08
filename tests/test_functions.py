@@ -687,3 +687,46 @@ class TestInactiveFunctions:
         assert names == {"fn1", "fn2"}
         for e in missing:
             assert "mod.py" in e["file"]
+
+
+# ---------------------------------------------------------------------------
+# GET /functions/{id} — function detail drawer (regression for #35)
+# ---------------------------------------------------------------------------
+
+
+class TestGetFunctionDetail:
+    """Guarantees for GET /functions/{id} (function detail drawer)."""
+
+    @pytest.mark.integration
+    def test_returns_404_for_unknown_id(self, fn_client):
+        """Guarantee: GET /functions/{id} returns 404 when the id does not exist."""
+        client, conn, _ = fn_client
+        res = client.get(f"/functions/{uuid.uuid4()}")
+        assert res.status_code == 404
+
+    @pytest.mark.integration
+    def test_returns_detail_for_known_function(self, fn_client, tmp_path):
+        """Guarantee: GET /functions/{id} returns full detail including parameters and attached_sources."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def add(x: int, y: int) -> int:
+                \"\"\"Add two numbers.\"\"\"
+                return x + y
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'add'"
+        ).fetchone()[0]
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["function_name"] == "add"
+        assert data["function_doc"] == "Add two numbers."
+        assert len(data["parameters"]) == 2
+        param_names = {p["param_name"] for p in data["parameters"]}
+        assert param_names == {"x", "y"}
+        assert data["attached_sources"] == []
+        assert data["is_active"] is True

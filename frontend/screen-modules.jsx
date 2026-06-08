@@ -314,10 +314,11 @@ function ScreenModules({ flash }) {
             </div>
             {/* Function cards — clickable to open drawer */}
             {fns.map(fn => (
-              <div key={fn.function_id} style={{
+              <div key={fn.function_id} onClick={() => setSelectedFunction(fn)} style={{
                 padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: 12,
                 borderBottom: "1px solid var(--border-soft)",
                 opacity: fn.is_active ? 1 : 0.5,
+                cursor: "pointer",
               }}>
                 <KindTag kind={fn.function_type} />
                 <div style={{ flex: 1, minWidth: 0 }}>
