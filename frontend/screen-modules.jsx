@@ -162,6 +162,7 @@ function SetsTab({ flash, allFunctions }) {
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editingSetId, setEditingSetId] = useState(null); // null = create mode
 
   // Editor state
   const [setName, setSetName] = useState("");
@@ -180,7 +181,28 @@ function SetsTab({ flash, allFunctions }) {
   useEffect(() => { loadSets(); }, []);
 
   function openCreate() {
+    setEditingSetId(null);
     setSetName(""); setSetDesc(""); setMembers([]); setFnFilter(""); setEditorOpen(true);
+  }
+
+  function openEdit(setId) {
+    fetch(`/function-sets/${setId}`)
+      .then(r => r.json())
+      .then(detail => {
+        setEditingSetId(setId);
+        setSetName(detail.set_name);
+        setSetDesc(detail.set_description || "");
+        // Map members to the shape the editor expects, merging with allFunctions for function_type
+        setMembers(detail.members.map(m => ({
+          function_id: m.function_id,
+          function_name: m.function_name,
+          function_type: m.function_type,
+          is_active: m.is_active,
+        })));
+        setFnFilter("");
+        setEditorOpen(true);
+      })
+      .catch(() => flash && flash("Could not load set detail.", "error"));
   }
 
   function addMember(fn) {
@@ -205,8 +227,11 @@ function SetsTab({ flash, allFunctions }) {
   function handleSave() {
     if (!setName.trim()) { flash && flash("Set name is required.", "error"); return; }
     setSaving(true);
-    fetch("/function-sets", {
-      method: "POST",
+    const isEdit = editingSetId !== null;
+    const url = isEdit ? `/function-sets/${editingSetId}` : "/function-sets";
+    const method = isEdit ? "PATCH" : "POST";
+    fetch(url, {
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         set_name: setName.trim(),
@@ -222,8 +247,9 @@ function SetsTab({ flash, allFunctions }) {
           return;
         }
         setEditorOpen(false);
+        setEditingSetId(null);
         loadSets();
-        flash && flash("Set created.", "success");
+        flash && flash(isEdit ? "Set updated." : "Set created.", "success");
       })
       .catch(() => { setSaving(false); flash && flash("Failed to save set.", "error"); });
   }
@@ -241,9 +267,9 @@ function SetsTab({ flash, allFunctions }) {
           padding: "16px 24px", borderBottom: "1px solid var(--border)",
           display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
         }}>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>New Set</div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>{editingSetId ? "Edit Set" : "New Set"}</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={() => setEditorOpen(false)}>Cancel</Btn>
+            <Btn onClick={() => { setEditorOpen(false); setEditingSetId(null); }}>Cancel</Btn>
             <Btn icon="check" onClick={handleSave} disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </Btn>
@@ -410,9 +436,10 @@ function SetsTab({ flash, allFunctions }) {
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
           {sets.map(s => (
-            <div key={s.set_id} style={{
+            <div key={s.set_id} onClick={() => openEdit(s.set_id)} style={{
               background: "var(--panel)", border: "1px solid var(--border)",
               borderRadius: "var(--radius-lg)", padding: "16px",
+              cursor: "pointer",
             }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{s.set_name}</div>

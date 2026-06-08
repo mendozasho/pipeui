@@ -125,3 +125,88 @@ class TestPostFunctionSet:
         res = client.post("/function-sets", json={"set_name": "empty", "members": []})
         assert res.status_code == 200
         assert res.json()["set"]["member_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /function-sets/{id}
+# ---------------------------------------------------------------------------
+
+class TestGetFunctionSetDetail:
+    @pytest.mark.integration
+    def test_returns_404_for_unknown_id(self, fs_client):
+        """Guarantee: GET /function-sets/{id} returns 404 for unknown id."""
+        client, conn, _ = fs_client
+        res = client.get(f"/function-sets/{uuid.uuid4()}")
+        assert res.status_code == 404
+
+    @pytest.mark.integration
+    def test_returns_full_detail_with_members(self, fs_client):
+        """Guarantee: GET /function-sets/{id} returns full detail with ordered members."""
+        client, conn, tmp_path = fs_client
+        fn_ids = _register_functions(conn, tmp_path, """
+            def fn_a(x: int) -> int: return x
+            def fn_b(x: int) -> int: return x
+        """)
+        post = client.post("/function-sets", json={
+            "set_name": "detail_set", "set_description": "desc", "members": fn_ids,
+        })
+        set_id = post.json()["set"]["set_id"]
+        res = client.get(f"/function-sets/{set_id}")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["set_name"] == "detail_set"
+        assert data["set_description"] == "desc"
+        assert len(data["members"]) == 2
+        assert [m["position"] for m in data["members"]] == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# PATCH /function-sets/{id}
+# ---------------------------------------------------------------------------
+
+class TestPatchFunctionSet:
+    @pytest.mark.integration
+    def test_returns_404_for_unknown_id(self, fs_client):
+        """Guarantee: PATCH /function-sets/{id} returns 404 for unknown id."""
+        client, conn, _ = fs_client
+        res = client.patch(f"/function-sets/{uuid.uuid4()}", json={"set_name": "x"})
+        assert res.status_code == 404
+
+    @pytest.mark.integration
+    def test_rename_succeeds(self, fs_client):
+        """Guarantee: PATCH with set_name updates the name and returns ok=true."""
+        client, conn, _ = fs_client
+        post = client.post("/function-sets", json={"set_name": "old", "members": []})
+        set_id = post.json()["set"]["set_id"]
+        res = client.patch(f"/function-sets/{set_id}", json={"set_name": "new"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["ok"] is True
+        assert data["set"]["set_name"] == "new"
+
+    @pytest.mark.integration
+    def test_rename_collision_returns_422(self, fs_client):
+        """Guarantee: PATCH renaming to a taken name returns 422 structured failure."""
+        client, conn, _ = fs_client
+        client.post("/function-sets", json={"set_name": "taken", "members": []})
+        post2 = client.post("/function-sets", json={"set_name": "mine", "members": []})
+        set_id = post2.json()["set"]["set_id"]
+        res = client.patch(f"/function-sets/{set_id}", json={"set_name": "taken"})
+        assert res.status_code == 422
+        assert res.json()["ok"] is False
+
+    @pytest.mark.integration
+    def test_replace_members_updates_pipeline(self, fs_client):
+        """Guarantee: PATCH with members replaces existing members."""
+        client, conn, tmp_path = fs_client
+        fn_ids = _register_functions(conn, tmp_path, """
+            def fn_a(x: int) -> int: return x
+            def fn_b(x: int) -> int: return x
+        """)
+        post = client.post("/function-sets", json={"set_name": "pipeline", "members": [fn_ids[0]]})
+        set_id = post.json()["set"]["set_id"]
+        res = client.patch(f"/function-sets/{set_id}", json={"members": [fn_ids[1]]})
+        assert res.status_code == 200
+        members = res.json()["set"]["members"]
+        assert len(members) == 1
+        assert members[0]["function_id"] == fn_ids[1]
