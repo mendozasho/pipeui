@@ -51,9 +51,9 @@ Derived from `function_return_type`. `validation` when return is `boolean` or `p
 
 ---
 
-## functions_path
+## functions_paths
 
-A setting in `pipeui.config.json` (alongside `db_path`) that points to the folder on the user's machine where their `.py` function modules live. The app does not copy or upload files — `module_path` in `function_registry` stores the user's actual file path.
+A list of folder paths in `pipeui.config.json` (alongside `db_path`). Each entry points to a directory on the user's machine containing `.py` function modules. The app does not copy or upload files — `module_path` in `function_registry` stores the user's actual file path. The Settings screen has an add/remove list UI for managing the paths. All paths are scanned together on rescan.
 
 ## function scanning (rescan model)
 
