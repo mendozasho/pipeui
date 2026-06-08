@@ -96,19 +96,28 @@ def create_source(
                 column_name=col["column_name"],
                 column_type=col["column_type"],
             )
-            conn.execute(
-                """
-                INSERT INTO column_registry
-                    (column_id, content_hash_id, column_name, column_type)
-                VALUES (?, ?, ?, ?)
-                """,
-                [
-                    col_entry.column_id,
-                    col_entry.content_hash_id,
-                    col_entry.column_name,
-                    col_entry.column_type,
-                ],
-            )
+            # column_registry is shared: same (name, type) → same content_hash_id.
+            # Reuse the existing column_id if this definition is already registered.
+            existing_col = conn.execute(
+                "SELECT column_id FROM column_registry WHERE content_hash_id = ?",
+                [col_entry.content_hash_id],
+            ).fetchone()
+            if existing_col:
+                col_entry.column_id = existing_col[0]
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO column_registry
+                        (column_id, content_hash_id, column_name, column_type)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        col_entry.column_id,
+                        col_entry.content_hash_id,
+                        col_entry.column_name,
+                        col_entry.column_type,
+                    ],
+                )
 
             # Map row written directly — no pydantic object (CLAUDE.md Architecture)
             map_id = content_hash_id(

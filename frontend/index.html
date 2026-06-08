@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PipeUI</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* backgrounds */
+      --bg:       #0e0e10;
+      --panel:    #141416;
+      --panel-2:  #1a1a1d;
+      --panel-3:  #202024;
+
+      /* borders */
+      --border:      rgba(255,255,255,0.08);
+      --border-soft: rgba(255,255,255,0.04);
+      --hover:       rgba(255,255,255,0.06);
+
+      /* text */
+      --text:   #f0f0f2;
+      --text-2: #a0a0aa;
+      --text-3: #6a6a74;
+      --text-4: #3a3a42;
+
+      /* semantic */
+      --good: #34d399;
+      --bad:  #f87171;
+      --warn: #fbbf24;
+      --run:  #60a5fa;
+
+      /* accent (runtime-overridable via tweaks panel) */
+      --accent:      #7c6cf5;
+      --accent-soft: rgba(124,108,245,0.12);
+      --accent-line: rgba(124,108,245,0.4);
+      --accent-ink:  #fff;
+
+      /* function kinds */
+      --check:    #60a5fa;
+      --check-bg: rgba(96,165,250,0.1);
+      --xform:    #fbbf24;
+      --xform-bg: rgba(251,191,36,0.1);
+
+      /* spacing density (overridden by .compact / .comfy on body) */
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+
+      --radius:   6px;
+      --radius-lg: 10px;
+
+      font-family: 'Geist', system-ui, sans-serif;
+      font-size: 14px;
+    }
+
+    body.compact { --sp-1:2px; --sp-2:5px; --sp-3:8px; --sp-4:12px; --sp-5:14px; --sp-6:18px; }
+    body.comfy   { --sp-1:6px; --sp-2:10px; --sp-3:16px; --sp-4:20px; --sp-5:26px; --sp-6:32px; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    #root { display: contents; }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    input, button, select, textarea { font: inherit; }
+
+    a { color: inherit; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-type="module" src="data.jsx"></script>
+  <script type="text/babel" data-type="module" src="ui.jsx"></script>
+  <script type="text/babel" data-type="module" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" data-type="module" src="screen-data.jsx"></script>
+  <script type="text/babel" data-type="module" src="screen-modules.jsx"></script>
+  <script type="text/babel" data-type="module" src="screen-builder.jsx"></script>
+  <script type="text/babel" data-type="module" src="app.jsx"></script>
+</body>
+</html>
