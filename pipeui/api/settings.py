@@ -57,6 +57,23 @@ def patch_settings(patch: SettingsPatch):
     # Use model_fields_set to include only explicitly-provided fields (handles empty list for functions_paths)
     updates = {k: v for k, v in patch.model_dump().items() if k in patch.model_fields_set}
     restart_required = "db_path" in updates and updates["db_path"] != current.db_path
+    paths_changed = "functions_paths" in updates and updates["functions_paths"] != current.functions_paths
     updated = current.model_copy(update=updates)
     save_settings(updated)
-    return JSONResponse({"ok": True, "settings": updated.model_dump(), "restart_required": restart_required})
+
+    response: dict = {"ok": True, "settings": updated.model_dump(), "restart_required": restart_required}
+
+    if paths_changed:
+        # Trigger immediate rescan when functions_paths changes (CONTEXT.md § function scanning)
+        from pipeui.main import DB_PATH
+        from pipeui.duckdb import create_schema, get_connection
+        from pipeui.workflow.functions import scan_functions
+        conn = get_connection(str(DB_PATH))
+        create_schema(conn)
+        try:
+            scan_log = scan_functions(conn, updated.functions_paths)
+        finally:
+            conn.close()
+        response["scan_log"] = scan_log
+
+    return JSONResponse(response)
