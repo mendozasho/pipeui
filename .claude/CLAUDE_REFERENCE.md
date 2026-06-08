@@ -579,64 +579,135 @@ code.
 
 ---
 
-## §14 — CLI visual layer
+## §14 — Frontend & API layer
 
-*Reserved — no CLI exists yet (mirrors CLAUDE.md → CLI reference placeholder).*
-Commands and the visual-layer implementation detail will be documented here as
-they are built.
+*Implements: CLAUDE.md → Frontend & API. Design intent: design.md → Workflows
+and Features (the three screens).*
+
+### Design system
+
+The frontend is a self-contained React 18 app with no build step. It uses CDN
+React + Babel standalone so the only toolchain requirement is a running FastAPI
+server. Key files at `frontend/`:
+
+| file | role |
+| --- | --- |
+| `index.html` | CSS design tokens, font imports (Geist / Geist Mono), script tags |
+| `app.jsx` | App shell — navigation (sidebar/rail/tabs), global state, flash notifications, tweaks panel |
+| `data.jsx` | Mock data (SOURCES, REPORTS, MODULES, FUNCTION_SETS) — replaced per phase with real `fetch()` calls |
+| `ui.jsx` | Shared primitives: `Icon`, `Btn`, `KindTag`, `StatusPill`, `SourceBadge`, `DataTable` |
+| `tweaks-panel.jsx` | Dev-time tweak panel (accent colour, nav layout, density, builder interaction mode) |
+| `screen-data.jsx` | Data screen |
+| `screen-modules.jsx` | Functions screen |
+| `screen-builder.jsx` | Report Builder screen |
+
+**CSS tokens (defined in `index.html` `:root`):**
+- Backgrounds: `--bg` `--panel` `--panel-2` `--panel-3`
+- Borders: `--border` `--border-soft` `--hover`
+- Text: `--text` `--text-2` `--text-3` `--text-4`
+- Semantic: `--good` `--bad` `--warn` `--run`
+- Accent (runtime-overridable): `--accent` `--accent-soft` `--accent-line` `--accent-ink`
+- Function kinds: `--check` / `--check-bg` (blue) · `--xform` / `--xform-bg` (amber)
+- Density: `compact` / `regular` / `comfy` classes override spacing tokens
+
+### API module (`src/pipeui/api/`)
+
+FastAPI route modules — one file per screen domain. Route modules call
+`workflow/` functions only; they never reach into `schema/`, `validation/`, or
+`sql_user_table/` directly (CLAUDE.md → Architecture module boundaries).
+
+| module | routes | phase |
+| --- | --- | --- |
+| `sources.py` | `GET /sources` · `POST /sources` · `POST /sources/{id}/ingest` · `GET /sources/{id}` · `PATCH /sources/{id}/columns/{col_id}` | A, B, C |
+| `functions.py` | `GET /functions` · `POST /functions` · `GET /functions/{id}` | D |
+| `pipelines.py` | `GET /pipelines/{source_id}` · `POST /pipelines/{source_id}/steps` · `DELETE /pipelines/{source_id}/steps/{step_id}` · `POST /pipelines/{source_id}/run` | E |
+
+FastAPI also mounts `frontend/` as a `StaticFiles` directory so a single
+`uvicorn src.pipeui.api:app` process serves both the UI and the JSON endpoints.
+
+### Screen-to-route wiring (per phase)
+
+| Phase | Screen | Replaces mock | Real endpoints used |
+| --- | --- | --- | --- |
+| A | Data | `REPORTS` list + source badges | `GET /sources` · `POST /sources` |
+| B | Data | Row counts, status pills, skip report | `POST /sources/{id}/ingest` · `GET /sources/{id}` |
+| C | Data drawer | Schema type dropdowns + castability modal | `PATCH /sources/{id}/columns/{col_id}` |
+| D | Functions | Module list + function cards | `GET /functions` · `POST /functions` |
+| E | Builder | Reports rail, function palette, pipeline steps, run results | all `pipelines.py` routes |
 
 ---
 
 ## §15 — Package structure
 
-Phase 0–1 code now exists. Current layout (boundaries in CLAUDE.md →
-Architecture):
+The repository uses a `src`-style layout. The Python package lives under `src/`
+and the React frontend is a peer directory at the repo root (CLAUDE.md →
+Architecture). Current layout after Phases 0–1, with planned additions annotated:
 
 ```
-pipeui/
-  __init__.py
-  ids.py               # surrogate new_id() (uuid4) + two-level uuid5 content_hash_id (§2)
-                       #   [foundational; being relocated here from validation/ids.py — REFACTOR_PLAN.md]
-  duckdb.py            # get_connection, create_schema, DuckDB-native type inference, db-path resolution
-  helpers.py           # filename → regex pattern inference (§6.1)
-  schema/
+src/
+  pipeui/
     __init__.py
-    constants.py       # DUCKDB_TO_PYTHON / PYTHON_TO_DUCKDB maps, IngestionMethod enum
-    queries.py         # DDL for the 4 registries + 3 map tables (§1)
-  validation/
-    __init__.py
-    source.py          # SourceRegistryEntry / SourceRegistryUpdate (pydantic v2, §3)
-    column.py          # ColumnRegistryEntry / ColumnRegistryUpdate (pydantic v2, §3)
-    fails.py           # FailedRegistryEntry / FailedFunctionEntry stacks (§4)
-  workflow/
-    __init__.py
-    staging.py         # CreateFlowCache — transient temp-table staging (§5)
-    create.py          # create_source() — the one-transaction source-create flow (§6)
+    ids.py               # surrogate new_id() (uuid4) + two-level uuid5 content_hash_id (§2)
+    duckdb.py            # get_connection, create_schema, DuckDB-native type inference, db-path resolution
+    helpers.py           # filename → regex pattern inference (§6.1)
+    schema/
+      __init__.py
+      constants.py       # DUCKDB_TO_PYTHON / PYTHON_TO_DUCKDB maps, IngestionMethod enum
+      queries.py         # DDL for the 4 registries + 3 map tables (§1)
+    validation/
+      __init__.py
+      source.py          # SourceRegistryEntry / SourceRegistryUpdate (pydantic v2, §3)
+      column.py          # ColumnRegistryEntry / ColumnRegistryUpdate (pydantic v2, §3)
+      fails.py           # FailedRegistryEntry / FailedFunctionEntry stacks (§4)
+    workflow/
+      __init__.py
+      staging.py         # CreateFlowCache — transient temp-table staging (§5)
+      create.py          # create_source() — one-transaction source-create flow (§6)
+      ingestion.py       # [Phase B] staged load + upsert/append/skip (§9)
+      migration.py       # [Phase C] TRY_CAST pre-check + recreate-and-copy + atomic swap (§7)
+    sql_user_table/      # [Phase B] JIT per-source DDL modules — one per registered source (§8)
+      __init__.py
+      # <source>_source_sql.py files generated here at ingestion time
+    api/                 # [Phase A] FastAPI routes — one module per screen domain (§14)
+      __init__.py
+      sources.py         # /sources routes (Phase A + B + C)
+      functions.py       # /functions routes (Phase D)
+      pipelines.py       # /pipelines routes (Phase E)
+frontend/                # React UI — no build step (CDN React 18 + Babel standalone) (§14)
+  index.html             # CSS design tokens, font imports, script tags
+  app.jsx                # Shell: navigation, global state, flash notifications
+  data.jsx               # Mock data — replaced per phase with real fetch() calls
+  ui.jsx                 # Shared primitives: Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable
+  tweaks-panel.jsx       # Dev-time accent/density/layout tweak panel
+  screen-data.jsx        # Data screen (Phase A + B + C)
+  screen-modules.jsx     # Functions screen (Phase D)
+  screen-builder.jsx     # Report Builder screen (Phase E)
 tests/
   __init__.py
-  conftest.py          # db / db_file / patch_new_id fixtures + make_registered_source seeding helper
-  test_ids.py          # §2
-  test_validation.py   # §3, §4
-  test_staging.py      # §5
-  test_schema.py       # §1
-  test_source_create.py# §6
+  conftest.py            # db / db_file / patch_new_id fixtures + make_registered_source seeding helper
+  test_ids.py            # §2
+  test_validation.py     # §3, §4
+  test_staging.py        # §5
+  test_schema.py         # §1
+  test_source_create.py  # §6
+  test_ingestion.py      # [Phase B] §9
+  test_migration.py      # [Phase C] §7
+pyproject.toml
 ```
 
 **Layer boundaries:**
 - `ids.py` is foundational — imported by both `validation/` and `workflow/`; it
-  holds no DB handle and depends on nothing else in the package. (This is why it
-  is being lifted out of `validation/` — REFACTOR_PLAN.md.)
+  holds no DB handle and depends on nothing else in the package.
 - `schema/` + `duckdb.py` are the DB layer (DDL, type maps, connection,
   inference). No validation or workflow logic here.
 - `validation/` holds the pydantic `*Entry`/`*Update` objects and rejection
   stacks. These **do not read other table rows** (§3 boundary).
 - `workflow/` owns the DuckDB connection and transactions. The atomic write sets
-  (§6) and the edit-collision check (§2/§3) live here. Map rows are written
-  directly from here; registry rows go through the `validation/` objects.
-
-**Still to come:** the `sql_user_table/` folder of per-source modules named
-`<source>_source_sql.py` (§8); the function track package(s) (§10–§12); CLI
-(§14). Layout for those is undecided and must not be invented here.
+  and the edit-collision check live here. Map rows are written directly from here;
+  registry rows go through the `validation/` objects.
+- `api/` calls `workflow/` functions only — never `schema/`, `validation/`, or
+  `sql_user_table/` directly (CLAUDE.md → Architecture).
+- `frontend/` communicates with the backend through `api/` HTTP endpoints only.
 
 ---
 
@@ -655,10 +726,17 @@ tests/
   validation objects, the create-flow staging cache, and the one-transaction
   `create_source` flow — under the new `schema/` / `validation/` / `workflow/`
   package layout (§15). Left some debt (now in REFACTOR_PLAN.md).
-- **Docs-sync session (this one)** — reconciled the docs to the implemented code
-  and the reorg, and pinned the open decisions surfaced by the diff: ingestion
-  methods = `upsert`/`append`/`skip` (semantics §9); `column_type` uninferable
-  fallback = `VARCHAR` (not `var`); `content_hash_id` edit-collision = **reject**
-  at the write boundary (§2/§3); `function_signature` **retained and defined** as
-  the canonical `param_name: type` signature for keyword binding (§1, §12).
-  Opened REFACTOR_PLAN.md for the code debt the reorg left.
+- **Docs-sync session** — reconciled the docs to the implemented code and the
+  reorg, and pinned the open decisions surfaced by the diff: ingestion methods =
+  `upsert`/`append`/`skip` (semantics §9); `column_type` uninferable fallback =
+  `VARCHAR` (not `var`); `content_hash_id` edit-collision = **reject** at the
+  write boundary (§2/§3); `function_signature` **retained and defined** as the
+  canonical `param_name: type` signature for keyword binding (§1, §12). Opened
+  REFACTOR_PLAN.md for the code debt the reorg left.
+- **Frontend & phase-restructure session (2026-06-08)** — introduced the React
+  frontend design (`frontend/`), adopted the `src/`-style repository layout,
+  replaced the CLI placeholder in §14 with the full frontend/API implementation
+  spec, updated §15 to the `src/pipeui/` layout with `api/` and `sql_user_table/`
+  annotations, and restructured ROADMAP.md from horizontal phases (backend-then-
+  frontend) into vertical phases (A–F), each delivering backend + API + frontend
+  together.

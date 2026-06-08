@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-07
+updated: 2026-06-08
 purpose: >
   Project operating document — "what to build and why." Read first for every
   conversation. Design decisions and rationale live here; implementation
@@ -33,7 +33,7 @@ the matching reference section first. §13 is fixed as Testing Conventions by th
 | Function classification mechanics (`function_class` / `function_type` / `function_return_type` derivation) | §11 |
 | `alias_map` binding & multi-select execution | §12 |
 | Testing conventions (behavioral-guarantee pattern, mocking strategy) | §13 |
-| CLI visual layer | §14 |
+| Frontend & API layer | §14 |
 | Package structure | §15 |
 | Completed work history | §16 |
 
@@ -79,6 +79,23 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
   `function_registry`, `column_registry`, `parameter`) describe sources; the
   per-source data ("instance") tables hold the user's actual rows and are built
   JIT from `source_registry` + `column_registry` at ingestion.
+- **Repository layout (`src`-style).** The Python package lives under `src/` so
+  it is never importable without an install step (prevents accidental shadow
+  imports). The frontend is a peer directory at the repo root, not inside the
+  package:
+  ```
+  src/pipeui/     ← installable Python package (backend + API)
+  frontend/       ← React app (no build step; CDN React + Babel standalone)
+  tests/          ← pytest suite
+  pyproject.toml
+  ```
+- **`api/` lives inside `src/pipeui/`.** FastAPI route modules (`sources.py`,
+  `functions.py`, `pipelines.py`) are part of the `pipeui` package, not a
+  peer directory. FastAPI serves both the `frontend/` static files and the JSON
+  endpoints from a single `uvicorn` process.
+- **`frontend/` replaces the CLI.** The application is a browser-based React UI,
+  not a command-line tool. §14 documents the frontend/API layer; the old CLI
+  placeholder is retired.
 - **Module boundaries (load-bearing, do not cross):**
   - `source_registry` knows about its instance table; the instance table must not
     know about the registry.
@@ -93,6 +110,11 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
     Anything that needs to look at the table (e.g. the collision check in
     Principle 1) lives in the workflow layer, which owns the connection and the
     transaction.
+  - `api/` route modules call `workflow/` functions; they do not touch `schema/`,
+    `validation/`, or `sql_user_table/` directly. The workflow layer is the sole
+    owner of the DuckDB connection and transactions.
+  - `frontend/` communicates with the backend exclusively through the `api/`
+    HTTP endpoints — it never imports Python modules.
 
 ---
 
@@ -206,8 +228,21 @@ decision.
 
 ---
 
-## CLI reference
+## Frontend & API
 
-*Placeholder — no CLI exists yet.* Commands and the CLI visual layer will be
-documented here as they are built; visual-layer implementation detail will live
-in CLAUDE_REFERENCE.md §14.
+The application is a browser-based React UI served by a FastAPI backend. There
+is no CLI. Implementation detail (design system, route map, screen-to-endpoint
+wiring) lives in CLAUDE_REFERENCE.md §14.
+
+**Three screens** (matching the frontend design):
+- **Data** — import files / connect sources, browse registered reports, inspect
+  schema and preview rows, edit column types.
+- **Functions** — upload `.py` modules, browse registered functions with
+  signature / doc / params.
+- **Report Builder** — select a report, assemble a pipeline of functions via
+  drag-and-drop, map columns to parameters, run, export.
+
+**Vertical delivery order (Phases A–F in ROADMAP.md).** Each phase ships all
+three layers together — backend workflow + API route + frontend feature wired to
+that route — so the app is runnable and testable after every phase. `data.jsx`
+mock data shrinks one slice per phase as real `fetch()` calls replace it.
