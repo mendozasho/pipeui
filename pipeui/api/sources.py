@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Generator
 
 import duckdb
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from pipeui.duckdb import create_schema, get_connection
@@ -14,13 +14,11 @@ from pipeui.workflow.create import create_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-# Hardcoded for now; will become an app setting when that feature is wired up.
-DB_PATH = Path("pipeui.db")
-
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 
 
 def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    from pipeui.main import DB_PATH
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
     try:

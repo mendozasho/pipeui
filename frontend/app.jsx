@@ -1,10 +1,11 @@
-// App shell — navigation rail, global state, flash notifications, tweaks panel
+// App shell — navigation rail, global state, flash notifications
 const { useState, useCallback, useRef, useEffect } = React;
 
 const NAV = [
-  { id: "data",    label: "Data",    icon: "data" },
-  { id: "modules", label: "Functions", icon: "modules" },
-  { id: "builder", label: "Builder", icon: "builder" },
+  { id: "data",     label: "Data",      icon: "data" },
+  { id: "modules",  label: "Functions", icon: "modules" },
+  { id: "builder",  label: "Builder",   icon: "builder" },
+  { id: "settings", label: "Settings",  icon: "settings" },
 ];
 
 function NavRail({ active, onChange }) {
@@ -36,16 +37,6 @@ function NavRail({ active, onChange }) {
           <Icon name={item.icon} size={18} />
         </button>
       ))}
-
-      <div style={{ flex: 1 }} />
-      <button title="Tweaks" id="tweaks-btn" style={{
-        width: 44, height: 44, borderRadius: "var(--radius)", cursor: "pointer",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "transparent", border: "1px solid transparent", color: "var(--text-4)",
-        transition: "all .15s",
-      }}>
-        <Icon name="settings" size={16} />
-      </button>
     </nav>
   );
 }
@@ -54,20 +45,13 @@ let _flashId = 0;
 
 function App() {
   const { Flash } = window.__UI__;
-  const TweaksPanel = window.__TweaksPanel__;
   const ScreenData = window.__ScreenData__;
   const ScreenModules = window.__ScreenModules__;
   const ScreenBuilder = window.__ScreenBuilder__;
+  const ScreenSettings = window.__ScreenSettings__;
 
   const [screen, setScreen] = useState("data");
   const [flashes, setFlashes] = useState([]);
-  const [tweaksOpen, setTweaksOpen] = useState(false);
-
-  // Wire tweaks button after mount
-  useEffect(() => {
-    const btn = document.getElementById("tweaks-btn");
-    if (btn) btn.onclick = () => setTweaksOpen(o => !o);
-  });
 
   const flash = useCallback((text, kind = "ok") => {
     const id = ++_flashId;
@@ -82,13 +66,13 @@ function App() {
       <NavRail active={screen} onChange={setScreen} />
 
       <main style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
-        {screen === "data"    && <ScreenData flash={flash} />}
-        {screen === "modules" && <ScreenModules flash={flash} />}
-        {screen === "builder" && <ScreenBuilder flash={flash} />}
+        {screen === "data"     && <ScreenData flash={flash} />}
+        {screen === "modules"  && <ScreenModules flash={flash} />}
+        {screen === "builder"  && <ScreenBuilder flash={flash} />}
+        {screen === "settings" && <ScreenSettings flash={flash} />}
       </main>
 
       <Flash messages={flashes} onDismiss={dismissFlash} />
-      <TweaksPanel open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
     </>
   );
 }
