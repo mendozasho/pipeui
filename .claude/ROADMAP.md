@@ -30,9 +30,9 @@ purpose: >
 - **Reorg/fix debt → REFACTOR_PLAN.md.** Move/rename/unify items left by the
   implementation+reorg session live there, not here.
 
-Units are ordered by dependency. The **source track** (Phase 1–2) and the
-**function track** (Phase 3) are largely independent after Phase 0 and can run in
-parallel; they converge at function-attach.
+Units are ordered by dependency. Phases 0–1 are completed (all items checked).
+Phases A–F are the active vertical delivery plan — each ships backend + API +
+frontend together so the app is runnable after every phase.
 
 ---
 
@@ -42,13 +42,13 @@ These are CLAUDE.md → Active Deferred Work items. Each one blocks clean
 implementation of the unit(s) noted; resolve before (or at the start of) that
 unit rather than encoding an answer in code.
 
-- **`column_type` enum** — concrete allowed set. Gates `db-schema` (final form),
-  `source-create` (inference + fallback), `column-migration`. (The *fallback* is
-  resolved → `VARCHAR`; only the full allowed set is still open.)
+- **`column_type` enum** — concrete allowed set. Gates `feat/column-migration`
+  (Phase C). (The *fallback* is resolved → `VARCHAR`; only the full allowed set
+  is still open.)
 - **PK uniqueness enforcement** — whether to validate the chosen/assumed PK is
-  unique. Gates `source-create`.
+  unique. Relevant to Phase A (`POST /sources`) if enforcement is added.
 - **Return-type vocabulary** (`vector`/`matrix` vs `pd.series`/`pd.dataframe`) —
-  gates the final form of `function-registration` (§11 is currently written
+  gates `feat/function-registration` (Phase D; §11 is currently written
   vocabulary-agnostic).
 
 *Resolved since the last revision (no longer gating):*
