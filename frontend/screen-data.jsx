@@ -1,4 +1,4 @@
-// Data screen — Phase B: ingestion → POST /sources/{id}/ingest, drawer → GET /sources/{id}
+// Data screen — Phase B + B2: ingestion, drawer, data preview
 const { useState, useRef, useEffect, useCallback } = React;
 
 function DropZone({ onFiles }) {
@@ -115,19 +115,24 @@ const inputStyle = {
 function IngestModal({ source, onConfirm, onCancel }) {
   const { Btn, Icon } = window.__UI__;
   const [file, setFile] = useState(null);
-  const [method, setMethod] = useState(source.ingestion_method);
   const inputRef = useRef(null);
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 300,
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{
-        background: "var(--panel)", border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)", padding: 24, width: 400,
-        boxShadow: "0 16px 48px rgba(0,0,0,.6)",
-      }}>
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 300,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--panel)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)", padding: 24, width: 400,
+          boxShadow: "0 16px 48px rgba(0,0,0,.6)",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
           <Icon name="upload" size={18} style={{ color: "var(--text-3)" }} />
           <span style={{ fontWeight: 600, fontSize: 15 }}>Ingest into "{source.source_name}"</span>
@@ -147,18 +152,11 @@ function IngestModal({ source, onConfirm, onCancel }) {
             <input ref={inputRef} type="file" accept=".csv,.xlsx" style={{ display: "none" }}
               onChange={e => { if (e.target.files[0]) setFile(e.target.files[0]); e.target.value = ""; }} />
           </Field>
-          <Field label="Ingestion method">
-            <select value={method} onChange={e => setMethod(e.target.value)} style={inputStyle}>
-              <option value="upsert">Upsert</option>
-              <option value="append">Append</option>
-              <option value="skip">Skip duplicates</option>
-            </select>
-          </Field>
         </div>
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 24 }}>
           <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
-          <Btn variant="primary" onClick={() => onConfirm({ file, method })} disabled={!file}>
+          <Btn variant="primary" onClick={() => onConfirm({ file })} disabled={!file}>
             Ingest
           </Btn>
         </div>
@@ -186,12 +184,11 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
 
   useEffect(() => { loadDetail(); setSkipReport(null); }, [sourceId]);
 
-  async function handleIngest({ file, method }) {
+  async function handleIngest({ file }) {
     setIngesting(true);
     setShowIngest(false);
     const fd = new FormData();
     fd.append("file", file);
-    if (method) fd.append("ingestion_method", method);
     try {
       const res = await fetch(`/sources/${sourceId}/ingest`, { method: "POST", body: fd });
       const data = await res.json();

@@ -394,6 +394,15 @@ Ingested rows are retained for summaries and deliverables.
 committed state.** Reverting to an *earlier* ingestion (time-travel) is out of
 scope — there is no per-ingestion history.
 
+**Row preview (`get_source_rows`, Phase B2).** A read-only helper that queries
+the JIT instance table directly and returns up to `limit` rows as plain dicts
+(column names from the table, values JSON-serialisable). Returns an empty list
+when the table does not yet exist (source registered but not ingested). No
+transaction needed — read-only. The API exposes this as `GET /sources/{id}/rows?limit=200`.
+Future expansion: add `?search=`, `?col=`, `?min=`, `?max=` query params and a
+separate health-check endpoint (null counts, type distribution, duplicate PK
+check) without architectural changes.
+
 ---
 
 ## §10 — Function objects & execution model
@@ -644,7 +653,7 @@ FastAPI route modules — one file per screen domain. Route modules call
 
 | module | routes | phase |
 | --- | --- | --- |
-| `sources.py` | `GET /sources` · `POST /sources` · `POST /sources/{id}/ingest` · `GET /sources/{id}` · `PATCH /sources/{id}/columns/{col_id}` | A, B, C |
+| `sources.py` | `GET /sources` · `POST /sources` · `POST /sources/{id}/ingest` · `GET /sources/{id}` · `GET /sources/{id}/rows` · `PATCH /sources/{id}/columns/{col_id}` | A, B, B2, C |
 | `settings.py` | `GET /settings` · `PATCH /settings` | A2 |
 | `functions.py` | `GET /functions` · `POST /functions` · `GET /functions/{id}` | D |
 | `pipelines.py` | `GET /pipelines/{source_id}` · `POST /pipelines/{source_id}/steps` · `DELETE /pipelines/{source_id}/steps/{step_id}` · `POST /pipelines/{source_id}/run` | E |
