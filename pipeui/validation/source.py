@@ -30,7 +30,7 @@ class SourceRegistryEntry(BaseModel):
     :ivar date_registered: The date the source was registered, defaults to today's date.
     :type date_registered: datetime.date
     :ivar ingestion_method: The ingestion method of the source. Valid values are
-        "upsert" or "skip".
+        "upsert", "append", or "skip".
     :type ingestion_method: str
     :ivar pattern: The optional pattern associated with the source.
     :type pattern: str | None
@@ -55,8 +55,8 @@ class SourceRegistryEntry(BaseModel):
     @field_validator("ingestion_method")
     @classmethod
     def _validate_ingestion_method(cls, v: str) -> str:
-        if v not in ("upsert", "skip"):
-            raise ValueError(f"ingestion_method must be 'upsert' or 'skip', got {v!r}")
+        if v not in ("upsert", "append", "skip"):
+            raise ValueError(f"ingestion_method must be 'upsert', 'append', or 'skip', got {v!r}")
         return v
 
     @model_validator(mode="after")

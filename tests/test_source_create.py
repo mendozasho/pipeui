@@ -7,8 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
+import datetime
+
 from pipeui.helpers import infer_pattern
-from pipeui.workflow.create import create_source
+from pipeui.ids import content_hash_id as _ch
+from pipeui.workflow.create import create_source, update_source
 
 
 def make_csv(tmp_path, name, columns, rows):
@@ -171,15 +174,63 @@ def test_source_create_column_type_inference(db, tmp_path):
 
 @pytest.mark.integration
 def test_source_create_var_fallback(db, tmp_path):
-    """§6 step 1.3: unrecognized DuckDB type maps to 'var'."""
+    """§6 step 1.3: unrecognized DuckDB type falls back to 'VARCHAR'."""
     path = make_csv(tmp_path, "report.csv", ["id"], [[1]])
 
     # Patch infer_column_types to simulate an unrecognized type coming back from DuckDB
-    with patch("pipeui.workflow.create.infer_column_types", return_value=[("id", "var")]):
+    with patch("pipeui.workflow.create.infer_column_types", return_value=[("id", "UNRECOGNIZED")]):
         source_id, failed = create_source(db, path, "var_source", "id")
 
     assert not failed.has_failures()
     col_type = db.execute(
         "SELECT column_type FROM column_registry WHERE column_name = 'id'"
     ).fetchone()[0]
-    assert col_type == "var"
+    assert col_type == "VARCHAR"
+
+
+def _insert_source(conn, source_name: str, primary_key: str = "id") -> uuid.UUID:
+    """Insert a bare source_registry row for collision/update tests."""
+    sid = uuid.uuid4()
+    ch = _ch("source_registry", source_name, primary_key, "upsert")
+    conn.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [sid, ch, source_name, datetime.date.today(), "upsert", primary_key],
+    )
+    return sid
+
+
+@pytest.mark.integration
+def test_update_source_collision_routes_to_failed(db):
+    """§1 edit-collision rule: renaming a source onto an existing name surfaces as FailedRegistryEntry."""
+    # Insert two sources directly to avoid the column_registry UNIQUE issue in create_source
+    source_id_a = _insert_source(db, "alpha")
+    source_id_b = _insert_source(db, "beta")
+
+    # Rename beta → alpha; same (source_name, primary_key, ingestion_method) → hash collision
+    result_id, failed = update_source(db, source_id_b, source_name="alpha")
+
+    assert result_id is None
+    assert failed.has_failures()
+    _, reason = failed.failures[0]
+    assert "collision" in reason
+
+    # beta row must remain unchanged
+    row = db.execute(
+        "SELECT source_name FROM source_registry WHERE source_id = ?", [source_id_b]
+    ).fetchone()
+    assert row[0] == "beta"
+
+
+@pytest.mark.integration
+def test_update_source_applies_non_colliding_edit(db, tmp_path):
+    """§1: a non-colliding edit commits and returns the source_id."""
+    source_id = _insert_source(db, "original")
+
+    result_id, failed = update_source(db, source_id, source_name="renamed")
+
+    assert not failed.has_failures()
+    assert result_id == source_id
+    row = db.execute(
+        "SELECT source_name FROM source_registry WHERE source_id = ?", [source_id]
+    ).fetchone()
+    assert row[0] == "renamed"

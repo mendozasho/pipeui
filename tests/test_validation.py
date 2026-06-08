@@ -134,21 +134,11 @@ def test_failed_registry_entry_accumulates_multiple_failures():
 
 
 @pytest.mark.unit
-def test_content_hash_id_collision_on_edit_surfaces_as_failure():
-    # Resolved gating decision: recompute landing on existing hash → FailedRegistryEntry
-    # with reason containing "collision"
+def test_update_produces_matching_hash_on_colliding_rename():
+    # §1 model guarantee: from_existing recomputes hash so a rename onto an existing name
+    # produces the same hash — the workflow layer then detects and rejects the collision.
     entry_a = _make_source(source_name="alpha")
     entry_b = _make_source(source_name="beta")
 
-    # Simulate: update entry_b's source_name to "alpha" so its new hash == entry_a's hash
-    new_hash = content_hash_id("source_registry", "alpha", "id", "upsert")
-    assert new_hash == entry_a.content_hash_id  # confirm the collision would occur
-
-    stack = FailedRegistryEntry()
     update = SourceRegistryUpdate.from_existing(entry_b, source_name="alpha")
-    if update.content_hash_id == entry_a.content_hash_id:
-        stack.add(entry_b, "content_hash_id collision")
-
-    assert stack.has_failures()
-    _, reason = stack.failures[0]
-    assert "collision" in reason
+    assert update.content_hash_id == entry_a.content_hash_id
