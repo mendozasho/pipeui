@@ -1,13 +1,14 @@
 ---
 created: 2026-06-06
-updated: 2026-06-07
+updated: 2026-06-08
 purpose: >
   Build order for the codebase — the sequence of units of work that turn the
   design docs into code. Companion to design.md (intent), CLAUDE.md (what/why +
   principles), and CLAUDE_REFERENCE.md (how, by section). Phases 0–1 are
-  implemented (see checkmarks); this file tracks the remaining build. Reorg /
-  fix debt is tracked separately in REFACTOR_PLAN.md. Living document: check off
-  or delete units as they are completed.
+  implemented (see checkmarks); Phases A–F are the vertical delivery plan (each
+  ships backend + API + frontend together). Reorg / fix debt is tracked
+  separately in REFACTOR_PLAN.md. Living document: check off or delete units as
+  they are completed.
 ---
 
 # ROADMAP.md
@@ -123,67 +124,129 @@ the rest.
 
 ---
 
-## Phase 2 — Instance tables & data
+## Vertical Phases — all three layers per phase
 
-- [ ] **`feat/jit-instance-table`** — §8. Build the per-source instance table JIT
-  from `source_registry` + `column_registry`; the `sql_user_table/` generator,
-  one module per table named `<source>_source_sql.py`.
-  *Boundary guarantee:* the instance table never references the registry.
+Each phase ships backend workflow + API route + frontend feature together. The
+app is runnable and end-to-end testable after every phase. `frontend/data.jsx`
+mock data shrinks one slice per phase as real `fetch()` calls replace it.
 
-- [ ] **`feat/ingestion`** — §9. Staged load → write-to-real-table-on-success;
-  `upsert` / `append` / `skip` on duplicate ids (`append` = straight insert;
-  `skip` = skip existing ids **and report the skipped rows to the user**);
-  ingested rows retained.
-  *Guarantees:* ingestion atomicity (failed load leaves the table at last
-  committed state); `skip` reports the dropped rows (rule 9 — owes a test).
-
-- [ ] **`feat/column-migration`** — §7. `TRY_CAST` pre-check (report
-  un-castable rows) → recreate-and-copy with the column cast → atomic swap,
-  all in one transaction. Comes after data exists.
-  *Gated by:* `column_type` enum.
-  *Guarantees:* migration atomicity; `TRY_CAST` reports un-castable rows before
-  commit (no silent NULL loss).
+Read CLAUDE_REFERENCE.md §14 for the full screen-to-route wiring table and the
+frontend design system before working on any frontend or API unit.
 
 ---
 
-## Phase 3 — Function track (parallel with Phases 1–2 after Phase 0)
+### Phase A — Source Registration
+
+*Backend already done (Phase 1). This phase wires the API and Data screen.*
+
+- [ ] **`feat/api-sources-register`** — §14 (API), §6 (workflow).
+  `src/pipeui/api/sources.py`: `GET /sources`, `POST /sources`. FastAPI app
+  entry-point + static file mount for `frontend/`. Wire `create_source()` from
+  `workflow/create.py` to the POST route.
+  *Frontend:* `screen-data.jsx` — dropzone posts to `POST /sources`; reports
+  table reads from `GET /sources`; drawer shows real column schema + row preview.
+  Replace `REPORTS` and `SOURCES` mock data in `data.jsx` with `fetch()`.
+  *Guarantees:* `POST /sources` returns a `FailedRegistryEntry` payload (not a
+  500) when source creation fails; the Data screen renders the failure inline.
+
+---
+
+### Phase B — Data Ingestion
+
+- [ ] **`feat/jit-instance-table`** — §8. `src/pipeui/sql_user_table/`: JIT
+  per-source DDL generator, one module per registered source named
+  `<source>_source_sql.py`.
+  *Boundary guarantee:* the instance table never references the registry.
+
+- [ ] **`feat/ingestion`** — §9. `src/pipeui/workflow/ingestion.py`: staged
+  load → write-to-real-table-on-success; `upsert` / `append` / `skip` on
+  duplicate ids; `skip` reports the dropped rows.
+  *Guarantees:* ingestion atomicity; `skip` reports dropped rows (rule 9 — owes
+  a test in `tests/test_ingestion.py`).
+
+- [ ] **`feat/api-sources-ingest`** — §14 (API), §9 (workflow).
+  `src/pipeui/api/sources.py`: `POST /sources/{id}/ingest`, `GET /sources/{id}`.
+  *Frontend:* `screen-data.jsx` — ingestion method selector in the post-drop
+  confirmation step; status pill and row count reflect real state; drawer shows
+  real skip report when rows were dropped. Replace ingestion-related mock data
+  with `fetch()`.
+
+---
+
+### Phase C — Column Type Migration
+
+*Gated by: `column_type` enum decision (CLAUDE.md → Active Deferred Work).*
+
+- [ ] **`feat/column-migration`** — §7. `src/pipeui/workflow/migration.py`:
+  `TRY_CAST` pre-check → recreate-and-copy with column cast → atomic swap, all
+  in one transaction.
+  *Guarantees:* migration atomicity; `TRY_CAST` reports un-castable rows before
+  commit (no silent NULL loss). Tests in `tests/test_migration.py`.
+
+- [ ] **`feat/api-sources-migrate`** — §14 (API), §7 (workflow).
+  `src/pipeui/api/sources.py`: `PATCH /sources/{id}/columns/{col_id}`.
+  Returns un-castable row count before committing so the frontend can prompt.
+  *Frontend:* `screen-data.jsx` drawer — schema rows get editable type
+  dropdowns; un-castable row count surfaces as a warning modal before the user
+  confirms the change.
+
+---
+
+### Phase D — Function Registration
 
 - [ ] **`feat/function-worker`** — §10. Per-call worker process; wall-clock
   timeout; unconditional `setrlimit` CPU/memory caps (Unix-only, no Windows
-  guard); Arrow IPC data boundary; per-user venv + lockfile; data-only
-  interface. Large — consider splitting worker-isolation from venv/lockfile.
-  *Guarantees:* worker receives data only (never the connection/app objects);
-  timeout kills a looping function; a crashing function takes the worker not the
-  app (surfaced via `FailedFunctionEntry`); `setrlimit` memory cap kills an
-  allocate-big function. (Integration tests run on Linux CI.)
+  guard); Arrow IPC data boundary; per-user venv + lockfile; data-only interface.
+  *Guarantees:* worker receives data only; timeout kills a looping function; a
+  crashing function takes the worker not the app (surfaced via
+  `FailedFunctionEntry`); `setrlimit` memory cap kills an allocate-big function.
+  (Integration tests run on Linux CI.)
 
 - [ ] **`feat/function-registration`** — §10 (registration txn), §11. Load a
   `.py`, validate typed params/returns, derive `function_class` /
-  `function_type` / `function_return_type`, capture `function_signature` (the
-  canonical `param_name: type` string), write `function_registry` + `parameter`
-  rows as **one** transaction, collapse on `content_hash_id`.
-  *Gated by:* return-type vocabulary.
-  *Guarantees:* the derivation table (§11); collapse preserves the surrogate
+  `function_type` / `function_return_type`, capture `function_signature`, write
+  `function_registry` + `parameter` rows as **one** transaction, collapse on
+  `content_hash_id`.
+  *Gated by:* return-type vocabulary (CLAUDE.md → Active Deferred Work).
+  *Guarantees:* derivation table (§11); collapse preserves surrogate
   `function_id` and overwrites only mutables; registration atomicity.
+
+- [ ] **`feat/api-functions`** — §14 (API), §10–§11 (workflow).
+  `src/pipeui/api/functions.py`: `POST /functions`, `GET /functions`,
+  `GET /functions/{id}`.
+  *Frontend:* `screen-modules.jsx` — `.py` upload, module list, function cards
+  with real sig/doc/params; `FailedFunctionEntry` errors surface inline. Replace
+  `MODULES` mock data with `fetch()`.
+
+---
+
+### Phase E — Function Attach & Execution *(convergence)*
 
 - [ ] **`feat/function-attach`** — §12. Validate the `alias_map` mapping
   (unmapped parameter/column fails the attach with a message), write
   `source_function_map` + `alias_map` as **one** transaction, keyword binding
-  via `param_name` (following `function_signature`), multi-select loop
-  (N eligible columns → N runs).
-  **Convergence point:** needs a source (Phase 1) and a registered function
-  (Phase 3).
+  via `param_name`, multi-select loop (N eligible columns → N runs).
+  **Convergence point:** needs a registered source (Phase A/B) and a registered
+  function (Phase D).
   *Guarantees:* attach atomicity; unmapped param/column fails the attach;
   multi-select runs once per eligible column.
 
+- [ ] **`feat/api-pipelines`** — §14 (API), §12 (workflow).
+  `src/pipeui/api/pipelines.py`: `GET /pipelines/{source_id}`,
+  `POST /pipelines/{source_id}/steps`,
+  `DELETE /pipelines/{source_id}/steps/{step_id}`,
+  `POST /pipelines/{source_id}/run`.
+  *Frontend:* `screen-builder.jsx` — Reports rail reads real sources; Function
+  palette reads real functions; drag-and-drop adds real steps; column mapping
+  binds real `alias_map`; Run executes real functions and shows pass/fail per
+  step. Replace all remaining mock data in `data.jsx` with `fetch()`.
+
 ---
 
-## Phase 4 — Deferred
+### Phase F — Results & Summary *(deferred)*
 
 - [ ] **Results & Summary layer** — shape depends on the user's data; deferred
-  until the tracks above exist (CLAUDE.md → Active Deferred Work).
-- [ ] **CLI + visual layer** — §14 (reference) / CLAUDE.md CLI reference. Document
-  commands and the visual layer here and in §14 as built.
+  until Phases A–E exist (CLAUDE.md → Active Deferred Work).
 - [ ] **v2 scalar persistence** — per-source scalar-override store so UI
   overrides survive across runs (CLAUDE.md → Active Deferred Work).
 
@@ -192,14 +255,18 @@ the rest.
 ## Dependency summary
 
 ```
-Phase 0:  id-generation ─┬─ db-schema ─── test-harness          [Phase 0 done]
-                         │
-Phase 1:                 ├─ validation-objects ─┐               [Phase 1 done]
-                         │                       ├─ source-create ─┐
-                         └─ staging ─────────────┘                 │
-Phase 2:                                  jit-instance-table ── ingestion ── column-migration
-                                                                              │
-Phase 3:  function-worker ── function-registration ───────────────────┐      │
-                                                                       └─ function-attach
-                                          (attach needs a source + a registered function)
+Phases 0–1:  [done] id-generation, db-schema, test-harness,
+                     validation-objects, staging, source-create
+
+Phase A:  api-sources-register  (wires Phase 1 backend to Data screen)
+            │
+Phase B:  jit-instance-table ── ingestion ── api-sources-ingest
+            │
+Phase C:  column-migration ── api-sources-migrate        [gated: column_type enum]
+            │
+Phase D:  function-worker ── function-registration ── api-functions
+            │                                              [gated: return-type vocab]
+Phase E:  function-attach ── api-pipelines               [needs Phase B + Phase D]
+            │
+Phase F:  results & summary (deferred)
 ```
