@@ -1,0 +1,50 @@
+# CONTEXT.md — Domain Glossary
+
+Terms resolved during grilling sessions. Implementation details live in CLAUDE_REFERENCE.md; design intent lives in CLAUDE.md. This file is a glossary only.
+
+---
+
+## function_return_type
+
+The shape and type of a function's return value, stored in `function_registry`. Determines how the execution layer aggregates results across alias_map runs.
+
+| value | meaning | function_type derived |
+|---|---|---|
+| `scalar` | single non-boolean value per row; results collected row-by-row | `transform` |
+| `boolean` | single `bool` per row; results collected row-by-row | `validation` |
+| `pd.Series` | column-shaped return (non-boolean) | `transform` |
+| `pd.Series[bool]` | column-shaped boolean return; works on bool columns via alias_map | `validation` |
+| `pd.DataFrame` | table-shaped return | `transform` |
+
+## param_type
+
+The Python annotation spelling of a function parameter, stored in the `parameter` table. Derived directly from `inspect.signature` at registration time.
+
+| value | notes |
+|---|---|
+| `int` | scalar |
+| `float` | scalar |
+| `bool` | scalar |
+| `str` | scalar unless tied to alias_map, in which case `column_backed` is derived |
+| `pd.Series` | column data input |
+| `pd.Series[bool]` | boolean column data input; same `function_class` granularity as `pd.Series` |
+| `pd.DataFrame` | full table input |
+
+## function_class
+
+Derived classification (not stored per-parameter). Determined by the least-granular (most generic) parameter in the function signature, using `param_type` + alias_map presence.
+
+| value | derived from | multi_select_eligible |
+|---|---|---|
+| `scalar` | all params are `int`, `float`, `bool`, or `str` not in alias_map | no |
+| `column_backed` | least-granular param is a `str` tied to an alias_map row | yes |
+| `pd.Series` | least-granular param is `pd.Series` or `pd.Series[bool]` | yes |
+| `pd.dataframe` | least-granular param is `pd.DataFrame` | yes |
+
+## column_backed
+
+A derived classification for a `str` parameter that has an alias_map row mapping it to a source column. The parameter receives the column *name* as its string argument at execution time. Validated at attach time: if a `str` param has no alias_map entry, the attach fails.
+
+## function_type
+
+Derived from `function_return_type`. `validation` when return is `boolean` or `pd.Series[bool]`; `transform` otherwise.
