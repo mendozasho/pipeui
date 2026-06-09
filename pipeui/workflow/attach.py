@@ -1,7 +1,26 @@
-"""Pipeline read and attach workflow — get_pipeline / attach_function.
+"""Pipeline read, attach, and suggestion workflows.
 
-get_pipeline returns the committed pipeline state for a source.
-attach_function writes source_function_map + alias_map atomically.
+get_pipeline(conn, source_id)
+    Returns the committed pipeline state for a source: source metadata with its
+    columns, and an ordered list of steps (function sets) with full param +
+    binding detail.
+
+attach_function(conn, source_id, bindings, *, function_id, set_id)
+    Writes source_function_map + alias_map atomically.
+
+suggest_bindings(conn, source_id, *, function_id, set_id)
+    Dry-run mode: returns per-parameter column suggestions without writing any
+    rows.  Looks at prior alias_map bindings for the same parameter_id on *other*
+    sources, then surfaces any of those column_ids that also appear in the target
+    source's source_column_map.
+
+    scalar and pd.DataFrame params are excluded from the response.
+
+    Tiebreaker: alias_map carries no timestamp and alias_map_id is UUID5
+    (deterministic), so ordering is not reliable.  When the same parameter has
+    been bound to multiple column_ids on different prior sources and more than one
+    of those column_ids exists in the target source, all matching columns are
+    returned rather than guessing the "most recent" one.
 
 §12: alias_map binding; §14: API layer calls workflow only.
 """
@@ -9,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Optional
 
 import duckdb
 
@@ -328,3 +348,138 @@ def get_pipeline(
         },
         "steps": steps,
     }
+
+
+# ---------------------------------------------------------------------------
+# suggest_bindings — dry-run column suggestion
+# ---------------------------------------------------------------------------
+
+def _params_for_set(
+    conn: duckdb.DuckDBPyConnection,
+    set_id: uuid.UUID,
+) -> list[tuple]:
+    """Return (param_id, param_name, param_type) rows for all functions in a set."""
+    return conn.execute(
+        """
+        SELECT p.param_id, p.param_name, p.param_type
+        FROM function_set_map fsmap
+        JOIN parameter p ON p.function_id = fsmap.function_id
+        WHERE fsmap.set_id = ?
+        ORDER BY p.param_name
+        """,
+        [set_id],
+    ).fetchall()
+
+
+def _params_for_function(
+    conn: duckdb.DuckDBPyConnection,
+    function_id: uuid.UUID,
+) -> list[tuple]:
+    """Return (param_id, param_name, param_type) rows for a single function."""
+    return conn.execute(
+        """
+        SELECT param_id, param_name, param_type
+        FROM parameter
+        WHERE function_id = ?
+        ORDER BY param_name
+        """,
+        [function_id],
+    ).fetchall()
+
+
+# param_types eligible for column binding suggestions
+_SUGGEST_TYPES = {"str", "pd.Series"}
+
+
+def suggest_bindings(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    *,
+    function_id: Optional[uuid.UUID] = None,
+    set_id: Optional[uuid.UUID] = None,
+) -> dict:
+    """Return column binding suggestions for a function or set without writing rows.
+
+    Exactly one of function_id / set_id must be provided.
+
+    Response shape:
+      {
+        "params": [
+          {
+            "param_id": "...",
+            "param_name": "...",
+            "param_type": "...",
+            "suggested_columns": [{ "column_id": "...", "column_name": "..." }]
+          }
+        ]
+      }
+
+    scalar and pd.DataFrame params are excluded.
+    suggested_columns contains all target-source columns whose column_id appears
+    in any prior alias_map binding for the same parameter_id on *other* sources.
+    All matches are returned (no tiebreaker — alias_map has no reliable ordering).
+    """
+    if (function_id is None) == (set_id is None):
+        raise ValueError("Exactly one of function_id or set_id must be provided")
+
+    # 1. Collect params, filter to eligible types only
+    if set_id is not None:
+        raw_params = _params_for_set(conn, set_id)
+    else:
+        raw_params = _params_for_function(conn, function_id)
+
+    eligible_params = [
+        (p_id, p_name, p_type)
+        for p_id, p_name, p_type in raw_params
+        if p_type in _SUGGEST_TYPES
+    ]
+
+    if not eligible_params:
+        return {"params": []}
+
+    # 2. Collect column_ids on the target source
+    target_col_rows = conn.execute(
+        """
+        SELECT cr.column_id, cr.column_name
+        FROM column_registry cr
+        JOIN source_column_map scm ON scm.column_id = cr.column_id
+        WHERE scm.source_id = ?
+        """,
+        [source_id],
+    ).fetchall()
+    target_col_map: dict[str, str] = {str(r[0]): r[1] for r in target_col_rows}
+
+    # 3. For each eligible param, find prior bindings on *other* sources whose
+    #    column_id exists in the target source.
+    result_params = []
+    for p_id, p_name, p_type in eligible_params:
+        prior_rows = conn.execute(
+            """
+            SELECT DISTINCT am.column_id
+            FROM alias_map am
+            WHERE am.parameter_id = ?
+              AND am.source_id <> ?
+            """,
+            [p_id, source_id],
+        ).fetchall()
+
+        suggested = []
+        for (col_id,) in prior_rows:
+            col_id_str = str(col_id)
+            if col_id_str in target_col_map:
+                suggested.append({
+                    "column_id": col_id_str,
+                    "column_name": target_col_map[col_id_str],
+                })
+
+        # Sort for deterministic output
+        suggested.sort(key=lambda c: c["column_name"])
+
+        result_params.append({
+            "param_id": str(p_id),
+            "param_name": p_name,
+            "param_type": p_type,
+            "suggested_columns": suggested,
+        })
+
+    return {"params": result_params}
