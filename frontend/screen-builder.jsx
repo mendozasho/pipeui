@@ -266,6 +266,10 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
             )}
 
             {(isMultiCol || (isStr && strMode === "column")) && (
+              <>
+              <div style={{ fontSize: 10, color: "var(--text-3)", marginBottom: 3 }}>
+                Bind column(s) to <span style={{ fontFamily: "'Geist Mono', monospace", color: "var(--accent)" }}>{p.param_name}</span>:
+              </div>
               <div style={{
                 display: "flex", flexDirection: "column", gap: 2,
                 maxHeight: 120, overflowY: "auto",
@@ -298,6 +302,7 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
                   );
                 })}
               </div>
+              </>
             )}
           </div>
         );
