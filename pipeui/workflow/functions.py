@@ -452,10 +452,11 @@ def get_function(conn: duckdb.DuckDBPyConnection, function_id: str) -> dict | No
 
     sources = conn.execute(
         """
-        SELECT sr.source_id, sr.source_name
+        SELECT DISTINCT sr.source_id, sr.source_name
         FROM source_function_map sfm
+        JOIN function_set_map fsm ON fsm.set_id = sfm.set_id
         JOIN source_registry sr ON sr.source_id = sfm.source_id
-        WHERE sfm.function_id = ?
+        WHERE fsm.function_id = ?
         ORDER BY sr.source_name
         """,
         [record["function_id"]],
