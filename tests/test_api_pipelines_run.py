@@ -1,20 +1,26 @@
-"""Behavioral guarantees for POST /pipelines/{source_id}/run (Phase E2 / §13).
+"""Behavioral guarantees for POST /pipelines/{source_id}/run (Phase E2/F1 / §13).
 
 Guarantees under test:
 
 run_type variants:
   1. run_type=transforms executes transform steps and returns per-step results.
-  2. run_type=validations executes validation steps and returns rows_passed/rows_failed.
+  2. run_type=validations executes validation steps and returns per-function results.
   3. run_type=set&set_id={id} executes only the specified set.
   4. Unknown source returns 404.
   5. Unknown set_id on run_type=set returns 200 with empty steps (not an error).
 
 Failure / skip:
-  6. A worker crash returns status=failed with error; subsequent steps still execute.
+  6. A worker crash on transforms returns status=failed with error; subsequent steps still execute.
+  6b. A worker crash on one validation function sets that function's status=failed; other
+      functions in the same run still return results.
 
 Response shape:
-  7. Transform step response shape matches the documented shape.
-  8. Validation step response shape matches the documented shape.
+  7. Transform step response shape matches the documented shape (unchanged).
+  8. Validation per-function response shape: function_id, function_name, set_name, set_id,
+     status, rows_passed, rows_failed, pass_rate, failing_rows, error.
+  9. pass_rate is a float 0..1 when status=ok; null when status=failed.
+  10. failing_rows is [] in this slice.
+  11. run_type=transforms path is unaffected by the validation shape change.
 """
 from __future__ import annotations
 
@@ -212,16 +218,17 @@ def test_run_validations_returns_pass_fail(client, db, tmp_path):
     assert step["status"] == "ok"
     assert step["rows_passed"] == 2
     assert step["rows_failed"] == 1
-    assert step["rows_affected"] is None
+    # Per-function shape: no rows_affected field
+    assert "rows_affected" not in step
 
 
 # ---------------------------------------------------------------------------
-# Guarantee 8: validation step response shape
+# Guarantee 8: validation per-function response shape
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
 def test_validation_step_response_shape(client, db, tmp_path):
-    """Guarantee 8: validation step response contains expected keys."""
+    """Guarantee 8/9/10: validation per-function response shape is correct."""
     source_id, _ = register_and_ingest(db, tmp_path)
     col_id = db.execute(
         "SELECT cr.column_id FROM column_registry cr "
@@ -235,9 +242,88 @@ def test_validation_step_response_shape(client, db, tmp_path):
 
     r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
     step = r.json()["steps"][0]
-    assert step["rows_affected"] is None
-    assert step["rows_passed"] is not None
-    assert step["rows_failed"] is not None
+    # Required per-function fields
+    assert "function_id" in step
+    assert "function_name" in step
+    assert "set_name" in step
+    assert "set_id" in step
+    assert "status" in step
+    assert "rows_passed" in step
+    assert "rows_failed" in step
+    assert "pass_rate" in step
+    assert "failing_rows" in step
+    assert "error" in step
+    # pass_rate is float 0..1 on success (Guarantee 9)
+    assert isinstance(step["pass_rate"], float)
+    assert 0.0 <= step["pass_rate"] <= 1.0
+    # failing_rows is [] in this slice (Guarantee 10)
+    assert step["failing_rows"] == []
+
+
+# ---------------------------------------------------------------------------
+# Guarantee 6b: worker crash isolation for validation functions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_validation_worker_crash_isolated_other_functions_still_run(client, db, tmp_path):
+    """Guarantee 6b: crash in one validation function leaves others unaffected."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_crash = write_fn(tmp_path, "val_crash", "data", "raise RuntimeError('val boom')")
+    seed_validation_step(db, source_id, col_id, "val_crash", fn_crash, position=0)
+
+    fn_ok = write_fn(tmp_path, "val_ok", "data", "return data > 0")
+    seed_validation_step(db, source_id, col_id, "val_ok", fn_ok, position=1)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    steps = r.json()["steps"]
+    assert len(steps) == 2
+    crashed = next(s for s in steps if s["function_name"] == "val_crash")
+    ok_step = next(s for s in steps if s["function_name"] == "val_ok")
+    assert crashed["status"] == "failed"
+    assert crashed["error"] is not None
+    assert crashed["pass_rate"] is None
+    assert ok_step["status"] == "ok"
+    assert ok_step["rows_passed"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Guarantee 11: transforms path unaffected
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_transforms_path_unaffected_by_validation_shape_change(client, db, tmp_path):
+    """Guarantee 11: run_type=transforms response shape is unchanged."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_path = write_fn(tmp_path, "noop_t", "data", "return data")
+    seed_transform_step(db, source_id, col_id, "noop_t", fn_path, position=0)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=transforms")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_type"] == "transforms"
+    step = body["steps"][0]
+    assert step["status"] == "ok"
+    assert "source_function_map_id" in step
+    assert "set_name" in step
+    assert "function_type" in step
+    assert "rows_affected" in step
+    assert step["rows_passed"] is None
+    assert step["rows_failed"] is None
 
 
 # ---------------------------------------------------------------------------
