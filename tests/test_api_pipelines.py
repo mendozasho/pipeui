@@ -7,12 +7,18 @@ Guarantees under test (GET):
   3. Returns correctly ordered steps with full param + binding detail.
   4. pd.DataFrame params carry an empty bindings list.
 
-Guarantees under test (POST):
+Guarantees under test (POST commit):
   5. function_id body auto-creates set; returns source_function_map_id.
   6. set_id body attaches existing set; returns source_function_map_id.
   7. Missing required bindings returns 200 with ok=False + missing_params list.
   8. Unknown source_id returns 404.
   9. Successful attach reflected in subsequent GET.
+
+Guarantees under test (POST ?dry_run=true):
+  10. Returns suggested columns without writing rows to alias_map.
+  11. pd.DataFrame params are excluded from dry-run response.
+  12. Returns 422 when both function_id and set_id are provided.
+  13. Returns 422 when neither function_id nor set_id is provided.
 """
 from __future__ import annotations
 
@@ -294,3 +300,88 @@ def test_post_attach_reflected_in_get(client, db):
     steps = get_resp.json()["steps"]
     assert len(steps) == 1
     assert steps[0]["functions"][0]["function_name"] == "fn_get_after_post"
+
+
+# ---------------------------------------------------------------------------
+# POST /pipelines/{source_id}/steps?dry_run=true
+# ---------------------------------------------------------------------------
+
+def _insert_alias(conn, column_id, param_id, source_id):
+    alias_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+        [alias_id, column_id, param_id, source_id],
+    )
+
+
+@pytest.mark.integration
+def test_dry_run_returns_suggestions_without_writing(client, db):
+    """Guarantee 10: dry_run returns suggested columns without writing alias_map rows."""
+    import datetime
+    target_source_id, target_col_ids = make_registered_source(db, n_columns=2)
+    other_source_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [other_source_id, uuid.uuid4(), f"oth_10_{other_source_id}", datetime.date.today(), "upsert", "id"],
+    )
+
+    # Add target_col_ids[0] to the other source's column map
+    scm_id = uuid.uuid4()
+    db.execute("INSERT INTO source_column_map VALUES (?, ?, ?)", [scm_id, target_col_ids[0], other_source_id])
+
+    fn_id, (p_id,) = _make_function(db, "fn_dry_10", [("col", "str")])
+    _insert_alias(db, target_col_ids[0], p_id, other_source_id)
+
+    resp = client.post(
+        f"/pipelines/{target_source_id}/steps?dry_run=true",
+        json={"function_id": str(fn_id)},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "params" in body
+
+    suggested_ids = {c["column_id"] for p in body["params"] for c in p["suggested_columns"]}
+    assert str(target_col_ids[0]) in suggested_ids
+
+    # No alias_map rows written on target source
+    rows = db.execute(
+        "SELECT COUNT(*) FROM alias_map WHERE source_id = ?",
+        [target_source_id],
+    ).fetchone()[0]
+    assert rows == 0
+
+
+@pytest.mark.integration
+def test_dry_run_excludes_dataframe_params(client, db):
+    """Guarantee 11: dry_run excludes pd.DataFrame params from the response."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, _ = _make_function(db, "fn_dry_11", [("df", "pd.DataFrame")])
+
+    resp = client.post(
+        f"/pipelines/{source_id}/steps?dry_run=true",
+        json={"function_id": str(fn_id)},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["params"] == []
+
+
+@pytest.mark.integration
+def test_dry_run_422_when_both_ids_provided(client, db):
+    """Guarantee 12: 422 when both function_id and set_id are provided."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    resp = client.post(
+        f"/pipelines/{source_id}/steps?dry_run=true",
+        json={"function_id": str(uuid.uuid4()), "set_id": str(uuid.uuid4())},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.integration
+def test_dry_run_422_when_no_ids_provided(client, db):
+    """Guarantee 13: 422 when neither function_id nor set_id is provided."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    resp = client.post(
+        f"/pipelines/{source_id}/steps?dry_run=true",
+        json={},
+    )
+    assert resp.status_code == 422

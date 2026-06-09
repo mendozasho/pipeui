@@ -201,8 +201,8 @@ function PendingParamRow({ param, boundColumns, onDrop, onRemove }) {
   );
 }
 
-function PendingStepCard({ item, sourceColumns, onSave, onCancel }) {
-  const [bindings, setBindings] = useState({});
+function PendingStepCard({ item, sourceColumns, initialBindings, onSave, onCancel }) {
+  const [bindings, setBindings] = useState(initialBindings || {});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
@@ -418,6 +418,7 @@ function PipelinePanel({ sourceId, sourceColumns, onColumnsLoaded }) {
               key={item.key}
               item={item}
               sourceColumns={sourceColumns}
+              initialBindings={item.initialBindings || {}}
               onSave={() => handleSaved(item.key)}
               onCancel={() => removePendingStep(item.key)}
             />
@@ -579,16 +580,46 @@ function ScreenBuilder({ flash }) {
   const selected = sources.find(s => s.source_id === selectedId) ?? null;
 
   function handleDragOverPipeline(e) { e.preventDefault(); }
-  function handleDropPipeline(e) {
+  async function handleDropPipeline(e) {
     e.preventDefault();
     const raw = e.dataTransfer.getData("application/json");
     if (!raw) return;
+    let data;
     try {
-      const data = JSON.parse(raw);
-      if (data.type === "palette" && typeof window.__builderAddStep__ === "function") {
-        window.__builderAddStep__(data.item);
+      data = JSON.parse(raw);
+    } catch (_) {
+      return;
+    }
+    if (data.type !== "palette" || typeof window.__builderAddStep__ !== "function") return;
+    const item = data.item;
+
+    // Fire dry-run first to pre-fill suggested bindings
+    let initialBindings = {};
+    if (selectedId) {
+      try {
+        const body = item.type === "function"
+          ? { function_id: item.id }
+          : { set_id: item.id };
+        const resp = await fetch(`/pipelines/${selectedId}/steps?dry_run=true`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) {
+          const suggest = await resp.json();
+          // Build initialBindings: param_id -> [{ column_id, column_name }]
+          for (const p of (suggest.params || [])) {
+            if ((p.suggested_columns || []).length > 0) {
+              initialBindings[p.param_id] = p.suggested_columns;
+            }
+          }
+        }
+      } catch (_) {
+        // Dry-run failure is non-fatal; proceed without suggestions
       }
-    } catch (_) {}
+    }
+
+    window.__builderAddStep__({ ...item, initialBindings });
   }
 
   return (
