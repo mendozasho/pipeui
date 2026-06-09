@@ -1,5 +1,22 @@
-// Report Builder screen — Phase E2: pipeline canvas with drag-to-reorder
+// Report Builder screen — Phase E2: pipeline canvas with drag-to-reorder + run controls
 const { useState, useEffect, useRef } = React;
+
+// ---------------------------------------------------------------------------
+// Result tag helpers
+// ---------------------------------------------------------------------------
+
+const RESULT_TAG_STYLES = {
+  success: { bg: "#d1fae5", color: "#065f46" },
+  issues:  { bg: "#fef3c7", color: "#92400e" },
+  error:   { bg: "#fee2e2", color: "#991b1b" },
+};
+
+function deriveResultTag(stepResult) {
+  if (!stepResult) return null;
+  if (stepResult.status === "failed") return "error";
+  if (stepResult.status === "ok" && stepResult.function_type === "validation" && stepResult.rows_failed > 0) return "issues";
+  return "success";
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -104,7 +121,7 @@ function FunctionRow({ fn }) {
 // Step card
 // ---------------------------------------------------------------------------
 
-function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver }) {
+function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, runningSetId, onRunSet, onNavigateResults }) {
   const setType = deriveSetType(step.functions);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   const [removing, setRemoving] = useState(false);
@@ -162,6 +179,37 @@ function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEn
         }}>
           {setType}
         </span>
+        {resultTag && (
+          <button
+            onClick={() => onNavigateResults && onNavigateResults()}
+            title={"Result: " + resultTag + " — click to view results"}
+            style={{
+              fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, flexShrink: 0,
+              background: RESULT_TAG_STYLES[resultTag].bg,
+              color: RESULT_TAG_STYLES[resultTag].color,
+              border: "none", cursor: "pointer",
+            }}
+          >
+            {resultTag}
+          </button>
+        )}
+        <button
+          onClick={e => { e.stopPropagation(); if (onRunSet) onRunSet(step.source_function_map_id); }}
+          disabled={runningSetId === step.source_function_map_id}
+          title="Run this set"
+          style={{
+            background: "none", border: "none",
+            cursor: runningSetId === step.source_function_map_id ? "default" : "pointer",
+            color: runningSetId === step.source_function_map_id ? "var(--accent)" : "var(--text-4)",
+            fontSize: 13, lineHeight: 1, padding: "2px 4px",
+            borderRadius: "var(--radius)", flexShrink: 0,
+            opacity: runningSetId === step.source_function_map_id ? 0.6 : 1,
+          }}
+          onMouseEnter={e => { if (runningSetId !== step.source_function_map_id) e.currentTarget.style.color = "var(--accent)"; }}
+          onMouseLeave={e => { if (runningSetId !== step.source_function_map_id) e.currentTarget.style.color = "var(--text-4)"; }}
+        >
+          {runningSetId === step.source_function_map_id ? "..." : "▶"}
+        </button>
         <button
           onClick={handleRemove}
           disabled={removing}
@@ -207,7 +255,7 @@ function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEn
 // Pipeline canvas — drag-to-reorder
 // ---------------------------------------------------------------------------
 
-function PipelineCanvas({ sourceId, steps, onReloadPipeline }) {
+function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, runningSetId, onRunSet, onNavigateResults }) {
   const [localSteps, setLocalSteps] = useState(steps);
   const dragIndexRef = useRef(null);
 
@@ -267,6 +315,10 @@ function PipelineCanvas({ sourceId, steps, onReloadPipeline }) {
           onDragStart={() => handleDragStart(index)}
           onDragEnd={handleDragEnd}
           onDragOver={e => handleDragOver(e, index)}
+          resultTag={resultTags && resultTags[step.source_function_map_id]}
+          runningSetId={runningSetId}
+          onRunSet={onRunSet}
+          onNavigateResults={onNavigateResults}
         />
       ))}
     </div>
@@ -370,14 +422,11 @@ function RightPalette({ selectedSource }) {
       setFunctions(Array.isArray(fns) ? fns : []);
       setSets(Array.isArray(sts) ? sts : []);
       setLoading(false);
-      // Lazy-fetch set details for type badge computation
       (Array.isArray(sts) ? sts : []).forEach(s => {
         fetch("/function-sets/" + s.set_id)
           .then(r => r.ok ? r.json() : null)
           .then(detail => {
-            if (detail) {
-              setSetsDetail(prev => ({ ...prev, [s.set_id]: detail }));
-            }
+            if (detail) setSetsDetail(prev => ({ ...prev, [s.set_id]: detail }));
           })
           .catch(() => {});
       });
@@ -386,7 +435,6 @@ function RightPalette({ selectedSource }) {
 
   const validationFns = functions.filter(f => f.function_type === "validation");
   const transformFns = functions.filter(f => f.function_type === "transform");
-
   const setsWithDetail = sets.map(s => ({
     ...s,
     functions: (setsDetail[s.set_id] && setsDetail[s.set_id].functions) || [],
@@ -408,16 +456,10 @@ function RightPalette({ selectedSource }) {
       display: "flex", flexDirection: "column",
       overflow: "hidden",
     }}>
-      {/* Tab bar */}
-      <div style={{
-        display: "flex",
-        borderBottom: "1px solid var(--border)",
-        flexShrink: 0,
-      }}>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         <button style={tabStyle("functions")} onClick={() => setActiveTab("functions")}>Functions</button>
         <button style={tabStyle("sets")} onClick={() => setActiveTab("sets")}>Sets</button>
       </div>
-
       <div style={{ flex: 1, overflow: "auto", padding: "10px 10px 10px" }}>
         {loading && <div style={{ fontSize: 11, color: "var(--text-4)", textAlign: "center", paddingTop: 20 }}>Loading...</div>}
         {!loading && activeTab === "functions" && (
@@ -457,12 +499,15 @@ function RightPalette({ selectedSource }) {
 // Side panel
 // ---------------------------------------------------------------------------
 
-function SidePanel({ source, onClose }) {
+function SidePanel({ source, onClose, onNavigate }) {
   const [pipeline, setPipeline] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [dropStatus, setDropStatus] = useState(null); // null | "attaching" | "ok" | "error"
   const [isDragOver, setIsDragOver] = useState(false);
+  const [resultTags, setResultTags] = useState({});
+  const [runningType, setRunningType] = useState(null); // null | "validations" | "transforms"
+  const [runningSetId, setRunningSetId] = useState(null);
 
   function loadPipeline() {
     if (!source) return;
@@ -476,8 +521,50 @@ function SidePanel({ source, onClose }) {
 
   useEffect(() => {
     setPipeline(null);
+    setResultTags({});
+    setRunningType(null);
+    setRunningSetId(null);
     loadPipeline();
   }, [source && source.source_id]);
+
+  function applyRunResults(steps, data) {
+    const tags = {};
+    if (data && Array.isArray(data.steps)) {
+      data.steps.forEach(stepResult => {
+        // match by set_id from the pipeline steps
+        const matchingStep = steps.find(s => s.source_function_map_id === stepResult.source_function_map_id
+          || s.set_name === stepResult.set_name);
+        if (matchingStep) {
+          tags[matchingStep.source_function_map_id] = deriveResultTag(stepResult);
+        }
+      });
+    }
+    setResultTags(prev => ({ ...prev, ...tags }));
+  }
+
+  function handleRunType(runType) {
+    if (!pipeline || !pipeline.steps) return;
+    setRunningType(runType);
+    fetch("/pipelines/" + source.source_id + "/run?run_type=" + runType, { method: "POST" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        applyRunResults(pipeline.steps, data);
+        setRunningType(null);
+      })
+      .catch(() => setRunningType(null));
+  }
+
+  function handleRunSet(setId) {
+    if (!pipeline || !pipeline.steps) return;
+    setRunningSetId(setId);
+    fetch("/pipelines/" + source.source_id + "/run?run_type=set&set_id=" + setId, { method: "POST" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        applyRunResults(pipeline.steps, data);
+        setRunningSetId(null);
+      })
+      .catch(() => setRunningSetId(null));
+  }
 
   function handleDragOver(e) {
     if (e.dataTransfer.types.some(t => t.startsWith("palette/"))) {
@@ -534,6 +621,13 @@ function SidePanel({ source, onClose }) {
       });
   }
 
+  const hasSteps = pipeline && pipeline.steps && pipeline.steps.length > 0;
+  const btnBase = {
+    flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
+    borderRadius: "var(--radius)", border: "1px solid var(--border)",
+    cursor: "pointer", transition: "opacity .15s",
+  };
+
   return (
     <div style={{
       width: 360, flexShrink: 0,
@@ -562,6 +656,37 @@ function SidePanel({ source, onClose }) {
         </button>
       </div>
 
+      {/* Run controls */}
+      <div style={{
+        padding: "10px 14px", borderBottom: "1px solid var(--border)",
+        display: "flex", gap: 8, flexShrink: 0,
+      }}>
+        <button
+          onClick={() => handleRunType("validations")}
+          disabled={!hasSteps || runningType !== null}
+          style={{
+            ...btnBase,
+            background: runningType === "validations" ? "var(--accent-soft)" : "var(--panel-2)",
+            color: runningType === "validations" ? "var(--accent)" : "var(--text)",
+            opacity: (!hasSteps || runningType !== null) ? 0.5 : 1,
+          }}
+        >
+          {runningType === "validations" ? "Running..." : "Run Validations"}
+        </button>
+        <button
+          onClick={() => handleRunType("transforms")}
+          disabled={!hasSteps || runningType !== null}
+          style={{
+            ...btnBase,
+            background: runningType === "transforms" ? "var(--accent-soft)" : "var(--panel-2)",
+            color: runningType === "transforms" ? "var(--accent)" : "var(--text)",
+            opacity: (!hasSteps || runningType !== null) ? 0.5 : 1,
+          }}
+        >
+          {runningType === "transforms" ? "Running..." : "Run Transforms"}
+        </button>
+      </div>
+
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -574,7 +699,7 @@ function SidePanel({ source, onClose }) {
         }}
       >
         {dropStatus === "attaching" && (
-          <div style={{ color: "var(--text-4)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Attaching…</div>
+          <div style={{ color: "var(--text-4)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Attaching...</div>
         )}
         {dropStatus === "ok" && (
           <div style={{ color: "var(--accent)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Step added.</div>
@@ -593,6 +718,10 @@ function SidePanel({ source, onClose }) {
             sourceId={source.source_id}
             steps={pipeline.steps}
             onReloadPipeline={loadPipeline}
+            resultTags={resultTags}
+            runningSetId={runningSetId}
+            onRunSet={handleRunSet}
+            onNavigateResults={() => onNavigate && onNavigate("results")}
           />
         )}
         {!loading && !error && pipeline && pipeline.steps.length === 0 && (
@@ -613,7 +742,7 @@ function SidePanel({ source, onClose }) {
 // Main screen
 // ---------------------------------------------------------------------------
 
-function ScreenBuilder({ flash }) {
+function ScreenBuilder({ flash, onNavigate }) {
   const { SourceBadge } = window.__UI__;
   const [sources, setSources] = useState([]);
   const [selectedSource, setSelectedSource] = useState(null);
@@ -706,6 +835,7 @@ function ScreenBuilder({ flash }) {
           <SidePanel
             source={selectedSource}
             onClose={() => setSelectedSource(null)}
+            onNavigate={onNavigate}
           />
         )}
 
