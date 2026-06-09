@@ -17,6 +17,7 @@ from pipeui.workflow.functions import (
     scan_functions,
     _inspect_function,
 )
+from tests.conftest import make_registered_source
 
 
 # ---------------------------------------------------------------------------
@@ -730,3 +731,93 @@ class TestGetFunctionDetail:
         assert param_names == {"x", "y"}
         assert data["attached_sources"] == []
         assert data["is_active"] is True
+
+    @pytest.mark.integration
+    def test_attached_sources_populated_after_attachment(self, fn_client, tmp_path):
+        """Guarantee: attached_sources lists a source once a function-set is attached to it."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns2"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def double(x: int) -> int:
+                \"\"\"Double a number.\"\"\"
+                return x * 2
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'double'"
+        ).fetchone()[0]
+
+        # Register a source using the shared helper (respects real schema, no columns needed)
+        source_id, _ = make_registered_source(conn, n_columns=0)
+        source_name = conn.execute(
+            "SELECT source_name FROM source_registry WHERE source_id = ?", [source_id]
+        ).fetchone()[0]
+
+        # Create a function set containing this function and attach to the source
+        set_id = uuid.uuid4()
+        conn.execute(
+            "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+            [set_id, uuid.uuid4(), "auto_set", None],
+        )
+        conn.execute(
+            "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+            [uuid.uuid4(), set_id, fn_id, 0],
+        )
+        conn.execute(
+            "INSERT INTO source_function_map VALUES (?, ?, ?)",
+            [uuid.uuid4(), source_id, set_id],
+        )
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        data = res.json()
+        attached = data["attached_sources"]
+        assert len(attached) == 1
+        assert attached[0]["source_id"] == str(source_id)
+        assert attached[0]["source_name"] == source_name
+
+    @pytest.mark.integration
+    def test_attached_sources_two_sources_no_duplicates(self, fn_client, tmp_path):
+        """Guarantee: a function attached to two sources appears in both; no duplicate entries."""
+        client, conn, _ = fn_client
+        py_dir = tmp_path / "fns3"
+        py_dir.mkdir()
+        (py_dir / "mod.py").write_text(textwrap.dedent("""
+            def triple(x: int) -> int:
+                \"\"\"Triple a number.\"\"\"
+                return x * 3
+        """))
+        scan_functions(conn, [str(py_dir)])
+        fn_id = conn.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'triple'"
+        ).fetchone()[0]
+
+        # Two sources via shared helper (n_columns=0 on the second to avoid column hash collisions)
+        src_a, _ = make_registered_source(conn, n_columns=0)
+        src_b, _ = make_registered_source(conn, n_columns=0)
+
+        # Each source gets its own set containing the same function
+        for sid in [src_a, src_b]:
+            set_id = uuid.uuid4()
+            conn.execute(
+                "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+                [set_id, uuid.uuid4(), f"set_{sid}", None],
+            )
+            conn.execute(
+                "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+                [uuid.uuid4(), set_id, fn_id, 0],
+            )
+            conn.execute(
+                "INSERT INTO source_function_map VALUES (?, ?, ?)",
+                [uuid.uuid4(), sid, set_id],
+            )
+
+        res = client.get(f"/functions/{fn_id}")
+        assert res.status_code == 200
+        data = res.json()
+        attached = data["attached_sources"]
+        source_ids = {a["source_id"] for a in attached}
+        # Both sources present, no duplicates
+        assert source_ids == {str(src_a), str(src_b)}
+        assert len(attached) == 2
