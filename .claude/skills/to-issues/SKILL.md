@@ -27,6 +27,8 @@ Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an
 - Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
+- **Three-layer minimum:** every slice must touch all three integration layers — **Data Layer** (workflow/schema/DuckDB), **Business Layer** (API/routes), and **UI Layer** (frontend). A slice missing any of these three is a horizontal slice, not a vertical one — challenge it and expand it before presenting. Tests count as part of whichever layer they exercise, not as a separate layer.
+- **Context load check:** before presenting a slice, estimate whether a single agent can hold all its changes in context without making trade-offs. If a slice touches more than ~4 files across layers, consider splitting it into a thinner slice that still hits all three layers (e.g. a walking skeleton first, then enrich with detail in a follow-on slice).
 - **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution.
 </vertical-slice-rules>
 
@@ -36,7 +38,7 @@ Present the proposed breakdown as a numbered list. For each slice, show:
 
 - **Title**: short descriptive name
 - **Type**: HITL / AFK
-- **Layers touched**: list every horizontal layer this slice hits — e.g. `schema | workflow | API | frontend | tests`. A slice that skips a layer should omit it; a slice that only hits one layer is a red flag that it is horizontal, not vertical — challenge it before presenting.
+- **Layers touched**: always list all three — `Data Layer | Business Layer | UI Layer` — plus `tests`. Call out explicitly what each layer contributes. If a layer has nothing to contribute for this slice, that is a red flag — challenge the slice design.
 - **Blocked by**: which other slices (if any) must complete first
 - **User stories covered**: which user stories this addresses (if the source material has them)
 
