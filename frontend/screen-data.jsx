@@ -643,9 +643,14 @@ function ScreenData({ flash }) {
       const res = await fetch("/sources", { method: "POST", body: fd });
       const data = await res.json();
       if (data.ok) {
-        flash(`"${data.source.source_name}" registered successfully.`, "ok");
         setPendingFile(null);
         await loadSources();
+        if (data.matched_existing) {
+          flash(`"${data.source.source_name}" matched an existing source — use Ingest to add data.`, "ok");
+          setSelectedSource(data.source);
+        } else {
+          flash(`"${data.source.source_name}" registered successfully.`, "ok");
+        }
       } else {
         flash(data.errors?.join("; ") || "Registration failed.", "error");
       }

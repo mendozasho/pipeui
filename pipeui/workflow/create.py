@@ -15,6 +15,25 @@ from pipeui.workflow.staging import CreateFlowCache
 from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, SourceRegistryUpdate, ColumnRegistryEntry
 
 
+def find_source_by_pattern(
+    conn: duckdb.DuckDBPyConnection,
+    filename: str,
+) -> uuid.UUID | None:
+    """Return the source_id of an existing source whose pattern matches filename's stem, or None."""
+    import re
+    stem = Path(filename).stem
+    rows = conn.execute(
+        "SELECT source_id, pattern FROM source_registry WHERE pattern IS NOT NULL"
+    ).fetchall()
+    for source_id, pattern in rows:
+        try:
+            if re.fullmatch(pattern, stem):
+                return uuid.UUID(str(source_id))
+        except re.error:
+            continue
+    return None
+
+
 def create_source(
     conn: duckdb.DuckDBPyConnection,
     file_path: str,
