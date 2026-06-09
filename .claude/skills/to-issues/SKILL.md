@@ -98,6 +98,7 @@ Or "None - can start immediately" if no blockers.
 - Work on the branch listed above.
 - **Before creating your branch, pull the latest main:** `git fetch origin main && git checkout main && git pull origin main`, then `git checkout -b <branch>`. This ensures you are building on top of all previously merged work.
 - Use `git commit -m "subject" -m "body"` with repeated `-m` flags for multi-paragraph messages. Do NOT use heredoc (`<<'EOF'`) syntax — it does not evaluate correctly in all shell contexts and will corrupt the commit message.
+- **Before opening a PR, go through every acceptance criterion in this issue one by one and verify each is met.** For each criterion: state what you built that satisfies it, and confirm it works (run the relevant test, or describe the observable behaviour). Do not open the PR until every criterion is checked off. If a criterion cannot be met, surface it explicitly rather than skipping it.
 - When all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body so the issue is auto-closed on merge.
 
 </issue-template>
