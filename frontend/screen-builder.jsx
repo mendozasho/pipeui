@@ -83,7 +83,23 @@ function FunctionCard({ fn }) {
   );
 }
 
-function StepCard({ step }) {
+function StepCard({ step, sourceId, onRemoved }) {
+  const [removing, setRemoving] = React.useState(false);
+
+  function handleRemove() {
+    if (removing) return;
+    setRemoving(true);
+    fetch(`/pipelines/${sourceId}/steps/${step.source_function_map_id}`, { method: "DELETE" })
+      .then(r => {
+        if (r.ok || r.status === 204) {
+          onRemoved();
+        } else {
+          setRemoving(false);
+        }
+      })
+      .catch(() => setRemoving(false));
+  }
+
   return (
     <div style={{
       background: "var(--panel)", border: "1px solid var(--border)",
@@ -98,7 +114,22 @@ function StepCard({ step }) {
         }}>
           {step.position !== null ? `#${step.position}` : "—"}
         </span>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>{step.set_name}</span>
+        <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{step.set_name}</span>
+        <button
+          onClick={handleRemove}
+          disabled={removing}
+          title="Remove step"
+          style={{
+            background: "none", border: "none", cursor: removing ? "default" : "pointer",
+            color: "var(--text-4)", fontSize: 16, lineHeight: 1, padding: "2px 4px",
+            borderRadius: "var(--radius)", opacity: removing ? 0.4 : 1,
+            transition: "color .1s",
+          }}
+          onMouseEnter={e => { if (!removing) e.currentTarget.style.color = "var(--danger, #e55)"; }}
+          onMouseLeave={e => { e.currentTarget.style.color = "var(--text-4)"; }}
+        >
+          ×
+        </button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {step.functions.map(fn => <FunctionCard key={fn.function_id} fn={fn} />)}
@@ -412,7 +443,14 @@ function PipelinePanel({ sourceId, sourceColumns, onColumnsLoaded }) {
         </div>
       ) : (
         <>
-          {steps.map(step => <StepCard key={step.source_function_map_id} step={step} />)}
+          {steps.map(step => (
+            <StepCard
+              key={step.source_function_map_id}
+              step={step}
+              sourceId={sourceId}
+              onRemoved={loadPipeline}
+            />
+          ))}
           {pendingSteps.map(item => (
             <PendingStepCard
               key={item.key}
