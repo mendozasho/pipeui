@@ -504,6 +504,7 @@ function SidePanel({ source, onClose, onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [dropStatus, setDropStatus] = useState(null); // null | "attaching" | "ok" | "error"
+  const [attachError, setAttachError] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [resultTags, setResultTags] = useState({});
   const [runningType, setRunningType] = useState(null); // null | "validations" | "transforms"
@@ -589,35 +590,44 @@ function SidePanel({ source, onClose, onNavigate }) {
       : { set_id: setId, bindings: [] };
 
     setDropStatus("attaching");
+    setAttachError(null);
 
-    // dry-run first for suggestions (fire and forget — we ignore the result in v1)
+    // dry-run to get suggested bindings, then commit with them
     const dryRunBody = functionId ? { function_id: functionId } : { set_id: setId };
     fetch("/pipelines/" + source.source_id + "/steps?dry_run=true", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(dryRunBody),
-    }).catch(() => {});
-
-    // commit attach
-    fetch("/pipelines/" + source.source_id + "/steps", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
     })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        if (data.ok) {
+      .then(r => r.json())
+      .then(suggestions => {
+        // Build bindings from suggestions: include any params with suggested columns
+        const bindings = (suggestions.params || [])
+          .filter(p => p.suggested_columns && p.suggested_columns.length > 0)
+          .map(p => ({ param_id: p.param_id, column_ids: p.suggested_columns.map(c => c.column_id) }));
+        return fetch("/pipelines/" + source.source_id + "/steps", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...body, bindings }),
+        });
+      })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.ok) {
           setDropStatus("ok");
           loadPipeline();
           setTimeout(() => setDropStatus(null), 1500);
         } else {
           setDropStatus("error");
-          setTimeout(() => setDropStatus(null), 3000);
+          const msg = data.detail || (data.missing_params ? "Missing bindings: " + data.missing_params.join(", ") : "Attach failed");
+          setAttachError(msg);
+          setTimeout(() => setDropStatus(null), 4000);
         }
       })
-      .catch(() => {
+      .catch(err => {
         setDropStatus("error");
-        setTimeout(() => setDropStatus(null), 3000);
+        setAttachError("Attach failed — check the server log");
+        setTimeout(() => setDropStatus(null), 4000);
       });
   }
 
@@ -705,7 +715,9 @@ function SidePanel({ source, onClose, onNavigate }) {
           <div style={{ color: "var(--accent)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Step added.</div>
         )}
         {dropStatus === "error" && (
-          <div style={{ color: "#e05252", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Attach failed.</div>
+          <div style={{ color: "#e05252", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>
+            {attachError || "Attach failed."}
+          </div>
         )}
         {loading && (
           <div style={{ color: "var(--text-4)", fontSize: 13, textAlign: "center", paddingTop: 30 }}>Loading...</div>
