@@ -304,21 +304,21 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 *Needs Phase E1 (attach) to be complete.*
 
-- [ ] **`feat/phase-e2-pipeline-run`** — Execute the pipeline for a source: call each attached function in `position` order via the Phase D worker, collect results. Validation functions (`function_type = validation`) produce pass/fail rows; transform functions write results back to the instance table (or to a session-only staging table). API: `POST /pipelines/{source_id}/run` → returns `{steps: [{function_name, status, rows_passed, rows_failed, error}]}`.
-  *Frontend:* Builder screen "Run" button triggers the pipeline; per-step status shown inline. Two new nav items added as **placeholders**: **Validations** (pass/fail summary — "coming in F1") and **Staging** (post-run transformed tables — "coming in F2"). `data.jsx` mock data fully retired after this phase.
+- [x] **`feat/phase-e2-pipeline-run`** — Execute the pipeline for a source: call each attached function in `position` order via the Phase D worker, collect results. Validation functions (`function_type = validation`) produce pass/fail rows; transform functions write results back to the instance table (or to a session-only staging table). API: `POST /pipelines/{source_id}/run` → returns `{steps: [{function_name, status, rows_passed, rows_failed, error}]}`.
+  *Frontend:* Builder screen side panel gains **Run Validations** and **Run Transforms** buttons; per-set run icon on each pipeline card; per-set result tags (`success` / `issues` / `error`) applied after run; clicking a result tag navigates to the Results screen. **Results** nav item added as the fourth nav item, replacing the former separate Validations/Staging placeholders — routes to a placeholder screen ("Run a pipeline to see results here").
   *Guarantees:* a crashing function step surfaces as a failed step (not a 500); subsequent steps still run; pipeline result is returned even if some steps fail.
 
 ---
 
-### Phase F1 — Validations Screen
+### Phase F1 — Validations Tab within Results Screen
 
-- [ ] **Validations screen** — Full implementation of the pass/fail summary view for validation function results. Per-source, per-function breakdown of rows passing/failing. Export capability (CSV). Replaces the Phase E2 placeholder.
+- [ ] **Validations tab** — Full implementation of the pass/fail summary view for validation function results within the Results screen. Per-source, per-function breakdown of rows passing/failing. Export capability (CSV). Fills in the Phase E2 Results screen placeholder.
 
 ---
 
-### Phase F2 — Staging Screen
+### Phase F2 — Transforms Tab within Results Screen
 
-- [ ] **Staging screen** — Full implementation of the post-run transformed table view. In v1: session-only ephemeral tables (not persisted to main DB). Shows sources that have been run through transformations, ready to combine with other reports or export. Replaces the Phase E2 placeholder.
+- [ ] **Transforms tab** — Full implementation of the post-run transformed table view within the Results screen. In v1: session-only ephemeral tables (not persisted to main DB). Shows sources that have been run through transformations, ready to combine with other reports or export. Fills in the Phase E2 Results screen placeholder.
   *Deferred to v2:* persistent staging table so results survive across sessions; cross-source join UI.
 
 ---

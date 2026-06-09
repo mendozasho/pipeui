@@ -5,6 +5,7 @@ const NAV = [
   { id: "data",     label: "Data",      icon: "data" },
   { id: "modules",  label: "Functions", icon: "modules" },
   { id: "builder",  label: "Builder",   icon: "builder" },
+  { id: "results",  label: "Results",   icon: "results" },
   { id: "settings", label: "Settings",  icon: "settings" },
 ];
 
@@ -48,6 +49,7 @@ function App() {
   const ScreenData = window.__ScreenData__;
   const ScreenModules = window.__ScreenModules__;
   const ScreenBuilder = window.__ScreenBuilder__;
+  const ScreenResults = window.__ScreenResults__;
   const ScreenSettings = window.__ScreenSettings__;
 
   const [screen, setScreen] = useState("data");
@@ -68,7 +70,8 @@ function App() {
       <main style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         {screen === "data"     && <ScreenData flash={flash} />}
         {screen === "modules"  && <ScreenModules flash={flash} />}
-        {screen === "builder"  && <ScreenBuilder flash={flash} />}
+        {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={setScreen} />}
+        {screen === "results"  && <ScreenResults flash={flash} />}
         {screen === "settings" && <ScreenSettings flash={flash} />}
       </main>
 
