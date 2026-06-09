@@ -97,11 +97,27 @@ When attaching a function to a source, the app checks whether any of the functio
 
 ## Results screen
 
-A combined post-run screen showing outcomes for both validation and transform functions after a pipeline run. Ships as a nav placeholder in Phase E2. Two tabs are filled in by later phases:
-- **Validations tab** (F1) — pass/fail summary per validation function: which source, which function, which rows passed/failed. Exportable.
-- **Transforms tab** (F2) — post-run transformed tables ready to combine/export. In v1 the tables are session-only ephemeral DuckDB tables (not persisted to the main DB); in v2 a separate persistent user table may be introduced.
+A post-run screen showing outcomes for validation and transform functions. Ships as a nav placeholder in Phase E2. Each phase fills in its own screen independently — no shared tab shell between F1 and F2; F2 restructures the screen when it adds Transforms.
 
-Clicking through from a result tag on a pipeline canvas card in the Builder lands on this screen.
+- **Validations screen** (F1) — two sub-tabs: **By Source** and **By Function** (see below). Results are ephemeral (session-only React state); export is the durable artifact.
+- **Transforms screen** (F2) — post-run transformed tables ready to combine/export. In v1 the tables are session-only ephemeral DuckDB tables (not persisted to the main DB); in v2 a separate persistent user table may be introduced. Export (CSV/Excel) included.
+
+Clicking through from a result tag on a pipeline canvas card in the Builder lands on the Validations screen, pre-scoped to that source.
+
+## Validations screen
+
+The F1 Results screen. Shows pass/fail outcomes for validation functions. Has two sub-tabs:
+
+- **By Source** — analyst picks a source; sees every validation function attached to it with per-function pass/fail counts and a capped preview (≤200 rows) of the full failing rows. Per-function CSV export of all failing rows. Triggered from the Builder result tag (pre-selects the source) or manually from this screen.
+- **By Function** — analyst picks a validation function; sees every source it is attached to with per-source pass/fail counts and failing rows preview. Per-source CSV export. Triggered via a dedicated endpoint `POST /validations/run?function_id={id}` that the backend fans out across all attached sources in one call.
+
+**Granularity:** results are per-function (not per set). The set name is shown as a grouping label only. The backend collects failing rows (full row values, not just PKs) per function and returns them in the run payload alongside aggregate counts.
+
+**Persistence:** ephemeral. Results live in React state for the session; lost on refresh. No run history is stored in DuckDB in v1.
+
+## validation run (cross-source)
+
+A run triggered from the Validations screen "By Function" sub-tab. Uses `POST /validations/run?function_id={id}`. The backend finds all sources the function is attached to via `source_function_map`, runs the function against each source's instance table, and returns a per-source result array in a single response. Distinct from `POST /pipelines/{source_id}/run` which is scoped to one source.
 
 ## result tag
 
