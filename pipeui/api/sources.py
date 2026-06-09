@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
-from pipeui.workflow.create import create_source
+from pipeui.workflow.create import create_source, find_source_by_pattern
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.workflow.migration import migrate_column
 
@@ -97,6 +97,13 @@ async def register_source(
         tmp_path = tmp.name
 
     try:
+        # Check if an existing source's pattern matches this filename before creating
+        matched_id = find_source_by_pattern(conn, file.filename or "")
+        if matched_id is not None:
+            rows = _source_rows(conn)
+            record = next((r for r in rows if r["source_id"] == str(matched_id)), None)
+            return {"ok": True, "matched_existing": True, "source": record}
+
         source_id, failed = create_source(
             conn=conn,
             file_path=tmp_path,
@@ -114,7 +121,7 @@ async def register_source(
 
         rows = _source_rows(conn)
         record = next((r for r in rows if r["source_id"] == str(source_id)), None)
-        return {"ok": True, "source": record}
+        return {"ok": True, "matched_existing": False, "source": record}
 
     finally:
         Path(tmp_path).unlink(missing_ok=True)
