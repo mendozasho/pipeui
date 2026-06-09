@@ -54,6 +54,7 @@ function App() {
 
   const [screen, setScreen] = useState("data");
   const [flashes, setFlashes] = useState([]);
+  const [validationResults, setValidationResults] = useState({});
 
   const flash = useCallback((text, kind = "ok") => {
     const id = ++_flashId;
@@ -71,7 +72,7 @@ function App() {
         {screen === "data"     && <ScreenData flash={flash} />}
         {screen === "modules"  && <ScreenModules flash={flash} />}
         {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={setScreen} />}
-        {screen === "results"  && <ScreenResults flash={flash} />}
+        {screen === "results"  && <ScreenResults flash={flash} validationResults={validationResults} setValidationResults={setValidationResults} />}
         {screen === "settings" && <ScreenSettings flash={flash} />}
       </main>
 

@@ -504,9 +504,11 @@ def test_run_type_validations_only_executes_validations(db, tmp_path):
     _seed_validation_step(db, source_id, col_id, "v2_fn", fn_v, position=1)
 
     result = run_pipeline(db, source_id, "validations")
-    fn_types = [s["function_type"] for s in result["steps"]]
-    assert all(t == "validation" for t in fn_types)
-    assert len(fn_types) == 1
+    # Validation steps now return per-function entries (no function_type field)
+    assert len(result["steps"]) == 1
+    step = result["steps"][0]
+    assert "function_name" in step
+    assert step["function_name"] == "v2_fn"
 
 
 @pytest.mark.integration

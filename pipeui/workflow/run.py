@@ -292,25 +292,42 @@ def _execute_transform_step(
 def _execute_validation_step(
     original: pd.DataFrame,
     step: dict,
-) -> tuple[int, int, str | None]:
+) -> list[dict]:
     """Execute all validation functions in a step against the original table.
 
-    Returns (rows_passed, rows_failed, error_or_None).
+    Returns a list of per-function result dicts, each with:
+      function_id, function_name, set_name, set_id, status,
+      rows_passed, rows_failed, pass_rate, failing_rows, error
     """
-    rows_passed = 0
-    rows_failed = 0
+    results = []
+    set_name = step["set_name"]
+    set_id = step["set_id"]
+
     for fn in step["functions"]:
         if fn["function_type"] != "validation":
             continue
 
-        module_path = fn["module_path"]
+        fn_id = fn["function_id"]
         fn_name = fn["function_name"]
         fn_class = fn["function_class"]
+        module_path = fn["module_path"]
 
         try:
             fn_source = Path(module_path).read_text(encoding="utf-8")
         except OSError as exc:
-            return 0, 0, f"cannot read module: {exc}"
+            results.append({
+                "function_id": fn_id,
+                "function_name": fn_name,
+                "set_name": set_name,
+                "set_id": set_id,
+                "status": "failed",
+                "rows_passed": None,
+                "rows_failed": None,
+                "pass_rate": None,
+                "failing_rows": [],
+                "error": f"cannot read module: {exc}",
+            })
+            continue
 
         params = fn["params"]
         if fn_class == "pd.dataframe":
@@ -333,15 +350,26 @@ def _execute_validation_step(
         result = call_function(fn_source, fn_name, kwarg_name, arg)
 
         if isinstance(result, FailedFunctionEntry):
-            errors = "; ".join(reason for _, reason in result.failures) if result.failures else "worker failed"
-            return 0, 0, errors
+            error_msg = "; ".join(reason for _, reason in result.failures) if result.failures else "worker failed"
+            results.append({
+                "function_id": fn_id,
+                "function_name": fn_name,
+                "set_name": set_name,
+                "set_id": set_id,
+                "status": "failed",
+                "rows_passed": None,
+                "rows_failed": None,
+                "pass_rate": None,
+                "failing_rows": [],
+                "error": error_msg,
+            })
+            continue
 
         # Interpret boolean result
         if isinstance(result, pd.Series):
             passed = int(result.astype(bool).sum())
             failed = len(result) - passed
         elif isinstance(result, pd.DataFrame):
-            # Expect a single boolean column
             bool_col = result.iloc[:, 0].astype(bool)
             passed = int(bool_col.sum())
             failed = len(bool_col) - passed
@@ -352,10 +380,23 @@ def _execute_validation_step(
             passed = 0
             failed = 0
 
-        rows_passed += passed
-        rows_failed += failed
+        total = passed + failed
+        pass_rate = (passed / total) if total > 0 else None
 
-    return rows_passed, rows_failed, None
+        results.append({
+            "function_id": fn_id,
+            "function_name": fn_name,
+            "set_name": set_name,
+            "set_id": set_id,
+            "status": "ok",
+            "rows_passed": passed,
+            "rows_failed": failed,
+            "pass_rate": pass_rate,
+            "failing_rows": [],
+            "error": None,
+        })
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -452,29 +493,8 @@ def run_pipeline(
                 })
 
         elif fn_type == "validation":
-            rows_passed, rows_failed, error = _execute_validation_step(original_df, step)
-            if error:
-                step_results.append({
-                    "source_function_map_id": sfm_id,
-                    "set_name": set_name,
-                    "function_type": fn_type,
-                    "status": "failed",
-                    "rows_affected": None,
-                    "rows_passed": None,
-                    "rows_failed": None,
-                    "error": error,
-                })
-            else:
-                step_results.append({
-                    "source_function_map_id": sfm_id,
-                    "set_name": set_name,
-                    "function_type": fn_type,
-                    "status": "ok",
-                    "rows_affected": None,
-                    "rows_passed": rows_passed,
-                    "rows_failed": rows_failed,
-                    "error": None,
-                })
+            fn_results = _execute_validation_step(original_df, step)
+            step_results.extend(fn_results)
 
     return {
         "run_type": run_type,
