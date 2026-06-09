@@ -1,9 +1,10 @@
-"""API routes for pipeline read, attach, and detach — Phase E1.
+"""API routes for pipeline read, attach, detach, and run — Phase E1/E2.
 
 GET    /pipelines/{source_id}                          → get_pipeline workflow
 POST   /pipelines/{source_id}/steps                    → attach step (commit) or dry-run suggest
 POST   /pipelines/{source_id}/steps?dry_run=true       → suggest_bindings (no writes)
 DELETE /pipelines/{source_id}/steps/{sfm_id}           → detach_function workflow
+POST   /pipelines/{source_id}/run                      → run_pipeline workflow
 
 §14: route modules call workflow/ only; never touch schema/, validation/,
 or sql_user_table/ directly.
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
 from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
+from pipeui.workflow.run import run_pipeline
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -217,3 +219,42 @@ def patch_pipeline_step_route(
             detail=f"Step {source_function_map_id!r} not found for source {source_id!r}",
         )
     return {"ok": True}
+
+
+@router.post("/{source_id}/run")
+def run_pipeline_route(
+    source_id: str,
+    run_type: str = Query(default="transforms"),
+    set_id: Optional[str] = Query(default=None),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Execute the pipeline for a source.
+
+    ?run_type=transforms  — execute only transform steps (default)
+    ?run_type=validations — execute only validation steps
+    ?run_type=set&set_id={id} — execute only the specified set
+
+    Returns { run_type, steps: [...] } with per-step status.
+    404 when source not found.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    parsed_set_id: Optional[uuid.UUID] = None
+    if set_id is not None:
+        try:
+            parsed_set_id = uuid.UUID(set_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid set_id: {set_id!r}")
+
+    try:
+        result = run_pipeline(conn, sid, run_type, set_id=parsed_set_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Pipeline run failed: {exc}")
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    return result
