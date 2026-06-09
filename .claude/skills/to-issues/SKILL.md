@@ -27,6 +27,7 @@ Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an
 - Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
+- **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution.
 </vertical-slice-rules>
 
 ### 4. Quiz the user
@@ -53,10 +54,14 @@ For each approved slice, publish a new issue to the issue tracker. Use the issue
 
 Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
 
-**After publishing, identify which slices can be implemented in parallel (no blocker relationship between them) and which are blocked.** Present a concise execution plan:
+**After publishing, identify which slices can be implemented in parallel and which are blocked.** Two conditions must BOTH be true for slices to run in parallel:
+1. No blocker relationship between them (one does not depend on the other's output)
+2. No file overlap — they do not modify any of the same files
 
-- Unblocked slices: launch as parallel agents immediately (one Agent call per unblocked issue in a single message).
-- Blocked slices: surface them explicitly and **wait for user approval** before starting each one. Do not start a blocked slice until all its blockers are merged and the user has confirmed the next step.
+If either condition fails, the slices must run sequentially. Present a concise execution plan:
+
+- Truly parallel slices (no blocker AND no file overlap): launch as parallel agents immediately (one Agent call per issue in a single message).
+- Sequential or blocked slices: surface them explicitly and **wait for user approval** before starting each one. Do not start a blocked slice until all its blockers are merged and the user has confirmed the next step.
 
 **Each issue must be self-contained.** The issue body carries the design decisions relevant to that slice directly — not a pointer to a separate PRD issue. The reviewer should be able to understand what was decided and why by reading the issue alone.
 
@@ -90,6 +95,8 @@ Or "None - can start immediately" if no blockers.
 ## Implementation notes for the agent
 
 - Work on the branch listed above.
+- **Before creating your branch, pull the latest main:** `git fetch origin main && git checkout main && git pull origin main`, then `git checkout -b <branch>`. This ensures you are building on top of all previously merged work.
+- Use `git commit -m "subject" -m "body"` with repeated `-m` flags for multi-paragraph messages. Do NOT use heredoc (`<<'EOF'`) syntax — it does not evaluate correctly in all shell contexts and will corrupt the commit message.
 - When all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body so the issue is auto-closed on merge.
 
 </issue-template>
