@@ -280,7 +280,7 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
-### Phase D2 — Function Sets
+### Phase D2 — Function Sets *(complete)*
 
 *Builds on Phase D. Adds the Sets tab to the Functions screen.*
 
@@ -289,11 +289,11 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
-### Phase E1 — Function Attach *(convergence)*
+### Phase E1 — Function Attach *(complete)*
 
 *Needs a registered source (Phase B) and registered functions (Phase D).*
 
-- [ ] **`feat/phase-e1-function-attach`** — §12. Attach individual functions or all functions in a set to a source: writes `source_function_map` + `alias_map` rows in one transaction per function. Validates that all non-scalar parameters have an alias_map binding — unmapped required param fails the attach with a message. Auto-suggests bindings when the new source shares a `column_id` with an existing binding on another source (same `column_name + column_type` → same `column_id`). Keyword binding via `param_name`. Multi-select: when a function's `function_class` is `column_backed`/`pd.Series`/`pd.dataframe`, it can be run once per eligible mapped column.
+- [x] **`feat/phase-e1-function-attach`** — §12. Attach individual functions or all functions in a set to a source: writes `source_function_map` + `alias_map` rows in one transaction per function. Validates that all non-scalar parameters have an alias_map binding — unmapped required param fails the attach with a message. Auto-suggests bindings when the new source shares a `column_id` with an existing binding on another source (same `column_name + column_type` → same `column_id`). Keyword binding via `param_name`. Multi-select: when a function's `function_class` is `column_backed`/`pd.Series`/`pd.dataframe`, it can be run once per eligible mapped column.
   API: `POST /sources/{source_id}/attach` (body: `{function_id}` or `{set_id}`), `DELETE /sources/{source_id}/attach/{function_id}`, `GET /sources/{source_id}/pipeline` (returns ordered attached functions with bindings).
   *Frontend:* attach UI lives in the Builder screen — source selector + function/set palette on the left, pipeline steps on the right; column binding dropdowns per parameter; auto-fill highlighted; save writes the attach.
   *Guarantees:* attach atomicity; unmapped required param fails; multi-select runs once per eligible column; detach removes `source_function_map` + all `alias_map` rows in one transaction.
