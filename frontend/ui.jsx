@@ -18,6 +18,7 @@ const ICONS = {
   drag:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7.5" cy="6" r="1"/><circle cx="12.5" cy="6" r="1"/><circle cx="7.5" cy="10" r="1"/><circle cx="12.5" cy="10" r="1"/><circle cx="7.5" cy="14" r="1"/><circle cx="12.5" cy="14" r="1"/></svg>,
   plus:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 4v12M4 10h12"/></svg>,
   trash:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 6h12l-1 11H5L4 6zM8 6V4h4v2M2 6h16"/></svg>,
+  results:  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="14" height="14" rx="1.5"/><path d="M7 13V10M10 13V7M13 13v-2"/></svg>,
 };
 
 function Icon({ name, size = 16, style }) {
