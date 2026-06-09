@@ -57,9 +57,11 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
 def _run_migrations(conn: duckdb.DuckDBPyConnection) -> None:
     for table, column, definition in _COLUMN_MIGRATIONS:
         try:
+            conn.execute("BEGIN")
             conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
+            conn.execute("COMMIT")
         except Exception:
-            pass  # column already exists
+            conn.execute("ROLLBACK")
 
 
 def infer_column_types(
