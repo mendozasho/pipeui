@@ -121,8 +121,15 @@ function FunctionRow({ fn }) {
 // Pending step card — shown after dry-run, before commit
 // ---------------------------------------------------------------------------
 
-function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving, saveError }) {
+function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCancel, saving, saveError }) {
   const params = dryRunResult.params || [];
+
+  // str params can be toggled between "text" (scalar) and "column" (column-backed) mode
+  const [strModes, setStrModes] = React.useState(() => {
+    const m = {};
+    params.forEach(p => { if (p.param_type === "str") m[p.param_id] = "text"; });
+    return m;
+  });
 
   function initSelections() {
     const sel = {};
@@ -136,7 +143,11 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
   const [selections, setSelections] = React.useState(initSelections);
   const [scalarValues, setScalarValues] = React.useState({});
 
-  const requiredParams = params.filter(p => p.param_type === "pd.Series" || p.param_type === "column_backed");
+  // A str param in "column" mode is treated as required (must have ≥1 column selected)
+  const requiredParams = params.filter(p =>
+    p.param_type === "pd.Series" || p.param_type === "column_backed" ||
+    (p.param_type === "str" && strModes[p.param_id] === "column")
+  );
   const allRequiredFilled = requiredParams.every(p => (selections[p.param_id] || []).length > 0);
 
   function handleColumnToggle(paramId, columnId) {
@@ -152,13 +163,16 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
 
   function handleSave() {
     const bindings = params
-      .filter(p => p.param_type === "pd.Series" || p.param_type === "column_backed")
+      .filter(p =>
+        p.param_type === "pd.Series" || p.param_type === "column_backed" ||
+        (p.param_type === "str" && strModes[p.param_id] === "column")
+      )
       .map(p => ({ param_id: p.param_id, column_ids: selections[p.param_id] || [] }))
       .filter(b => b.column_ids.length > 0);
     onSave(bindings, scalarValues);
   }
 
-  const name = dryRunResult.set_name || dryRunResult.function_name || "Step";
+  const displayName = stepName || "Step";
 
   return (
     <div style={{
@@ -178,7 +192,7 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
           pending
         </span>
         <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {name}
+          {displayName}
         </span>
       </div>
 
@@ -189,7 +203,9 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
       {params.map(p => {
         const isDataFrame = p.param_type === "pd.DataFrame";
         const isMultiCol = p.param_type === "pd.Series" || p.param_type === "column_backed";
-        const isScalar = !isDataFrame && !isMultiCol;
+        const isStr = p.param_type === "str";
+        const strMode = strModes[p.param_id] || "text";
+        const isScalar = !isDataFrame && !isMultiCol && !(isStr && strMode === "column");
 
         return (
           <div key={p.param_id} style={{
@@ -213,6 +229,22 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
               )}
             </div>
 
+            {/* str mode toggle */}
+            {isStr && (
+              <div style={{ display: "flex", gap: 4, marginBottom: 2 }}>
+                {["text", "column"].map(mode => (
+                  <button key={mode} onClick={() => setStrModes(prev => ({ ...prev, [p.param_id]: mode }))} style={{
+                    fontSize: 10, padding: "2px 8px", borderRadius: 99, cursor: "pointer", fontWeight: 500,
+                    border: "1px solid " + (strMode === mode ? "var(--accent)" : "var(--border)"),
+                    background: strMode === mode ? "var(--accent-soft)" : "var(--panel-3)",
+                    color: strMode === mode ? "var(--accent)" : "var(--text-3)",
+                  }}>
+                    {mode === "text" ? "Plain string" : "Column-backed"}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {isDataFrame && (
               <span style={{ fontSize: 10, color: "var(--text-4)", fontStyle: "italic" }}>auto (full table)</span>
             )}
@@ -233,7 +265,7 @@ function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving
               />
             )}
 
-            {isMultiCol && (
+            {(isMultiCol || (isStr && strMode === "column")) && (
               <div style={{
                 display: "flex", flexDirection: "column", gap: 2,
                 maxHeight: 120, overflowY: "auto",
@@ -527,6 +559,7 @@ function PaletteFunctionCard({ fn, onDragStart }) {
       draggable
       onDragStart={e => {
         e.dataTransfer.setData("palette/function_id", fn.function_id);
+        e.dataTransfer.setData("palette/function_name", fn.function_name);
         if (onDragStart) onDragStart();
       }}
       title={fn.function_doc || fn.function_name}
@@ -566,6 +599,7 @@ function PaletteSetCard({ set, onDragStart }) {
       draggable
       onDragStart={e => {
         e.dataTransfer.setData("palette/set_id", set.set_id);
+        e.dataTransfer.setData("palette/set_name", set.set_name);
         if (onDragStart) onDragStart();
       }}
       title={set.set_description || set.set_name}
@@ -778,6 +812,9 @@ function SidePanel({ source, onClose, onNavigate }) {
     setIsDragOver(false);
     const functionId = e.dataTransfer.getData("palette/function_id");
     const setId = e.dataTransfer.getData("palette/set_id");
+    const draggedName = functionId
+      ? e.dataTransfer.getData("palette/function_name")
+      : e.dataTransfer.getData("palette/set_name");
     if (!functionId && !setId) return;
 
     // Cancel any existing pending card and start a new dry-run
@@ -798,12 +835,11 @@ function SidePanel({ source, onClose, onNavigate }) {
       .then(r => r.json())
       .then(dryRunResult => {
         setPendingDryRunning(false);
-        setPendingStep({ dryRunResult, attachBody });
+        setPendingStep({ dryRunResult, attachBody, stepName: draggedName });
       })
       .catch(() => {
         setPendingDryRunning(false);
-        // Show pending card with empty params so user can still cancel
-        setPendingStep({ dryRunResult: { params: [], ...dryRunBody }, attachBody });
+        setPendingStep({ dryRunResult: { params: [] }, attachBody, stepName: draggedName });
       });
   }
 
@@ -951,6 +987,7 @@ function SidePanel({ source, onClose, onNavigate }) {
         {pendingStep && (
           <PendingStepCard
             dryRunResult={pendingStep.dryRunResult}
+            stepName={pendingStep.stepName}
             sourceColumns={sourceColumns}
             onSave={handlePendingSave}
             onCancel={handlePendingCancel}
