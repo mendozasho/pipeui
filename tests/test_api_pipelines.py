@@ -1,10 +1,18 @@
-"""Behavioral guarantees for GET /pipelines/{source_id} (Phase E1 / §13).
+"""Behavioral guarantees for GET /pipelines/{source_id} and
+POST /pipelines/{source_id}/steps (Phase E1 / §13).
 
-Guarantees under test:
+Guarantees under test (GET):
   1. Returns { source, steps: [] } for a source with no attachments.
   2. Returns 404 for an unknown source_id.
   3. Returns correctly ordered steps with full param + binding detail.
   4. pd.DataFrame params carry an empty bindings list.
+
+Guarantees under test (POST):
+  5. function_id body auto-creates set; returns source_function_map_id.
+  6. set_id body attaches existing set; returns source_function_map_id.
+  7. Missing required bindings returns 200 with ok=False + missing_params list.
+  8. Unknown source_id returns 404.
+  9. Successful attach reflected in subsequent GET.
 """
 from __future__ import annotations
 
@@ -179,3 +187,110 @@ def test_dataframe_param_has_empty_bindings(client, db):
     fn_beta = beta_step["functions"][0]
     df_param = next(p for p in fn_beta["params"] if p["param_type"] == "pd.DataFrame")
     assert df_param["bindings"] == []
+
+
+# ---------------------------------------------------------------------------
+# POST /pipelines/{source_id}/steps
+# ---------------------------------------------------------------------------
+
+def _make_function(conn, fn_name: str, params: list[tuple[str, str]]) -> tuple[uuid.UUID, list[uuid.UUID]]:
+    fn_id = uuid.uuid4()
+    fn_ch = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, fn_ch, "transform", fn_name, f"Doc {fn_name}", "pd.Series",
+         ", ".join(f"{n}: {t}" for n, t in params), "transform", f"/tmp/{fn_name}.py", True],
+    )
+    param_ids = []
+    for p_name, p_type in params:
+        p_id = uuid.uuid4()
+        p_ch = uuid.uuid4()
+        conn.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)", [p_id, p_ch, p_name, p_type, fn_id])
+        param_ids.append(p_id)
+    return fn_id, param_ids
+
+
+@pytest.mark.integration
+def test_post_function_id_attaches_and_returns_sfm_id(client, db):
+    """Guarantee 5: function_id body auto-creates set; returns source_function_map_id."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_api", [("col", "str")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0])]}],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "source_function_map_id" in body
+
+
+@pytest.mark.integration
+def test_post_set_id_attaches_existing_set(client, db):
+    """Guarantee 6: set_id body attaches existing set."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_set_api", [("col", "str")])
+    # Create set manually
+    set_id = uuid.uuid4()
+    set_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set (set_id, content_hash_id, set_name, set_description) VALUES (?, ?, ?, ?)",
+        [set_id, set_ch, "My Set", None],
+    )
+    sm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set_map (set_map_id, set_id, function_id, position) VALUES (?, ?, ?, ?)",
+        [sm_id, set_id, fn_id, 0],
+    )
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "set_id": str(set_id),
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0])]}],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+
+
+@pytest.mark.integration
+def test_post_missing_binding_returns_structured_failure(client, db):
+    """Guarantee 7: missing required bindings returns 200 with ok=False + missing_params."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_missing_api", [("col", "str")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert len(body["missing_params"]) == 1
+    assert body["missing_params"][0]["param_name"] == "col"
+
+
+@pytest.mark.integration
+def test_post_unknown_source_returns_404(client, db):
+    """Guarantee 8: unknown source_id returns 404."""
+    resp = client.post(f"/pipelines/{uuid.uuid4()}/steps", json={"function_id": str(uuid.uuid4())})
+    assert resp.status_code == 404
+
+
+@pytest.mark.integration
+def test_post_attach_reflected_in_get(client, db):
+    """Guarantee 9: successful attach reflected in subsequent GET."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_get_after_post", [("col", "str")])
+
+    post_resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0])]}],
+    })
+    assert post_resp.json()["ok"] is True
+
+    get_resp = client.get(f"/pipelines/{source_id}")
+    assert get_resp.status_code == 200
+    steps = get_resp.json()["steps"]
+    assert len(steps) == 1
+    assert steps[0]["functions"][0]["function_name"] == "fn_get_after_post"
