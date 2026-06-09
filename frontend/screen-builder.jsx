@@ -213,8 +213,14 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
             borderBottom: "1px solid var(--border-soft)",
             display: "flex", flexDirection: "column", gap: 5,
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--text)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              {p.function_name && (
+                <span style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "'Geist Mono', monospace" }}>
+                  {p.function_name}
+                </span>
+              )}
+              {p.function_name && <span style={{ fontSize: 10, color: "var(--text-4)" }}>/</span>}
+              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--text)", fontWeight: 600 }}>
                 {p.param_name}
               </span>
               <span style={{

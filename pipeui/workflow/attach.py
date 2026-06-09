@@ -358,14 +358,15 @@ def _params_for_set(
     conn: duckdb.DuckDBPyConnection,
     set_id: uuid.UUID,
 ) -> list[tuple]:
-    """Return (param_id, param_name, param_type) rows for all functions in a set."""
+    """Return (param_id, param_name, param_type, function_name) rows for all functions in a set."""
     return conn.execute(
         """
-        SELECT p.param_id, p.param_name, p.param_type
+        SELECT p.param_id, p.param_name, p.param_type, fr.function_name
         FROM function_set_map fsmap
+        JOIN function_registry fr ON fr.function_id = fsmap.function_id
         JOIN parameter p ON p.function_id = fsmap.function_id
         WHERE fsmap.set_id = ?
-        ORDER BY p.param_name
+        ORDER BY fsmap.position, p.param_name
         """,
         [set_id],
     ).fetchall()
@@ -375,13 +376,14 @@ def _params_for_function(
     conn: duckdb.DuckDBPyConnection,
     function_id: uuid.UUID,
 ) -> list[tuple]:
-    """Return (param_id, param_name, param_type) rows for a single function."""
+    """Return (param_id, param_name, param_type, function_name) rows for a single function."""
     return conn.execute(
         """
-        SELECT param_id, param_name, param_type
-        FROM parameter
-        WHERE function_id = ?
-        ORDER BY param_name
+        SELECT p.param_id, p.param_name, p.param_type, fr.function_name
+        FROM parameter p
+        JOIN function_registry fr ON fr.function_id = p.function_id
+        WHERE p.function_id = ?
+        ORDER BY p.param_name
         """,
         [function_id],
     ).fetchall()
@@ -429,8 +431,8 @@ def suggest_bindings(
         raw_params = _params_for_function(conn, function_id)
 
     eligible_params = [
-        (p_id, p_name, p_type)
-        for p_id, p_name, p_type in raw_params
+        (p_id, p_name, p_type, fn_name)
+        for p_id, p_name, p_type, fn_name in raw_params
         if p_type in _SUGGEST_TYPES
     ]
 
@@ -452,7 +454,7 @@ def suggest_bindings(
     # 3. For each eligible param, find prior bindings on *other* sources whose
     #    column_id exists in the target source.
     result_params = []
-    for p_id, p_name, p_type in eligible_params:
+    for p_id, p_name, p_type, fn_name in eligible_params:
         prior_rows = conn.execute(
             """
             SELECT DISTINCT am.column_id
@@ -479,6 +481,7 @@ def suggest_bindings(
             "param_id": str(p_id),
             "param_name": p_name,
             "param_type": p_type,
+            "function_name": fn_name,
             "suggested_columns": suggested,
         })
 
