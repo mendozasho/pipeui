@@ -677,15 +677,26 @@ function ScreenData({ flash }) {
       ),
     },
     {
+      key: "row_count", label: "Rows",
+      render: (v, row) => (
+        <span style={{
+          fontFamily: "'Geist Mono', monospace", fontSize: 12,
+          color: row.date_ingested ? "var(--text)" : "var(--text-4)",
+        }}>
+          {row.date_ingested ? (v ?? 0).toLocaleString() : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "date_ingested", label: "Last ingested",
+      render: v => (
+        <span style={{ fontSize: 12, color: "var(--text-3)" }}>
+          {v ? new Date(v).toLocaleDateString() : "—"}
+        </span>
+      ),
+    },
+    {
       key: "ingestion_method", label: "Method",
-      render: v => <span style={{ fontSize: 12, color: "var(--text-3)" }}>{v}</span>,
-    },
-    {
-      key: "primary_key", label: "PK",
-      render: v => <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>{v}</span>,
-    },
-    {
-      key: "date_registered", label: "Registered",
       render: v => <span style={{ fontSize: 12, color: "var(--text-3)" }}>{v}</span>,
     },
     {
