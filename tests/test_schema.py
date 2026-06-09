@@ -119,3 +119,33 @@ def test_source_column_map_has_composite_uuid_pk(db):
     # DuckDB returns UUIDs as strings in this context; round-trip must parse cleanly
     parsed = uuid.UUID(str(row[0]))
     assert isinstance(parsed, uuid.UUID)
+
+
+@pytest.mark.integration
+def test_source_function_map_has_position_and_output_mode(db):
+    """source_function_map must have position INTEGER NOT NULL and output_mode VARCHAR NOT NULL."""
+    rows = db.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'source_function_map'"
+    ).fetchall()
+    col_names = {r[0] for r in rows}
+    assert "position" in col_names, "source_function_map must have position column"
+    assert "output_mode" in col_names, "source_function_map must have output_mode column"
+
+    # Verify defaults: insert a row and check the defaults
+    source_id, _ = make_registered_source(db, n_columns=1)
+    set_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, uuid.uuid4(), "test_set", None],
+    )
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, 0, 'append')",
+        [sfm_id, source_id, set_id],
+    )
+    row = db.execute(
+        "SELECT position, output_mode FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()
+    assert row[0] == 0
+    assert row[1] == "append"

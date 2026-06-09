@@ -570,3 +570,91 @@ def test_delete_wrong_source_returns_404(client, db):
     # Use source_id_b but sfm_id belongs to source_id_a
     resp = client.delete(f"/pipelines/{source_id_b}/steps/{sfm_id}")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PATCH /pipelines/{source_id}/steps/{sfm_id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_patch_updates_position(client, db):
+    """PATCH updates position on a source_function_map row."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={"position": 5})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    row = db.execute(
+        "SELECT position FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()
+    assert row[0] == 5
+
+
+@pytest.mark.integration
+def test_patch_updates_output_mode(client, db):
+    """PATCH updates output_mode on a source_function_map row."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={"output_mode": "replace"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    row = db.execute(
+        "SELECT output_mode FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()
+    assert row[0] == "replace"
+
+
+@pytest.mark.integration
+def test_patch_unknown_sfm_returns_404(client, db):
+    """PATCH returns 404 for an unknown source_function_map_id."""
+    source_id, _ = make_registered_source(db)
+    resp = client.patch(f"/pipelines/{source_id}/steps/{uuid.uuid4()}", json={"position": 1})
+    assert resp.status_code == 404
+
+
+@pytest.mark.integration
+def test_patch_invalid_output_mode_returns_422(client, db):
+    """PATCH returns 422 when output_mode is not a valid value."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={"output_mode": "invalid"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET ordering — source_function_map.position ASC
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_get_pipeline_ordered_by_sfm_position(client, db):
+    """GET returns steps ordered by source_function_map.position ASC."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+
+    # Attach two functions; attach_function assigns position 0, then 1
+    fn_a_id, _ = _make_function(db, "fn_order_a", [("df", "pd.DataFrame")])
+    fn_b_id, _ = _make_function(db, "fn_order_b", [("df", "pd.DataFrame")])
+
+    resp_a = client.post(f"/pipelines/{source_id}/steps", json={"function_id": str(fn_a_id)})
+    assert resp_a.json()["ok"] is True
+    sfm_a_id = resp_a.json()["source_function_map_id"]
+
+    resp_b = client.post(f"/pipelines/{source_id}/steps", json={"function_id": str(fn_b_id)})
+    assert resp_b.json()["ok"] is True
+
+    # Reorder: set fn_a to position 10 (higher than fn_b's position 1)
+    client.patch(f"/pipelines/{source_id}/steps/{sfm_a_id}", json={"position": 10})
+
+    get_resp = client.get(f"/pipelines/{source_id}")
+    assert get_resp.status_code == 200
+    steps = get_resp.json()["steps"]
+    assert len(steps) == 2
+    # fn_b (position 1) should come before fn_a (position 10)
+    assert steps[0]["functions"][0]["function_name"] == "fn_order_b"
+    assert steps[1]["functions"][0]["function_name"] == "fn_order_a"
