@@ -70,7 +70,7 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
         # Row count from the JIT instance table (0 if not yet ingested)
         from pipeui.sql_user_table import instance_table_name
-        tname = instance_table_name(record["source_id"])
+        tname = instance_table_name(uuid.UUID(record["source_id"]))
         try:
             record["row_count"] = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()[0]
         except Exception:
