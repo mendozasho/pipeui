@@ -43,6 +43,23 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
     :return: None
     """
     conn.execute(_DDL)
+    _run_migrations(conn)
+
+
+# Additive column migrations for databases created before a column was added.
+# Each entry is (table, column, ddl_fragment). Safe to run on fresh DBs because
+# DuckDB raises an error on duplicate column names — we catch and ignore it.
+_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("function_registry", "is_active", "BOOLEAN DEFAULT TRUE"),
+]
+
+
+def _run_migrations(conn: duckdb.DuckDBPyConnection) -> None:
+    for table, column, definition in _COLUMN_MIGRATIONS:
+        try:
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
+        except Exception:
+            pass  # column already exists
 
 
 def infer_column_types(
