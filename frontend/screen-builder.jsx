@@ -118,6 +118,198 @@ function FunctionRow({ fn }) {
 }
 
 // ---------------------------------------------------------------------------
+// Pending step card — shown after dry-run, before commit
+// ---------------------------------------------------------------------------
+
+function PendingStepCard({ dryRunResult, sourceColumns, onSave, onCancel, saving, saveError }) {
+  const params = dryRunResult.params || [];
+
+  function initSelections() {
+    const sel = {};
+    params.forEach(p => {
+      if (p.param_type === "pd.Series" || p.param_type === "column_backed") {
+        sel[p.param_id] = (p.suggested_columns || []).map(c => c.column_id);
+      }
+    });
+    return sel;
+  }
+  const [selections, setSelections] = React.useState(initSelections);
+  const [scalarValues, setScalarValues] = React.useState({});
+
+  const requiredParams = params.filter(p => p.param_type === "pd.Series" || p.param_type === "column_backed");
+  const allRequiredFilled = requiredParams.every(p => (selections[p.param_id] || []).length > 0);
+
+  function handleColumnToggle(paramId, columnId) {
+    setSelections(prev => {
+      const current = prev[paramId] || [];
+      if (current.includes(columnId)) {
+        return { ...prev, [paramId]: current.filter(id => id !== columnId) };
+      } else {
+        return { ...prev, [paramId]: [...current, columnId] };
+      }
+    });
+  }
+
+  function handleSave() {
+    const bindings = params
+      .filter(p => p.param_type === "pd.Series" || p.param_type === "column_backed")
+      .map(p => ({ param_id: p.param_id, column_ids: selections[p.param_id] || [] }))
+      .filter(b => b.column_ids.length > 0);
+    onSave(bindings, scalarValues);
+  }
+
+  const name = dryRunResult.set_name || dryRunResult.function_name || "Step";
+
+  return (
+    <div style={{
+      background: "var(--panel)",
+      border: "2px solid var(--accent)",
+      borderRadius: "var(--radius-lg)",
+      padding: "12px 14px",
+      display: "flex", flexDirection: "column", gap: 10,
+      marginTop: 10,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700,
+          background: "var(--accent-soft)", color: "var(--accent)",
+          borderRadius: 99, padding: "2px 7px", flexShrink: 0,
+        }}>
+          pending
+        </span>
+        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {name}
+        </span>
+      </div>
+
+      {params.length === 0 && (
+        <div style={{ fontSize: 11, color: "var(--text-4)", fontStyle: "italic" }}>No parameters to configure.</div>
+      )}
+
+      {params.map(p => {
+        const isDataFrame = p.param_type === "pd.DataFrame";
+        const isMultiCol = p.param_type === "pd.Series" || p.param_type === "column_backed";
+        const isScalar = !isDataFrame && !isMultiCol;
+
+        return (
+          <div key={p.param_id} style={{
+            padding: "8px 0",
+            borderBottom: "1px solid var(--border-soft)",
+            display: "flex", flexDirection: "column", gap: 5,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--text)" }}>
+                {p.param_name}
+              </span>
+              <span style={{
+                fontSize: 10, padding: "1px 5px", borderRadius: 99,
+                background: "var(--panel-3)", color: "var(--text-3)",
+                fontFamily: "'Geist Mono', monospace",
+              }}>
+                {p.param_type}
+              </span>
+              {isMultiCol && (
+                <span style={{ fontSize: 10, color: "#e05252", fontWeight: 600 }}>required</span>
+              )}
+            </div>
+
+            {isDataFrame && (
+              <span style={{ fontSize: 10, color: "var(--text-4)", fontStyle: "italic" }}>auto (full table)</span>
+            )}
+
+            {isScalar && (
+              <input
+                type="text"
+                placeholder="Python default"
+                value={scalarValues[p.param_id] || ""}
+                onChange={e => setScalarValues(prev => ({ ...prev, [p.param_id]: e.target.value }))}
+                style={{
+                  fontSize: 11, padding: "4px 7px",
+                  borderRadius: "var(--radius)",
+                  border: "1px solid var(--border)",
+                  background: "var(--panel-2)", color: "var(--text)",
+                  width: "100%", boxSizing: "border-box",
+                }}
+              />
+            )}
+
+            {isMultiCol && (
+              <div style={{
+                display: "flex", flexDirection: "column", gap: 2,
+                maxHeight: 120, overflowY: "auto",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                padding: "4px 6px",
+                background: "var(--panel-2)",
+              }}>
+                {sourceColumns.length === 0 && (
+                  <span style={{ fontSize: 10, color: "var(--text-4)", fontStyle: "italic" }}>No columns available.</span>
+                )}
+                {sourceColumns.map(col => {
+                  const selected = (selections[p.param_id] || []).includes(col.column_id);
+                  return (
+                    <label key={col.column_id} style={{
+                      display: "flex", alignItems: "center", gap: 5,
+                      cursor: "pointer", fontSize: 11,
+                      color: selected ? "var(--accent)" : "var(--text)",
+                      fontWeight: selected ? 600 : 400,
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => handleColumnToggle(p.param_id, col.column_id)}
+                        style={{ cursor: "pointer" }}
+                      />
+                      <span style={{ fontFamily: "'Geist Mono', monospace" }}>{col.column_name}</span>
+                      <span style={{ fontSize: 10, color: "var(--text-4)" }}>{col.column_type}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {saveError && (
+        <div style={{ color: "#e05252", fontSize: 11, padding: "4px 0" }}>{saveError}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, paddingTop: 2 }}>
+        <button
+          onClick={handleSave}
+          disabled={!allRequiredFilled || saving}
+          style={{
+            flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
+            borderRadius: "var(--radius)",
+            border: "none",
+            background: allRequiredFilled && !saving ? "var(--accent)" : "var(--panel-3)",
+            color: allRequiredFilled && !saving ? "#fff" : "var(--text-4)",
+            cursor: allRequiredFilled && !saving ? "pointer" : "not-allowed",
+            transition: "background .15s",
+          }}
+        >
+          {saving ? "Saving..." : "Save"}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          style={{
+            flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
+            borderRadius: "var(--radius)",
+            border: "1px solid var(--border)",
+            background: "var(--panel-2)", color: "var(--text)",
+            cursor: saving ? "not-allowed" : "pointer",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Step card
 // ---------------------------------------------------------------------------
 
@@ -503,12 +695,15 @@ function SidePanel({ source, onClose, onNavigate }) {
   const [pipeline, setPipeline] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [dropStatus, setDropStatus] = useState(null); // null | "attaching" | "ok" | "error"
-  const [attachError, setAttachError] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [resultTags, setResultTags] = useState({});
   const [runningType, setRunningType] = useState(null); // null | "validations" | "transforms"
   const [runningSetId, setRunningSetId] = useState(null);
+  // Pending step card state
+  const [pendingStep, setPendingStep] = useState(null); // null | { dryRunResult, attachBody }
+  const [pendingDryRunning, setPendingDryRunning] = useState(false);
+  const [pendingSaving, setPendingSaving] = useState(false);
+  const [pendingSaveError, setPendingSaveError] = useState(null);
 
   function loadPipeline() {
     if (!source) return;
@@ -585,53 +780,69 @@ function SidePanel({ source, onClose, onNavigate }) {
     const setId = e.dataTransfer.getData("palette/set_id");
     if (!functionId && !setId) return;
 
-    const body = functionId
+    // Cancel any existing pending card and start a new dry-run
+    setPendingStep(null);
+    setPendingSaveError(null);
+    setPendingDryRunning(true);
+
+    const attachBody = functionId
       ? { function_id: functionId, bindings: [] }
       : { set_id: setId, bindings: [] };
-
-    setDropStatus("attaching");
-    setAttachError(null);
-
-    // dry-run to get suggested bindings, then commit with them
     const dryRunBody = functionId ? { function_id: functionId } : { set_id: setId };
+
     fetch("/pipelines/" + source.source_id + "/steps?dry_run=true", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(dryRunBody),
     })
       .then(r => r.json())
-      .then(suggestions => {
-        // Build bindings from suggestions: include any params with suggested columns
-        const bindings = (suggestions.params || [])
-          .filter(p => p.suggested_columns && p.suggested_columns.length > 0)
-          .map(p => ({ param_id: p.param_id, column_ids: p.suggested_columns.map(c => c.column_id) }));
-        return fetch("/pipelines/" + source.source_id + "/steps", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...body, bindings }),
-        });
+      .then(dryRunResult => {
+        setPendingDryRunning(false);
+        setPendingStep({ dryRunResult, attachBody });
       })
-      .then(r => r.json().then(data => ({ ok: r.ok, data })))
-      .then(({ ok, data }) => {
-        if (ok && data.ok) {
-          setDropStatus("ok");
-          loadPipeline();
-          setTimeout(() => setDropStatus(null), 1500);
-        } else {
-          setDropStatus("error");
-          const msg = data.detail || (data.missing_params ? "Missing bindings: " + data.missing_params.join(", ") : "Attach failed");
-          setAttachError(msg);
-          setTimeout(() => setDropStatus(null), 4000);
-        }
-      })
-      .catch(err => {
-        setDropStatus("error");
-        setAttachError("Attach failed — check the server log");
-        setTimeout(() => setDropStatus(null), 4000);
+      .catch(() => {
+        setPendingDryRunning(false);
+        // Show pending card with empty params so user can still cancel
+        setPendingStep({ dryRunResult: { params: [], ...dryRunBody }, attachBody });
       });
   }
 
+  function handlePendingSave(bindings, scalarValues) {
+    if (!pendingStep) return;
+    setPendingSaving(true);
+    setPendingSaveError(null);
+    const body = { ...pendingStep.attachBody, bindings };
+    fetch("/pipelines/" + source.source_id + "/steps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        setPendingSaving(false);
+        if (ok && data.ok) {
+          setPendingStep(null);
+          setPendingSaveError(null);
+          loadPipeline();
+        } else {
+          const msg = data.detail || (data.missing_params ? "Missing bindings: " + data.missing_params.join(", ") : "Attach failed");
+          setPendingSaveError(msg);
+        }
+      })
+      .catch(() => {
+        setPendingSaving(false);
+        setPendingSaveError("Attach failed — check the server log");
+      });
+  }
+
+  function handlePendingCancel() {
+    setPendingStep(null);
+    setPendingSaveError(null);
+    setPendingDryRunning(false);
+  }
+
   const hasSteps = pipeline && pipeline.steps && pipeline.steps.length > 0;
+  const sourceColumns = (pipeline && pipeline.source && pipeline.source.columns) || [];
   const btnBase = {
     flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
     borderRadius: "var(--radius)", border: "1px solid var(--border)",
@@ -708,16 +919,8 @@ function SidePanel({ source, onClose, onNavigate }) {
           transition: "background .1s",
         }}
       >
-        {dropStatus === "attaching" && (
-          <div style={{ color: "var(--text-4)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Attaching...</div>
-        )}
-        {dropStatus === "ok" && (
-          <div style={{ color: "var(--accent)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Step added.</div>
-        )}
-        {dropStatus === "error" && (
-          <div style={{ color: "#e05252", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>
-            {attachError || "Attach failed."}
-          </div>
+        {pendingDryRunning && (
+          <div style={{ color: "var(--text-4)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Loading parameters...</div>
         )}
         {loading && (
           <div style={{ color: "var(--text-4)", fontSize: 13, textAlign: "center", paddingTop: 30 }}>Loading...</div>
@@ -736,7 +939,7 @@ function SidePanel({ source, onClose, onNavigate }) {
             onNavigateResults={() => onNavigate && onNavigate("results")}
           />
         )}
-        {!loading && !error && pipeline && pipeline.steps.length === 0 && (
+        {!loading && !error && pipeline && pipeline.steps.length === 0 && !pendingStep && (
           <div style={{
             marginTop: 10, padding: "14px 10px", borderRadius: "var(--radius)",
             border: "2px dashed var(--border)", color: "var(--text-4)",
@@ -744,6 +947,16 @@ function SidePanel({ source, onClose, onNavigate }) {
           }}>
             Drag a function or set here to add a pipeline step.
           </div>
+        )}
+        {pendingStep && (
+          <PendingStepCard
+            dryRunResult={pendingStep.dryRunResult}
+            sourceColumns={sourceColumns}
+            onSave={handlePendingSave}
+            onCancel={handlePendingCancel}
+            saving={pendingSaving}
+            saveError={pendingSaveError}
+          />
         )}
       </div>
     </div>
