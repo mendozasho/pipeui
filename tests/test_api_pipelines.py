@@ -1,5 +1,4 @@
-"""Behavioral guarantees for GET /pipelines/{source_id} and
-POST /pipelines/{source_id}/steps (Phase E1 / §13).
+"""Behavioral guarantees for GET, POST, and DELETE /pipelines (Phase E1 / §13).
 
 Guarantees under test (GET):
   1. Returns { source, steps: [] } for a source with no attachments.
@@ -19,6 +18,14 @@ Guarantees under test (POST ?dry_run=true):
   11. pd.DataFrame params are excluded from dry-run response.
   12. Returns 422 when both function_id and set_id are provided.
   13. Returns 422 when neither function_id nor set_id is provided.
+
+Guarantees under test (DELETE /pipelines/{source_id}/steps/{sfm_id}):
+ 14. DELETE removes source_function_map row and all alias_map rows atomically.
+ 15. Auto-created set with no remaining references is deleted on detach.
+ 16. A set referenced by another source_function_map row is NOT deleted.
+ 17. A user-named set is NOT deleted even if it has no remaining references.
+ 18. 404 returned for unknown source_function_map_id.
+ 19. 404 returned when sfm_id doesn't belong to the given source_id.
 """
 from __future__ import annotations
 
@@ -385,3 +392,181 @@ def test_dry_run_422_when_no_ids_provided(client, db):
         json={},
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# DELETE /pipelines/{source_id}/steps/{sfm_id} guarantees
+# ---------------------------------------------------------------------------
+
+def _seed_auto_set(conn, source_id, column_ids):
+    """Seed one auto-created set (set_name == function_name, single member).
+
+    Returns (sfm_id, set_id, fn_id, param_id).
+    """
+    fn_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, uuid.uuid4(), "column_backed", "fn_auto", "Auto doc", "pd.Series",
+         "x: str", "transform", "/tmp/fn_auto.py", True],
+    )
+    param_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        [param_id, uuid.uuid4(), "x", "str", fn_id],
+    )
+    # Auto-created set: set_name == function_name, single member
+    set_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, uuid.uuid4(), "fn_auto", None],
+    )
+    conn.execute(
+        "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+        [uuid.uuid4(), set_id, fn_id, 0],
+    )
+    sfm_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        [sfm_id, source_id, set_id],
+    )
+    # One alias binding
+    conn.execute(
+        "INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+        [uuid.uuid4(), column_ids[0], param_id, source_id],
+    )
+    return sfm_id, set_id, fn_id, param_id
+
+
+@pytest.mark.integration
+def test_delete_removes_sfm_and_alias_map(client, db):
+    """Guarantee 10: DELETE removes source_function_map + alias_map atomically."""
+    source_id, column_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_id, param_id = _seed_auto_set(db, source_id, column_ids)
+
+    # Confirm rows exist before delete
+    assert db.execute("SELECT COUNT(*) FROM source_function_map WHERE source_function_map_id = ?",
+                      [sfm_id]).fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM alias_map WHERE source_id = ?",
+                      [source_id]).fetchone()[0] == 1
+
+    resp = client.delete(f"/pipelines/{source_id}/steps/{sfm_id}")
+    assert resp.status_code == 204
+
+    # Both rows removed
+    assert db.execute("SELECT COUNT(*) FROM source_function_map WHERE source_function_map_id = ?",
+                      [sfm_id]).fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM alias_map WHERE source_id = ?",
+                      [source_id]).fetchone()[0] == 0
+
+
+@pytest.mark.integration
+def test_delete_removes_auto_set_when_no_remaining_references(client, db):
+    """Guarantee 11: auto-created set with no remaining sfm references is deleted."""
+    source_id, column_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_id, param_id = _seed_auto_set(db, source_id, column_ids)
+
+    resp = client.delete(f"/pipelines/{source_id}/steps/{sfm_id}")
+    assert resp.status_code == 204
+
+    # Auto-created set cleaned up
+    assert db.execute("SELECT COUNT(*) FROM function_set WHERE set_id = ?",
+                      [set_id]).fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM function_set_map WHERE set_id = ?",
+                      [set_id]).fetchone()[0] == 0
+
+
+@pytest.mark.integration
+def test_delete_does_not_remove_set_still_referenced(client, db):
+    """Guarantee 12: set referenced by another sfm row is NOT deleted on detach."""
+    source_id_a, col_ids_a = make_registered_source(db, n_columns=2)
+
+    # Register a second source reusing the same column rows (shared column_registry).
+    source_id_b = uuid.uuid4()
+    import datetime as _dt
+    ch_b = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [source_id_b, ch_b, f"test_source_{source_id_b}", _dt.date.today(), "upsert", "id"],
+    )
+
+    # Seed the auto set under source_a
+    sfm_a_id, set_id, fn_id, param_id = _seed_auto_set(db, source_id_a, col_ids_a)
+
+    # Also attach the same set to source_b (a second sfm row referencing the same set)
+    sfm_b_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        [sfm_b_id, source_id_b, set_id],
+    )
+
+    # Detach from source_a only
+    resp = client.delete(f"/pipelines/{source_id_a}/steps/{sfm_a_id}")
+    assert resp.status_code == 204
+
+    # Set must survive (still referenced by source_b)
+    assert db.execute("SELECT COUNT(*) FROM function_set WHERE set_id = ?",
+                      [set_id]).fetchone()[0] == 1
+
+
+@pytest.mark.integration
+def test_delete_does_not_remove_user_named_set(client, db):
+    """Guarantee 13: user-named set is NOT deleted even with no remaining references."""
+    source_id, column_ids = make_registered_source(db, n_columns=2)
+
+    # Create a user-named set: set_name != function_name
+    fn_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, uuid.uuid4(), "column_backed", "fn_named", "doc", "pd.Series",
+         "x: str", "transform", "/tmp/fn_named.py", True],
+    )
+    set_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, uuid.uuid4(), "My Named Set", None],  # set_name != function_name
+    )
+    db.execute(
+        "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+        [uuid.uuid4(), set_id, fn_id, 0],
+    )
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        [sfm_id, source_id, set_id],
+    )
+
+    resp = client.delete(f"/pipelines/{source_id}/steps/{sfm_id}")
+    assert resp.status_code == 204
+
+    # User-named set must NOT be deleted
+    assert db.execute("SELECT COUNT(*) FROM function_set WHERE set_id = ?",
+                      [set_id]).fetchone()[0] == 1
+
+
+@pytest.mark.integration
+def test_delete_unknown_sfm_returns_404(client, db):
+    """Guarantee 14: 404 for unknown source_function_map_id."""
+    source_id, _ = make_registered_source(db)
+    resp = client.delete(f"/pipelines/{source_id}/steps/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.integration
+def test_delete_wrong_source_returns_404(client, db):
+    """Guarantee 15: 404 when sfm_id doesn't belong to the given source_id."""
+    source_id_a, col_ids_a = make_registered_source(db, n_columns=2)
+
+    # Register a second source without extra columns to avoid column_registry collision.
+    source_id_b = uuid.uuid4()
+    import datetime as _dt
+    ch_b = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [source_id_b, ch_b, f"test_source_{source_id_b}", _dt.date.today(), "upsert", "id"],
+    )
+
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id_a, col_ids_a)
+
+    # Use source_id_b but sfm_id belongs to source_id_a
+    resp = client.delete(f"/pipelines/{source_id_b}/steps/{sfm_id}")
+    assert resp.status_code == 404

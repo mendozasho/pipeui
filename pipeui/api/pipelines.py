@@ -1,8 +1,9 @@
-"""API routes for pipeline read/write — Phase E1.
+"""API routes for pipeline read, attach, and detach — Phase E1.
 
-GET  /pipelines/{source_id}              → get_pipeline workflow
-POST /pipelines/{source_id}/steps        → attach step (commit) or dry-run suggest
-POST /pipelines/{source_id}/steps?dry_run=true  → suggest_bindings (no writes)
+GET    /pipelines/{source_id}                          → get_pipeline workflow
+POST   /pipelines/{source_id}/steps                    → attach step (commit) or dry-run suggest
+POST   /pipelines/{source_id}/steps?dry_run=true       → suggest_bindings (no writes)
+DELETE /pipelines/{source_id}/steps/{sfm_id}           → detach_function workflow
 
 §14: route modules call workflow/ only; never touch schema/, validation/,
 or sql_user_table/ directly.
@@ -17,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
-from pipeui.workflow.attach import AttachBinding, attach_function, get_pipeline, suggest_bindings
+from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, suggest_bindings
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -134,3 +135,37 @@ def attach_step(
         set_id=st_id,
     )
     return result
+
+
+@router.delete("/{source_id}/steps/{source_function_map_id}", status_code=204)
+def delete_pipeline_step(
+    source_id: str,
+    source_function_map_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Remove a pipeline step atomically.
+
+    Deletes the source_function_map row, all associated alias_map rows, and
+    (when the set was auto-created and has no remaining references) the
+    function_set + function_set_map rows.
+
+    404 when source_function_map_id is unknown or doesn't belong to source_id.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+    try:
+        sfm_id = uuid.UUID(source_function_map_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid source_function_map_id: {source_function_map_id!r}",
+        )
+
+    ok = detach_function(conn, sid, sfm_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Step {source_function_map_id!r} not found for source {source_id!r}",
+        )

@@ -1,26 +1,18 @@
-"""Pipeline read, attach, and suggestion workflows.
+"""Pipeline read, attach, suggest, and detach workflows.
 
 get_pipeline(conn, source_id)
-    Returns the committed pipeline state for a source: source metadata with its
-    columns, and an ordered list of steps (function sets) with full param +
-    binding detail.
+    Returns the committed pipeline state for a source.
 
 attach_function(conn, source_id, bindings, *, function_id, set_id)
     Writes source_function_map + alias_map atomically.
 
 suggest_bindings(conn, source_id, *, function_id, set_id)
-    Dry-run mode: returns per-parameter column suggestions without writing any
-    rows.  Looks at prior alias_map bindings for the same parameter_id on *other*
-    sources, then surfaces any of those column_ids that also appear in the target
-    source's source_column_map.
+    Dry-run: returns per-parameter column suggestions without writing any rows.
 
-    scalar and pd.DataFrame params are excluded from the response.
-
-    Tiebreaker: alias_map carries no timestamp and alias_map_id is UUID5
-    (deterministic), so ordering is not reliable.  When the same parameter has
-    been bound to multiple column_ids on different prior sources and more than one
-    of those column_ids exists in the target source, all matching columns are
-    returned rather than guessing the "most recent" one.
+detach_function(conn, source_id, source_function_map_id)
+    Removes a step atomically: alias_map rows + source_function_map row, and
+    optionally the auto-created function_set + function_set_map rows when no
+    other references remain and the set is auto-created.
 
 §12: alias_map binding; §14: API layer calls workflow only.
 """
@@ -483,3 +475,105 @@ def suggest_bindings(
         })
 
     return {"params": result_params}
+
+
+def detach_function(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    source_function_map_id: uuid.UUID,
+) -> bool:
+    """Remove a pipeline step atomically.
+
+    One transaction:
+      1. Verify the source_function_map row exists and belongs to source_id.
+      2. Delete alias_map rows where source_id matches and parameter_id belongs
+         to a function in the referenced set.
+      3. Delete the source_function_map row.
+      4. If no other source_function_map row references this set_id, AND the set
+         is auto-created (exactly one member in function_set_map AND set_name
+         equals that member function's function_name), delete function_set +
+         function_set_map rows. When uncertain, skip — an orphan is safer.
+
+    Returns True on success, False when the row is not found or doesn't belong
+    to source_id (caller should surface a 404).
+    """
+    # Look up the map row and its set_id
+    row = conn.execute(
+        """
+        SELECT sfm.set_id
+        FROM source_function_map sfm
+        WHERE sfm.source_function_map_id = ? AND sfm.source_id = ?
+        """,
+        [source_function_map_id, source_id],
+    ).fetchone()
+    if row is None:
+        return False
+
+    set_id = row[0]
+
+    conn.execute("BEGIN")
+    try:
+        # 1. Delete alias_map rows for this source whose parameter belongs to a
+        #    function in the set.
+        conn.execute(
+            """
+            DELETE FROM alias_map
+            WHERE source_id = ?
+              AND parameter_id IN (
+                SELECT p.param_id
+                FROM parameter p
+                JOIN function_set_map fsm ON fsm.function_id = p.function_id
+                WHERE fsm.set_id = ?
+              )
+            """,
+            [source_id, set_id],
+        )
+
+        # 2. Delete the source_function_map row itself.
+        conn.execute(
+            "DELETE FROM source_function_map WHERE source_function_map_id = ?",
+            [source_function_map_id],
+        )
+
+        # 3. Conditionally clean up the set if auto-created and now unreferenced.
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM source_function_map WHERE set_id = ?",
+            [set_id],
+        ).fetchone()[0]
+
+        if remaining == 0:
+            # Check auto-created heuristic: exactly one function in set_map,
+            # and set_name equals that function's function_name.
+            member_rows = conn.execute(
+                """
+                SELECT fr.function_name
+                FROM function_set_map fsm
+                JOIN function_registry fr ON fr.function_id = fsm.function_id
+                WHERE fsm.set_id = ?
+                """,
+                [set_id],
+            ).fetchall()
+
+            if len(member_rows) == 1:
+                member_function_name = member_rows[0][0]
+                set_name_row = conn.execute(
+                    "SELECT set_name FROM function_set WHERE set_id = ?",
+                    [set_id],
+                ).fetchone()
+                if set_name_row and set_name_row[0] == member_function_name:
+                    # Auto-created set with no remaining references — clean up.
+                    conn.execute(
+                        "DELETE FROM function_set_map WHERE set_id = ?",
+                        [set_id],
+                    )
+                    conn.execute(
+                        "DELETE FROM function_set WHERE set_id = ?",
+                        [set_id],
+                    )
+
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    return True
