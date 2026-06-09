@@ -563,6 +563,16 @@ sources.
 - **Multi-select loop.** For a `multi_select_eligible` parameter with N mapped
   eligible columns, the function runs N times (once per column); results are
   aggregated in the summary (§16/Results — deferred).
+- **`pd.DataFrame` implicit binding.** A `pd.dataframe` parameter does **not**
+  get an `alias_map` row. The full source table is passed automatically — no
+  column mapping UI, no `alias_map` write. The backend fetches the entire instance
+  table and passes it as a `pd.DataFrame` at run time. (The parameter still has a
+  `parameter` row; it just has no `alias_map` counterpart.)
+- **Multi-bind model.** `column_backed` and `pd.Series` parameters support
+  **multiple `alias_map` rows per `(parameter_id, source_id)` pair** — this is
+  the multi-select case. Each row maps one eligible column; the function runs once
+  per row. `pd.DataFrame` parameters are excluded from multi-bind: the full table
+  is always passed as a single argument (one run per attach, not one per column).
 - The `alias_map` row id is the `uuid5` of (`parameter_id`, `column_id`,
   `source_id`); rows are written directly (no pydantic object), as part of the
   attach transaction (§10).

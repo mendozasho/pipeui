@@ -189,6 +189,14 @@ This is a stability/accident boundary, not a defense against malicious code. If
 the app ever becomes multi-user or hosted, OS-level sandboxing must be added
 before running untrusted modules.
 
+**No-write-back boundary.** User functions never write back to persisted instance
+tables. A function receives data (scalar, `pd.Series`, or `pd.DataFrame`), returns
+data, and nothing else. The backend is the sole writer to the database: it pulls
+data out, calls the function, and writes results back itself — to a session-only
+staging table, not to the source's persisted instance table. This boundary is
+architectural: it prevents functions from corrupting the source data and keeps the
+execution model stateless from the function's perspective.
+
 **v1 is Unix-only.** The resource limits (`setrlimit` CPU-time and memory caps)
 rely on Python's Unix-only `resource` module, so the worker applies them
 unconditionally — no Windows branch or graceful-degradation path — and CI runs
