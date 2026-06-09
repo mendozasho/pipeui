@@ -67,15 +67,6 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
             {"column_id": str(c[0]), "column_name": c[1], "column_type": c[2]}
             for c in cols
         ]
-
-        # Row count from the JIT instance table (0 if not yet ingested)
-        from pipeui.sql_user_table import instance_table_name
-        tname = instance_table_name(record["source_id"])
-        try:
-            record["row_count"] = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()[0]
-        except Exception:
-            record["row_count"] = 0
-
         results.append(record)
 
     return results
@@ -83,7 +74,11 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
 @router.get("")
 def list_sources(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
-    return _source_rows(conn)
+    rows = _source_rows(conn)
+    for row in rows:
+        detail = get_source_detail(conn, uuid.UUID(row["source_id"]))
+        row["row_count"] = detail["row_count"] if detail else 0
+    return rows
 
 
 @router.post("")
