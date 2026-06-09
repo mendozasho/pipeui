@@ -36,6 +36,7 @@ Present the proposed breakdown as a numbered list. For each slice, show:
 
 - **Title**: short descriptive name
 - **Type**: HITL / AFK
+- **Layers touched**: list every horizontal layer this slice hits — e.g. `schema | workflow | API | frontend | tests`. A slice that skips a layer should omit it; a slice that only hits one layer is a red flag that it is horizontal, not vertical — challenge it before presenting.
 - **Blocked by**: which other slices (if any) must complete first
 - **User stories covered**: which user stories this addresses (if the source material has them)
 
