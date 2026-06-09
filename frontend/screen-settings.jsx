@@ -1,4 +1,4 @@
-const { useState, useEffect } = React;
+const { useState, useEffect, useCallback } = React;
 
 const ACCENTS = [
   { label: "Violet",  value: "#7c6cf5" },
@@ -28,6 +28,108 @@ function SectionHeader({ title }) {
   );
 }
 
+function FolderPickerModal({ initialPath, onSelect, onClose }) {
+  const { Btn } = window.__UI__;
+  const [current, setCurrent] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const browse = useCallback((path) => {
+    setLoading(true);
+    setError(null);
+    const url = path ? `/settings/browse?path=${encodeURIComponent(path)}` : "/settings/browse";
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { setError(data.error); setLoading(false); return; }
+        setCurrent(data);
+        setLoading(false);
+      })
+      .catch(() => { setError("Failed to load directory"); setLoading(false); });
+  }, []);
+
+  useEffect(() => { browse(initialPath || ""); }, []);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+    }} onClick={onClose}>
+      <div style={{
+        background: "var(--panel)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)", width: 480, maxHeight: "70vh",
+        display: "flex", flexDirection: "column", overflow: "hidden",
+      }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{
+          padding: "12px 16px", borderBottom: "1px solid var(--border)",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>Select folder</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-3)", fontSize: 16 }}>×</button>
+        </div>
+
+        {/* Current path breadcrumb */}
+        <div style={{
+          padding: "8px 16px", borderBottom: "1px solid var(--border-soft)",
+          fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-3)",
+          display: "flex", alignItems: "center", gap: 6,
+        }}>
+          {current?.parent != null && (
+            <button onClick={() => browse(current.parent)} style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: "var(--accent)", fontSize: 13, padding: "0 2px", lineHeight: 1,
+            }} title="Go up">←</button>
+          )}
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {current?.path ?? "…"}
+          </span>
+        </div>
+
+        {/* Directory listing */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+          {loading && (
+            <div style={{ padding: "20px 16px", color: "var(--text-3)", fontSize: 13 }}>Loading…</div>
+          )}
+          {error && (
+            <div style={{ padding: "20px 16px", color: "var(--danger, #e55)", fontSize: 13 }}>{error}</div>
+          )}
+          {!loading && !error && current?.entries.length === 0 && (
+            <div style={{ padding: "20px 16px", color: "var(--text-4)", fontSize: 13 }}>No subdirectories</div>
+          )}
+          {!loading && !error && current?.entries.map(entry => (
+            <div key={entry.path}
+              onClick={() => browse(entry.path)}
+              style={{
+                padding: "7px 16px", cursor: "pointer", fontSize: 13,
+                display: "flex", alignItems: "center", gap: 8,
+                transition: "background .1s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--panel-3)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+            >
+              <span style={{ color: "var(--accent)", fontSize: 14 }}>📁</span>
+              <span style={{ fontFamily: "var(--font-mono)" }}>{entry.name}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: "10px 16px", borderTop: "1px solid var(--border)",
+          display: "flex", justifyContent: "flex-end", gap: 8,
+        }}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={() => { if (current) onSelect(current.path); }} disabled={!current}>
+            Select this folder
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScreenSettings({ flash }) {
   const { Btn } = window.__UI__;
 
@@ -40,6 +142,7 @@ function ScreenSettings({ flash }) {
   const [newPathInput, setNewPathInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [restartBanner, setRestartBanner] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
 
   useEffect(() => {
     fetch("/settings")
@@ -233,11 +336,23 @@ function ScreenSettings({ flash }) {
                 borderRadius: "var(--radius)", color: "var(--text)", fontSize: 13,
               }}
             />
+            <Btn variant="secondary" onClick={() => setShowPicker(true)}>Browse…</Btn>
             <Btn variant="secondary" onClick={handleAddPath}>Add</Btn>
           </div>
           <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 5 }}>
             Directories the app will scan for .py function modules.
           </div>
+
+          {showPicker && (
+            <FolderPickerModal
+              initialPath={functionsPaths[functionsPaths.length - 1] || ""}
+              onSelect={path => {
+                if (!functionsPaths.includes(path)) setFunctionsPaths([...functionsPaths, path]);
+                setShowPicker(false);
+              }}
+              onClose={() => setShowPicker(false)}
+            />
+          )}
         </div>
 
         <Btn variant="primary" onClick={handleSave} disabled={saving}>

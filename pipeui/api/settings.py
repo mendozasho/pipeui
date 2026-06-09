@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -44,6 +45,36 @@ def load_settings() -> AppSettings:
 
 def save_settings(settings: AppSettings) -> None:
     CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
+
+
+@router.get("/browse")
+def browse_directory(path: str = Query(default="")):
+    """List subdirectories at the given path for the folder picker UI.
+
+    Returns { path, parent, entries: [{name, path}] }.
+    Defaults to the user's home directory when path is empty.
+    Returns { error } for inaccessible or non-existent paths.
+    """
+    target = Path(path).expanduser() if path.strip() else Path.home()
+    target = target.resolve()
+
+    if not target.exists() or not target.is_dir():
+        return JSONResponse({"error": f"Not a directory: {str(target)}"}, status_code=400)
+
+    try:
+        entries = sorted(
+            [
+                {"name": e.name, "path": str(e)}
+                for e in target.iterdir()
+                if e.is_dir() and not e.name.startswith(".")
+            ],
+            key=lambda x: x["name"].lower(),
+        )
+    except PermissionError:
+        return JSONResponse({"error": f"Permission denied: {str(target)}"}, status_code=403)
+
+    parent = str(target.parent) if target != target.parent else None
+    return {"path": str(target), "parent": parent, "entries": entries}
 
 
 @router.get("")
