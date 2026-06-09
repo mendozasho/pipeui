@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
-from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, suggest_bindings
+from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -36,6 +36,12 @@ class AttachStepIn(BaseModel):
     function_id: str | None = None
     set_id: str | None = None
     bindings: list[BindingIn] = []
+    output_mode: str = "append"
+
+
+class PatchStepIn(BaseModel):
+    position: int | None = None
+    output_mode: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +139,7 @@ def attach_step(
         bindings,
         function_id=fn_id,
         set_id=st_id,
+        output_mode=body.output_mode,
     )
     return result
 
@@ -169,3 +176,44 @@ def delete_pipeline_step(
             status_code=404,
             detail=f"Step {source_function_map_id!r} not found for source {source_id!r}",
         )
+
+@router.patch("/{source_id}/steps/{source_function_map_id}")
+def patch_pipeline_step_route(
+    source_id: str,
+    source_function_map_id: str,
+    body: PatchStepIn,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Update position and/or output_mode on a pipeline step.
+
+    Both fields are optional. Returns { ok: true } on success.
+    404 when the step is not found for that source.
+    422 when output_mode is not 'append' or 'replace'.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+    try:
+        sfm_id = uuid.UUID(source_function_map_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid source_function_map_id: {source_function_map_id!r}",
+        )
+
+    try:
+        ok = patch_pipeline_step(
+            conn, sid, sfm_id,
+            position=body.position,
+            output_mode=body.output_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Step {source_function_map_id!r} not found for source {source_id!r}",
+        )
+    return {"ok": True}

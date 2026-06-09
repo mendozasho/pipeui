@@ -52,6 +52,7 @@ def attach_function(
     *,
     function_id: uuid.UUID | None = None,
     set_id: uuid.UUID | None = None,
+    output_mode: str = "append",
 ) -> dict:
     """Attach a function or function set to a source, writing map rows atomically.
 
@@ -152,9 +153,16 @@ def attach_function(
                 [rs_map_id, rs_id, rs_fn_id, 0],
             )
 
+        # Compute position = MAX(position) + 1 for this source, or 0
+        pos_row = conn.execute(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM source_function_map WHERE source_id = ?",
+            [source_id],
+        ).fetchone()
+        position = pos_row[0] if pos_row else 0
+
         conn.execute(
-            "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
-            [sfm_id, source_id, resolved_set_id],
+            "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+            [sfm_id, source_id, resolved_set_id, position, output_mode],
         )
 
         for p_id, p_name, p_type in param_rows:
@@ -244,19 +252,18 @@ def get_pipeline(
             sfm.source_function_map_id,
             fs.set_id,
             fs.set_name,
-            MIN(fsmap.position) AS position
+            sfm.position,
+            sfm.output_mode
         FROM source_function_map sfm
         JOIN function_set fs ON fs.set_id = sfm.set_id
-        LEFT JOIN function_set_map fsmap ON fsmap.set_id = fs.set_id
         WHERE sfm.source_id = ?
-        GROUP BY sfm.source_function_map_id, fs.set_id, fs.set_name
-        ORDER BY position NULLS LAST, fs.set_name
+        ORDER BY sfm.position ASC, fs.set_name
         """,
         [source_id],
     ).fetchall()
 
     steps = []
-    for sfm_id, set_id, set_name, position in set_rows:
+    for sfm_id, set_id, set_name, position, output_mode in set_rows:
         # 4. Fetch functions in this set, ordered by position
         fn_rows = conn.execute(
             """
@@ -329,6 +336,7 @@ def get_pipeline(
             "set_id": str(set_id),
             "set_name": set_name,
             "position": position,
+            "output_mode": output_mode,
             "functions": functions,
         })
 
@@ -476,6 +484,51 @@ def suggest_bindings(
 
     return {"params": result_params}
 
+
+
+# ---------------------------------------------------------------------------
+# patch_pipeline_step — update position and/or output_mode
+# ---------------------------------------------------------------------------
+
+_VALID_OUTPUT_MODES = {"append", "replace"}
+
+
+def patch_pipeline_step(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    source_function_map_id: uuid.UUID,
+    *,
+    position: int | None = None,
+    output_mode: str | None = None,
+) -> bool:
+    """Update position and/or output_mode on a source_function_map row.
+
+    Returns True on success, False when the row is not found or doesn't
+    belong to source_id (caller surfaces a 404).
+
+    Raises ValueError when output_mode is not a valid value.
+    """
+    if output_mode is not None and output_mode not in _VALID_OUTPUT_MODES:
+        raise ValueError(f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)!r}; got {output_mode!r}")
+
+    row = conn.execute(
+        "SELECT source_function_map_id FROM source_function_map WHERE source_function_map_id = ? AND source_id = ?",
+        [source_function_map_id, source_id],
+    ).fetchone()
+    if row is None:
+        return False
+
+    if position is not None:
+        conn.execute(
+            "UPDATE source_function_map SET position = ? WHERE source_function_map_id = ?",
+            [position, source_function_map_id],
+        )
+    if output_mode is not None:
+        conn.execute(
+            "UPDATE source_function_map SET output_mode = ? WHERE source_function_map_id = ?",
+            [output_mode, source_function_map_id],
+        )
+    return True
 
 def detach_function(
     conn: duckdb.DuckDBPyConnection,

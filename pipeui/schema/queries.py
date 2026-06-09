@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS source_column_map (
 CREATE TABLE IF NOT EXISTS source_function_map (
     source_function_map_id UUID PRIMARY KEY,
     source_id              UUID NOT NULL,  -- references source_registry(source_id)
-    set_id                 UUID NOT NULL   -- references function_set(set_id)
+    set_id                 UUID NOT NULL,  -- references function_set(set_id)
+    position               INTEGER NOT NULL DEFAULT 0,
+    output_mode            VARCHAR NOT NULL DEFAULT 'append'
 );
 
 CREATE TABLE IF NOT EXISTS alias_map (

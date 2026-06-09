@@ -115,12 +115,12 @@ def _seed_pipeline(conn, source_id, column_ids):
     # --- Attach both sets to source ---
     sfm_a_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
         [sfm_a_id, source_id, set_a_id],
     )
     sfm_b_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
         [sfm_b_id, source_id, set_b_id],
     )
 
@@ -426,7 +426,7 @@ def _seed_auto_set(conn, source_id, column_ids):
     )
     sfm_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
         [sfm_id, source_id, set_id],
     )
     # One alias binding
@@ -495,7 +495,7 @@ def test_delete_does_not_remove_set_still_referenced(client, db):
     # Also attach the same set to source_b (a second sfm row referencing the same set)
     sfm_b_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
         [sfm_b_id, source_id_b, set_id],
     )
 
@@ -531,7 +531,7 @@ def test_delete_does_not_remove_user_named_set(client, db):
     )
     sfm_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id) VALUES (?, ?, ?)",
         [sfm_id, source_id, set_id],
     )
 
