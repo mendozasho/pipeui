@@ -123,3 +123,15 @@ def get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
     except Exception as exc:
         print(f"Error retrieving database path: {exc}")
     return ":memory:"
+
+
+def get_conn():
+    """FastAPI Depends provider — yields a connected, schema-initialised DuckDB connection."""
+    from typing import Generator
+    from pipeui.main import DB_PATH
+    conn = get_connection(str(DB_PATH))
+    create_schema(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
