@@ -4,7 +4,7 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
-const { timeAgo, LoadingState, InlineError } = window.__UI__;
+const { timeAgo, LoadingState, InlineError, Icon, Btn } = window.__UI__;
 
 // ── Filename helpers ──────────────────────────────────────────────────────────
 function sanitiseFilename(str) {
@@ -753,8 +753,44 @@ function ExportSelectedBar({ selectedIds, cards, onClear }) {
   );
 }
 
+// ── Results empty state ───────────────────────────────────────────────────────
+function ResultsEmptyState({ onNavigate }) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      height: "100%", textAlign: "center", padding: 24, gap: 18,
+    }}>
+      <div style={{
+        width: 64, height: 64, borderRadius: "var(--radius-lg)",
+        background: "var(--panel-2)", border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "var(--text-3)",
+      }}>
+        <Icon name="results" size={28} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-2)" }}>
+          No results yet
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-3)", maxWidth: 340,
+          lineHeight: 1.6, textWrap: "balance" }}>
+          Run a pipeline from the Builder screen to see
+          validation and transform results here.
+        </div>
+      </div>
+      {onNavigate && (
+        <Btn variant="default" size="sm" icon="builder"
+             onClick={() => onNavigate("builder")} style={{ marginTop: 2 }}>
+          Go to Builder
+        </Btn>
+      )}
+    </div>
+  );
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
-function ScreenResults({ flash, resultCards, resultsContext }) {
+function ScreenResults({ flash, resultCards, resultsContext, onNavigate }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   function handleToggleSelect(runId) {
@@ -795,12 +831,7 @@ function ScreenResults({ flash, resultCards, resultsContext }) {
       {/* Card grid */}
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         {resultCards.length === 0 ? (
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: "100%", color: "var(--text-4)", fontSize: 14, textAlign: "center",
-          }}>
-            Run a pipeline from the Builder screen to see results here.
-          </div>
+          <ResultsEmptyState onNavigate={onNavigate} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 860 }}>
             {resultCards.map(card => {
