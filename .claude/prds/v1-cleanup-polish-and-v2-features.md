@@ -4,7 +4,8 @@ status: draft
 tracks:
   - "Track 1: v1 Code Cleanup (Claude Code)"
   - "Track 2: v1 UI Polish (Claude Design → Claude Code)"
-  - "Track 3: v2 New Features"
+  - "Track 3: v1 New Features (Claude Code)"
+  - "Track 4: v2 New Features"
 ---
 
 # PRD: v1 Cleanup, UI Polish, and v2 Features
@@ -23,9 +24,9 @@ Three categories of work address this:
    test infrastructure that will compound as v2 adds complexity.
 2. **UI polish** — inconsistent loading states, error surfacing, and screen-level
    visual treatments that make the app feel unfinished.
-3. **New v2 capabilities** — built-in pipeline operations (join, pivot) and SQL
-   function support that give analysts more expressive power without writing
-   Python.
+3. **New v1 capabilities** — built-in pipeline operations (join, pivot), SQL
+   function support, and source grouping that give analysts more expressive power
+   without writing Python.
 
 ---
 
@@ -146,7 +147,7 @@ tokens to use, and what the handoff artifact looks like (written spec, not Figma
 
 ---
 
-### Track 3 — v2 New Features
+### Track 3 — v1 New Features (Claude Code)
 
 #### 3A — Built-in Pipeline Steps (join + pivot)
 
@@ -204,7 +205,7 @@ function steps by position.
 assembled from `builtin_config` — not via the worker subprocess. The result
 DataFrame is passed to the next pipeline step as if it were a function's output.
 
-#### 3B — Source Grouping (full implementation)
+#### 3B — Source Grouping (full implementation, v1)
 
 The backend already derives and stores a `pattern` regex per source via
 `infer_pattern()`. This track exposes grouping fully in the UI:
@@ -481,8 +482,8 @@ implementation details.
   not an optional input.
 
 - **Track 3 depends on Track 1 completion:** the `src/` reshape and CLI entry
-  points (item 5) must be complete before v2 feature branches begin, since all v2
-  work will be done against the reshaped package.
+  points (item 5) must be complete before v2 feature branches begin, since all
+  subsequent work will be done against the reshaped package.
 
 - **Issue ordering for Track 1:** items 1–6 are independent and can be parallelised.
   Items 7–13 are also independent of each other. Item 5 (`src/` reshape) should be
