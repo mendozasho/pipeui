@@ -80,6 +80,8 @@ function StatusPill({ status }) {
     ingested:   { color: "var(--good)",   bg: "rgba(52,211,153,.1)" },
     error:      { color: "var(--bad)",    bg: "rgba(248,113,113,.1)" },
     running:    { color: "var(--run)",    bg: "rgba(96,165,250,.1)" },
+    active:     { color: "var(--good)",   bg: "rgba(52,211,153,.1)" },
+    inactive:   { color: "var(--text-3)", bg: "var(--panel-3)" },
   };
   const s = map[status] || map.registered;
   return (
@@ -106,6 +108,17 @@ function SourceBadge({ name, style }) {
     }}>
       {initials}
     </span>
+  );
+}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+function Spinner({ size = 14, color = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ animation: "spin 1s linear infinite" }}>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeOpacity="0.25" />
+      <path d="M12 3a9 9 0 0 1 9 9" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -216,4 +229,4 @@ function Drawer({ open, onClose, title, children, width = 420 }) {
   );
 }
 
-window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer };
+window.__UI__ = { Icon, Btn, Spinner, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer };
