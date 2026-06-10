@@ -4,6 +4,12 @@ Terms resolved during grilling sessions. Implementation details live in CLAUDE_R
 
 ---
 
+## src-layout reshape + CLI entry point (resolved)
+
+The package must be restructured to `src/pipeui/` before v2 work begins. This is a prerequisite for shipping proper CLI entry points (via `pyproject.toml` `[project.scripts]`) that allow users to install pipeui into their own project environment and manage it from the command line (e.g. `pipeui init` to create the database, `pipeui start` to launch the app). The flat `pipeui/` layout used during v1 development is retired with this change. `db.py` rename and `src/` reshape are separate issues (same import-site churn, but different scopes and reviewable independently).
+
+---
+
 ## PK uniqueness (resolved)
 
 The app does not enforce PK uniqueness at registration or ingestion time. Duplicate PK handling is covered by the ingestion-method model (`upsert`/`append`/`skip`). A UI-only warning badge is shown in the source detail drawer when `row_count > COUNT(DISTINCT pk_column)` — no backend schema changes, no registration rejection. Full enforcement (e.g. rejecting a source whose PK is non-unique) is deferred to v2.
