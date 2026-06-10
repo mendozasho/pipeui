@@ -42,6 +42,24 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
 
 ---
 
+## Canonical workflow
+
+Every unit of work follows this four-step sequence. Do not skip steps.
+
+1. **`/grill-with-docs`** — align on the problem and design, resolve any ambiguities against the existing domain model, and update `CONTEXT.md` / ADRs with decisions that crystallise. This step produces agreement, not code.
+
+2. **`/to-prd`** — synthesise the grilling session into a PRD saved to `.claude/prds/<slug>.md`. The PRD is the source of truth for all design decisions. It is committed to the repo so future sessions can read it. It is **not** published to GitHub.
+
+3. **`/to-issues`** — split the PRD into vertical slices and publish them as GitHub issues. Each issue is self-contained: it carries the relevant design decisions from the PRD directly in its body so an agent can implement it from the issue alone, without re-reading the PRD.
+   - Slices that require visual design decisions before implementation can start are marked **`[Design-gated]`** (HITL). Their issue bodies are written as Claude Design briefs — containing domain model context, existing patterns to match, and a numbered list of what the Design agent must resolve. Run `/claude-design #N` to produce the interactive HTML spec; it then updates the issue body with the full spec and the issue becomes `ready-for-agent`.
+   - Every non-design-gated slice must be `ready-for-agent` when published: three-layer vertical (Data + Business + UI), file-overlap checked, dependency order correct, acceptance criteria the agent can self-verify.
+
+4. **`/wave #N #M …`** — for slices with no dependency between them AND no file overlap, launch parallel implementation agents (one per issue) plus an integrator that merges all feature branches into a single `wave/N` branch and opens one PR. You, the human, merge that one PR — no merge conflicts to resolve, no per-branch reviews.
+   - Slices that are sequential (B depends on A) are NOT a wave. Run them one at a time: implement A, merge, then implement B.
+   - Design-gated issues are NOT wave candidates until their design is attached and the issue is relabelled `ready-for-agent`.
+
+---
+
 ## Collaboration rules
 
 1. **Confirm reasoning before code.** Lay out the logic and get explicit sign-off

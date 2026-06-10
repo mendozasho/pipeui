@@ -39,7 +39,33 @@ Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an
 - **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution. Remember: sequential vertical slices are always preferred over parallel horizontal ones — only mark slices parallel when they are both vertical AND have no file overlap.
 </vertical-slice-rules>
 
-### 4. Quiz the user
+### 4. Handle design-gated slices
+
+Some slices cannot be fully spec'd without visual design decisions — modal layouts, component interactions, new UI primitives. These are **design-gated** (HITL). Flag them with `[Design-gated]` in the title and label them `blocked-on-design`.
+
+**What makes a slice design-gated:** it introduces a new multi-step modal, a new interactive primitive (toggle, segmented control, drag behaviour), or a new screen layout — anything where the "correct" spec depends on visual composition that prose alone cannot resolve.
+
+**The issue body IS the Claude Design brief.** A design-gated issue must be written so that `/claude-design` can read it and produce the interactive HTML spec without any additional context from the session. That means the issue body must include:
+
+- **`## Context for the Design agent`** — everything the Design agent needs to know:
+  - Where this UI lives in the app (which screen file, which component, what triggers it)
+  - The domain model — data shapes, field names, semantics — using the canonical names from `CONTEXT.md`
+  - The existing patterns the new UI must match (e.g. existing modal chrome, existing drag payload format, existing component names from `ui.jsx`)
+  - The five files Claude Design must read before writing any HTML:
+    1. A prior design brief HTML — for house chrome (extract from `.claude/design-briefs/` or ask the user)
+    2. `src/pipeui/frontend/index.html` — for `:root` token names and values
+    3. `src/pipeui/frontend/ui.jsx` — for `ICONS` entries and exported component names
+    4. The target screen file(s) — for existing patterns to extend or refactor
+    5. `CONTEXT.md` — for canonical data shapes
+  - **What to produce** — a numbered list of specific decisions the Design agent must resolve: layout variants, component breakdown, interaction behaviour, transition style
+
+- **Acceptance criteria** — every criterion must be something the implementing agent can verify after the design is attached. Start with `Design assets / spec attached to this issue.`
+
+- **Out of scope** — explicitly list anything that is deferred. The Design agent will carry this into the constraints banner of the HTML brief.
+
+When Claude Design completes, it updates the issue body (using `mcp__github__issue_write`) replacing the `[Design-gated]` status section with the full spec. The issue is then relabelled `ready-for-agent`. Implementation can only start after that update.
+
+### 5. Quiz the user
 
 Present the proposed breakdown as a numbered list. For each slice, show:
 
@@ -58,7 +84,7 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
-### 5. Publish the issues to the issue tracker
+### 6. Publish the issues to the issue tracker
 
 For each approved slice, publish a new issue to the issue tracker. Use the issue body template below. These issues are considered ready for AFK agents, so publish them with the `ready-for-agent` label.
 
