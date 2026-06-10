@@ -1,11 +1,13 @@
+import csv
 import datetime
 import itertools
 import uuid
+from pathlib import Path
 
 import pytest
 
 from pipeui.ids import content_hash_id
-from pipeui.duckdb import create_schema, get_connection
+from pipeui.db import create_schema, get_connection
 
 
 @pytest.fixture
@@ -69,3 +71,60 @@ def make_registered_source(conn, n_columns: int = 2):
         column_ids.append(col_id)
 
     return source_id, column_ids
+
+
+def make_quirky_file(tmp_path, spec: dict, fmt: str = "csv") -> Path:
+    """
+    Generate a test file in tmp_path with columns controlled by spec flags.
+
+    spec keys (all optional booleans):
+      mixed_type       — a "quirky" column with mixed int/str values; tests
+                         TRY_CAST pre-check failure when migrating to INTEGER.
+      ambiguous_type   — a column whose values are all numeric strings; could
+                         be inferred as INTEGER or VARCHAR depending on context.
+      varchar_fallback — a column with genuinely mixed content (str + int + bool)
+                         that forces VARCHAR inference.
+
+    fmt: "csv" (default) or "xlsx".
+    Returns a Path to the generated file.
+    """
+    columns = ["id"]
+    rows_by_col: dict[str, list] = {"id": ["r1", "r2", "r3"]}
+
+    if spec.get("mixed_type"):
+        columns.append("mixed_col")
+        rows_by_col["mixed_col"] = ["123", "abc", "456"]
+
+    if spec.get("ambiguous_type"):
+        columns.append("ambiguous_col")
+        rows_by_col["ambiguous_col"] = ["10", "20", "30"]
+
+    if spec.get("varchar_fallback"):
+        columns.append("varchar_col")
+        rows_by_col["varchar_col"] = ["hello", 123, True]
+
+    rows = [
+        [rows_by_col[col][i] for col in columns]
+        for i in range(3)
+    ]
+
+    if fmt == "xlsx":
+        try:
+            import openpyxl
+        except ImportError as exc:
+            raise ImportError("openpyxl is required for xlsx output") from exc
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(columns)
+        for row in rows:
+            ws.append(row)
+        p = tmp_path / "quirky.xlsx"
+        wb.save(p)
+    else:
+        p = tmp_path / "quirky.csv"
+        with open(p, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(columns)
+            w.writerows(rows)
+
+    return p

@@ -18,7 +18,7 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from pipeui.helpers import get_conn
+from pipeui.db import get_conn
 from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
 from pipeui.workflow.run import get_staging_rows, run_pipeline, run_set_across_sources
 

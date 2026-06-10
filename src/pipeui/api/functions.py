@@ -8,7 +8,7 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from pipeui.helpers import get_conn
+from pipeui.db import get_conn
 from pipeui.workflow.functions import get_function, list_functions, scan_functions
 
 router = APIRouter(prefix="/functions", tags=["functions"])
@@ -40,7 +40,7 @@ def scan(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
     Returns {"log": [...]} with one entry per discovered function (added,
     re-registered, or skipped with reason).
     """
-    from pipeui.api.settings import load_settings
+    from pipeui.helpers import load_settings
     settings = load_settings()
     log = scan_functions(conn, settings.functions_paths)
     return JSONResponse({"log": log})

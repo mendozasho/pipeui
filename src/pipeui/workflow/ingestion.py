@@ -34,17 +34,49 @@ def _load_to_temp(conn: duckdb.DuckDBPyConnection, file_path: str, temp_name: st
         raise ValueError(f"Unsupported file extension: {ext!r}")
 
 
+def _diff_schema(
+    registered_columns: list[tuple[str, str]],
+    incoming_columns: list[tuple[str, str]],
+) -> dict:
+    """Compute schema diff between registered and incoming columns.
+
+    Returns a dict with keys 'added', 'removed', 'type_changes'.
+    All lists are empty when there is no mismatch.
+    """
+    registered = {name: ctype for name, ctype in registered_columns}
+    incoming = {name: ctype for name, ctype in incoming_columns}
+
+    added = [name for name in incoming if name not in registered]
+    removed = [name for name in registered if name not in incoming]
+    type_changes = [
+        {"column": name, "from": registered[name], "to": incoming[name]}
+        for name in incoming
+        if name in registered and incoming[name] != registered[name]
+    ]
+
+    return {"added": added, "removed": removed, "type_changes": type_changes}
+
+
+def _has_schema_diff(diff: dict) -> bool:
+    return bool(diff["added"] or diff["removed"] or diff["type_changes"])
+
+
 def ingest_source(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
     file_path: str,
     ingestion_method: str | None = None,
-) -> tuple[int, list, FailedRegistryEntry]:
+    confirm_schema_diff: bool = False,
+) -> tuple[int, list, FailedRegistryEntry, dict | None]:
     """Stage a file and write rows into the per-source instance table.
 
-    Returns (rows_ingested, skipped_pk_values, failed).
+    Returns (rows_ingested, skipped_pk_values, failed, schema_diff).
     ingestion_method overrides the source's stored value when provided.
     Instance table is created JIT if it does not yet exist (§8, §9).
+
+    When the incoming file's columns differ from the registered schema and
+    confirm_schema_diff is False, returns early with schema_diff populated
+    and rows_ingested=0 (caller inspects requires_confirmation).
     """
     failed = FailedRegistryEntry()
 
@@ -54,14 +86,14 @@ def ingest_source(
     ).fetchone()
     if source_row is None:
         failed.add(None, f"source_id {source_id!r} not found")
-        return 0, [], failed
+        return 0, [], failed, None
 
     _source_name, primary_key, stored_method = source_row
     method = ingestion_method if ingestion_method is not None else stored_method
 
     if not IngestionMethod.accepted(method):
         failed.add(None, f"Invalid ingestion_method: {method!r}")
-        return 0, [], failed
+        return 0, [], failed, None
 
     col_rows = conn.execute(
         """
@@ -91,7 +123,18 @@ def ingest_source(
         _load_to_temp(conn, file_path, temp_name)
     except Exception as exc:
         failed.add(None, f"Failed to load file: {exc}")
-        return 0, [], failed
+        return 0, [], failed, None
+
+    # Schema diff check: compare incoming file columns against registered columns.
+    # If a mismatch is detected and the caller has not confirmed, return early.
+    if not confirm_schema_diff:
+        incoming_desc = conn.execute(f"DESCRIBE {temp_name}").fetchall()
+        # DESCRIBE returns (column_name, column_type, ...) per row
+        incoming_columns = [(r[0], r[1]) for r in incoming_desc]
+        diff = _diff_schema(columns, incoming_columns)
+        if _has_schema_diff(diff):
+            conn.execute(f"DROP TABLE IF EXISTS {temp_name}")
+            return 0, [], failed, diff
 
     total_rows: int = conn.execute(f"SELECT COUNT(*) FROM {temp_name}").fetchone()[0]
     skipped_pks: list = []
@@ -130,12 +173,12 @@ def ingest_source(
             [datetime.datetime.now(), source_id],
         )
         conn.execute("COMMIT")
-        return rows_ingested, skipped_pks, failed
+        return rows_ingested, skipped_pks, failed, None
 
     except Exception as exc:
         conn.execute("ROLLBACK")
         failed.add(None, str(exc))
-        return 0, [], failed
+        return 0, [], failed, None
     finally:
         conn.execute(f"DROP TABLE IF EXISTS {temp_name}")
 
@@ -198,11 +241,19 @@ def get_source_detail(
         [source_id],
     ).fetchall()
 
+    primary_key = row[5]
     tname = instance_table_name(source_id)
     try:
         row_count: int = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()[0]
     except Exception:
         row_count = 0
+
+    try:
+        distinct_pk_count: int | None = conn.execute(
+            f'SELECT COUNT(DISTINCT "{primary_key}") FROM "{tname}"'
+        ).fetchone()[0]
+    except Exception:
+        distinct_pk_count = None
 
     return {
         "source_id": str(row[0]),
@@ -210,8 +261,9 @@ def get_source_detail(
         "date_ingested": row[2].isoformat() if row[2] else None,
         "date_registered": row[3].isoformat() if row[3] else None,
         "ingestion_method": row[4],
-        "primary_key": row[5],
+        "primary_key": primary_key,
         "row_count": row_count,
+        "distinct_pk_count": distinct_pk_count,
         "columns": [
             {"column_id": str(c[0]), "column_name": c[1], "column_type": c[2]}
             for c in col_rows

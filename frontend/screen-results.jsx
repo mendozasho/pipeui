@@ -4,6 +4,15 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
+const { LoadingState, InlineError, Icon, Btn } = window.__UI__;
+
+function timeAgo(iso) {
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 // ── Filename helpers ──────────────────────────────────────────────────────────
 function sanitiseFilename(str) {
@@ -313,10 +322,10 @@ function TransformExpand({ card }) {
   }, []);
 
   if (loading) {
-    return <div style={{ color: "var(--text-4)", fontSize: 13 }}>Loading staging data…</div>;
+    return <LoadingState label="Loading staging data…" />;
   }
   if (error) {
-    return <div style={{ color: "var(--bad)", fontSize: 13 }}>{error}</div>;
+    return <InlineError variant="panel">{error}</InlineError>;
   }
   if (!stagingData || stagingData.rows.length === 0) {
     return <div style={{ color: "var(--text-4)", fontSize: 13 }}>No staging data available.</div>;
@@ -536,7 +545,8 @@ function ResultCard({ card, selected, onToggleSelect }) {
   const [showExportPicker, setShowExportPicker] = useState(false);
   const [stagingRowsCache, setStagingRowsCache] = useState(null);
 
-  const ts = card.run_at ? new Date(card.run_at).toLocaleString() : "";
+  const ts = card.run_at ? timeAgo(card.run_at) : "";
+  const tsAbsolute = card.run_at ? new Date(card.run_at).toISOString() : "";
   const filenameStem = exportFilename(card.source_name, card.card_type, "");
 
   function handleExport(format) {
@@ -613,7 +623,10 @@ function ResultCard({ card, selected, onToggleSelect }) {
         <TypeTag cardType={card.card_type} />
 
         {/* Timestamp */}
-        <span style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", flexShrink: 0 }}>
+        <span
+          title={tsAbsolute}
+          style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", flexShrink: 0, cursor: "default" }}
+        >
           {ts}
         </span>
       </div>
@@ -637,16 +650,21 @@ function ResultCard({ card, selected, onToggleSelect }) {
             </button>
           </>
         ) : (
-          <button
-            onClick={e => { e.stopPropagation(); setShowExportPicker(true); }}
-            style={{
-              padding: "3px 10px", fontSize: 11, fontWeight: 600,
-              background: "var(--panel-3)", color: "var(--text-2)",
-              border: "1px solid var(--border)", borderRadius: "var(--radius)", cursor: "pointer",
-            }}
-          >
-            Export
-          </button>
+          <>
+            <button
+              onClick={e => { e.stopPropagation(); setShowExportPicker(true); }}
+              style={{
+                padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                background: "var(--panel-3)", color: "var(--text-2)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)", cursor: "pointer",
+              }}
+            >
+              Export
+            </button>
+            <span style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "monospace" }}>
+              {stem}.csv / .xlsx
+            </span>
+          </>
         )}
       </div>
 
@@ -743,8 +761,44 @@ function ExportSelectedBar({ selectedIds, cards, onClear }) {
   );
 }
 
+// ── Results empty state ───────────────────────────────────────────────────────
+function ResultsEmptyState({ onNavigate }) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      height: "100%", textAlign: "center", padding: 24, gap: 18,
+    }}>
+      <div style={{
+        width: 64, height: 64, borderRadius: "var(--radius-lg)",
+        background: "var(--panel-2)", border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "var(--text-3)",
+      }}>
+        <Icon name="results" size={28} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-2)" }}>
+          No results yet
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-3)", maxWidth: 340,
+          lineHeight: 1.6, textWrap: "balance" }}>
+          Run a pipeline from the Builder screen to see
+          validation and transform results here.
+        </div>
+      </div>
+      {onNavigate && (
+        <Btn variant="default" size="sm" icon="builder"
+             onClick={() => onNavigate("builder")} style={{ marginTop: 2 }}>
+          Go to Builder
+        </Btn>
+      )}
+    </div>
+  );
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
-function ScreenResults({ flash, resultCards, resultsContext }) {
+function ScreenResults({ flash, resultCards, resultsContext, onNavigate }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   function handleToggleSelect(runId) {
@@ -785,12 +839,7 @@ function ScreenResults({ flash, resultCards, resultsContext }) {
       {/* Card grid */}
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         {resultCards.length === 0 ? (
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: "100%", color: "var(--text-4)", fontSize: 14, textAlign: "center",
-          }}>
-            Run a pipeline from the Builder screen to see results here.
-          </div>
+          <ResultsEmptyState onNavigate={onNavigate} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 860 }}>
             {resultCards.map(card => {

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["pipeui*"]
 
 [project]
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pipeui = "pipeui.main:run"
+pipeui = "pipeui.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]

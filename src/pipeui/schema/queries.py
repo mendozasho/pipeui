@@ -78,5 +78,15 @@ CREATE TABLE IF NOT EXISTS function_set_map (
     function_id UUID NOT NULL,  -- references function_registry(function_id)
     position    INTEGER NOT NULL
 );
+
+-- Built-in pipeline steps (join, pivot) attached to a source.
+-- Each row is either a join or a pivot configuration stored as JSON.
+CREATE TABLE IF NOT EXISTS source_builtin_map (
+    step_id       UUID PRIMARY KEY,
+    source_id     UUID NOT NULL,   -- references source_registry(source_id)
+    builtin_type  VARCHAR NOT NULL, -- "join" or "pivot"
+    builtin_config JSON    NOT NULL,
+    position      INTEGER NOT NULL DEFAULT 0
+);
 """
 """Creates the base application tables on initialization."""
