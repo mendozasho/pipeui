@@ -95,21 +95,26 @@ git commit -m "design: brief for #<N> — <short title>"
 git push origin main
 ```
 
-Post a comment on the GitHub issue summarising the spec decisions (the same content that would unblock an implementing agent), using `mcp__github__add_issue_comment`. The comment must be self-contained — the implementing agent reads the comment, not the HTML file (the HTML is the interactive version for human review).
+**Update the issue body** using `mcp__github__issue_write` (method: `update`). Replace the entire body with the full spec so it is always the first thing anyone reading the issue sees. The spec must be self-contained — the implementing agent reads the issue body, not the HTML file (the HTML is the interactive version for human review).
 
-The comment structure:
-- `## Design brief received — issue unblocked`
+The updated issue body structure:
+- `## Branch` — unchanged from original
+- `## Status` — change to `**Design complete. Ready to implement.**`
 - `## What to build` — one paragraph
-- `## Spec decisions` — one `###` subsection per Spec section, with the decisions written as prose + code blocks (not as "see spec 3")
+- `## Spec` — one `###` subsection per Spec section, with the decisions written as prose + code blocks (not as "see spec 3")
 - `## New / modified components` — markdown table
 - `## Tokens used (no new values)` — inline list
-- `## Acceptance criteria mapping` — markdown table
+- `## Acceptance criteria` — checkbox list matching the original acceptance criteria, updated to reflect spec decisions
+- `## Blocked by` — unchanged from original (remove the "Claude Design pass" blocker entry)
+- `## Implementation notes for the agent` — unchanged from original
+
+Do **not** post a comment — update the body directly.
 
 ---
 
 ## Output quality checklist
 
-Before posting the comment, verify:
+Before updating the issue body, verify:
 
 - [ ] Every mock renders from real tokens — no hex literals in mock code
 - [ ] Every icon used in the brief is either in the existing `ICONS` or listed as a new entry with its SVG path
