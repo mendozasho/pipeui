@@ -78,6 +78,24 @@ Derived from `function_return_type`. `validation` when return is `boolean` or `p
 
 A list of folder paths in `pipeui.config.json` (alongside `db_path`). Each entry points to a directory on the user's machine containing `.py` function modules. The app does not copy or upload files — `module_path` in `function_registry` stores the user's actual file path. The Settings screen has an add/remove list UI for managing the paths. All paths are scanned together on rescan.
 
+## SQL function
+
+A `.sql` file registered via the same `functions_paths` scan as `.py` files. Always operates at DataFrame granularity — the full source instance table is the input, substituted via a `{source_table}` placeholder at run time. No parameter binding; SQL functions are attached to sources like any other function but have no `alias_map` rows.
+
+Metadata is declared in a comment block at the top of the file:
+```sql
+-- name: clean_nulls
+-- description: Remove rows where key columns are null
+-- type: transform
+SELECT * FROM {source_table} WHERE col_a IS NOT NULL
+```
+
+`-- type` must be `transform` or `validation`. If omitted, `function_type` is stored as `unknown`. The Functions screen shows an **Unknown** type badge on such functions; hovering the badge shows a tooltip: *"Type unknown — add `-- type: transform` or `-- type: validation` to this file's header and rescan."* The function still registers and can be attached.
+
+Any helpers shared between `.py` and `.sql` scanning (e.g. writing to `function_registry`, building `FailedFunctionEntry`) live in a shared module rather than being duplicated per scanner.
+
+---
+
 ## function scanning (rescan model)
 
 Functions are registered by scanning `functions_path`, not by file upload. The registry does **not** auto-update on app startup or when files change on disk. A rescan is triggered explicitly in two ways: (1) saving a changed `functions_path` in Settings, or (2) pressing "Rescan" on the Functions screen. On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
@@ -103,6 +121,26 @@ When any member function has `is_active = false`, the set card shows a warning m
 ## worker Python interpreter
 
 The worker process uses `sys.executable` — the same Python interpreter running the app. Because the user installs pipeui into their project environment, their project's dependencies (pandas, numpy, etc.) are already available. No separate venv is created or managed by the app.
+
+---
+
+## source group
+
+A source in `source_registry` whose `pattern` field is non-null acts as a group anchor — it represents a named report that accepts multiple ingested files matching that pattern over time. The group name shown in the UI is a human-readable rendering of the `pattern` regex (e.g. `sales_jan_\d+` → `"sales_jan_*"`) — the raw regex is never shown directly. No separate group table; `source_id` from `source_registry` is the group identity (one source, many ingestion files).
+
+**Column mismatch warning:** when a file being ingested has columns that don't match the source's current `source_column_map` (new columns, removed columns, or type mismatches), the user sees a confirmation popup showing the diff before ingestion proceeds. On confirmation, the normal column_registry + source_column_map write path executes — new columns get new UUID4/UUID5 rows, type changes go through copy-on-write. No extra flag or table needed; the accepted state is fully captured by what is in `source_column_map` after the confirmed write.
+
+**Future (not in current scope):** auto-infer files on disk matching the pattern and offer bulk-ingest with a confirmation list (user removes files they don't want before committing).
+
+---
+
+## built-in step
+
+A pipeline step backed by a DuckDB operation assembled from user configuration, not a Python callable. Stored in a `source_builtin_map` table separate from `source_function_map` (see pipeline step). `builtin_type` is an extensible VARCHAR enum — current values: `join`, `pivot`; future: `filter`, `sql`. `builtin_config` is a JSON blob whose shape is validated per `builtin_type` at the workflow layer. Built-ins can appear inside function sets (via `function_set_map` extended with a nullable `builtin_step_id` — a step is either a function or a built-in, never both). The tab on the Functions screen that exposes draggable built-ins is labelled **Built-ins** and positioned between the Functions tab and the Sets tab.
+
+**Join config shape:** `{ right_source_id, join_type: inner|left|right|full, on: [{left_col, right_col}], keep_columns: "all" | [col_id, ...] }`
+
+**Pivot config shape:** `{ index_columns: [col_id], pivot_column: col_id, value_columns: [{col_id, aggregations: [sum|avg|count|min|max, ...]}] }` — multiple aggregation methods per value column, columns dragged into aggregation slots in the UI.
 
 ---
 
