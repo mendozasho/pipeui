@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
-from typing import Generator
 
-import duckdb
+from pipeui.validation.settings import AppSettings, DEFAULTS
+
+CONFIG_PATH = Path("pipeui.config.json")
 
 
-def get_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
-    from pipeui.duckdb import create_schema, get_connection
-    from pipeui.main import DB_PATH
-    conn = get_connection(str(DB_PATH))
-    create_schema(conn)
-    try:
-        yield conn
-    finally:
-        conn.close()
+def load_settings() -> AppSettings:
+    if not CONFIG_PATH.exists():
+        settings = AppSettings()
+        CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
+        return settings
+    data = json.loads(CONFIG_PATH.read_text())
+    return AppSettings(**{**DEFAULTS, **data})
+
+
+def save_settings(settings: AppSettings) -> None:
+    CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
 
 
 def infer_pattern(filename: str) -> str | None:

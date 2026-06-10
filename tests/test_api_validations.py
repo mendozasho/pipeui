@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pipeui.api.validations import router
-from pipeui.helpers import get_conn
+from pipeui.duckdb import get_conn
 from pipeui.ids import content_hash_id
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source

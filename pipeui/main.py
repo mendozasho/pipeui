@@ -8,7 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from pipeui.api.function_sets import router as function_sets_router
 from pipeui.api.functions import router as functions_router
 from pipeui.api.pipelines import router as pipelines_router
-from pipeui.api.settings import load_settings, router as settings_router
+from pipeui.api.settings import router as settings_router
+from pipeui.helpers import load_settings
 from pipeui.api.sources import router as sources_router
 from pipeui.api.validations import router as validations_router
 from pipeui.duckdb import get_connection, create_schema
