@@ -358,4 +358,51 @@ function InlineError({ message }) {
   );
 }
 
-window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader };
+// ── Checkbox ──────────────────────────────────────────────────────────────────
+function Checkbox({ checked, onChange, disabled }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span role="checkbox" aria-checked={checked}
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => !disabled && onChange && onChange(!checked)}
+      onKeyDown={e => { if ((e.key === " " || e.key === "Enter") && !disabled)
+        { e.preventDefault(); onChange && onChange(!checked); } }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ width: 17, height: 17, flexShrink: 0, display: "inline-flex",
+        alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)",
+        background: checked ? "var(--accent)" : "var(--panel-2)",
+        border: "1px solid " + (checked ? "transparent"
+          : hover && !disabled ? "var(--accent-line)" : "var(--border)"),
+        color: "var(--accent-ink)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
+        transition: "background .12s, border-color .12s" }}>
+      {checked && <Icon name="check" size={12} />}
+    </span>
+  );
+}
+
+// ── OrderBadge ────────────────────────────────────────────────────────────────
+function OrderBadge({ n, dragging, ...dragProps }) {
+  const [hover, setHover] = useState(false);
+  const bg = dragging ? "var(--accent-soft)" : hover ? "var(--hover)" : "var(--panel-3)";
+  const border = dragging || hover ? "var(--accent-line)" : "var(--border)";
+  const ink = dragging ? "var(--accent)" : "var(--text-2)";
+  return (
+    <span {...dragProps} title="Drag to reorder"
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ width: 26, height: 26, flexShrink: 0, cursor: "grab",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)", background: bg,
+        border: "1px solid " + border, color: ink,
+        transition: "background .12s, border-color .12s, color .12s" }}>
+      {hover && !dragging
+        ? <Icon name="drag" size={16} style={{ color: "var(--text-3)" }} />
+        : <span className="mono" style={{ fontSize: 12, fontWeight: 600,
+            lineHeight: 1 }}>{n}</span>}
+    </span>
+  );
+}
+
+window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge };
