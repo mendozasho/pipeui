@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
 from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
-from pipeui.workflow.run import run_pipeline
+from pipeui.workflow.run import get_staging_rows, run_pipeline
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -219,6 +219,32 @@ def patch_pipeline_step_route(
             detail=f"Step {source_function_map_id!r} not found for source {source_id!r}",
         )
     return {"ok": True}
+
+
+@router.get("/{source_id}/staging")
+def get_staging_rows_route(
+    source_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Return the most recent staging table rows for a source.
+
+    Returns {"columns": [...], "rows": [...]} after a transform run.
+    Returns {"columns": [], "rows": []} (not an error) if no staging table exists yet.
+    404 if source_id is not found in source_registry.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    # Check source exists
+    row = conn.execute(
+        "SELECT source_id FROM source_registry WHERE source_id = ?", [sid]
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    return get_staging_rows(conn, sid)
 
 
 @router.post("/{source_id}/run")

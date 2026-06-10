@@ -419,6 +419,50 @@ def _execute_validation_step(
 # Public API
 # ---------------------------------------------------------------------------
 
+def get_staging_rows(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+) -> dict:
+    """Return the most recent staging table rows for a source.
+
+    Finds the staging table with the highest timestamp suffix (the part after
+    the last '_' in staging_{source_id_short}_{timestamp}).
+
+    Returns {"columns": [...], "rows": [...]} — empty lists if no staging
+    table exists yet (not an error).
+    """
+    prefix = _staging_prefix(source_id)
+    rows = conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
+    ).fetchall()
+
+    candidates = []
+    for (tname,) in rows:
+        if tname.startswith(prefix):
+            suffix = tname[len(prefix):]
+            try:
+                ts = int(suffix)
+                candidates.append((ts, tname))
+            except ValueError:
+                pass
+
+    if not candidates:
+        return {"columns": [], "rows": []}
+
+    # Pick the table with the highest timestamp
+    candidates.sort(key=lambda x: x[0])
+    latest_tname = candidates[-1][1]
+
+    df = conn.execute(f'SELECT * FROM "{latest_tname}"').df()
+    columns = list(df.columns)
+    data_rows = df.to_dict(orient="records")
+    # Convert non-JSON-serialisable values (e.g. numpy int64) to Python natives
+    serialisable_rows = []
+    for row in data_rows:
+        serialisable_rows.append({k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()})
+    return {"columns": columns, "rows": serialisable_rows}
+
+
 def run_pipeline(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
