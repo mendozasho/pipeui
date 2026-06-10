@@ -70,21 +70,31 @@ Every unit of work follows this four-step sequence. Do not skip steps.
 3. **design.md is the source of design intent.** Reference it; this file is its
    distilled form. Keep the two consistent.
 4. **One branch per unit of work.** Each piece of work happens on its own branch. When the work is complete, open a pull request with `Closes #<issue-number>` in the body so the issue is auto-closed on merge.
-5. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
+   - **Never push directly to main** — not for code, not for docs, not for skill updates. Every push requires a branch and a PR tied to a GitHub issue.
+   - **Every change needs a ticket.** If there is no issue for it, don't push it. Doc and skill changes are not exempt.
+   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
+   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
+5. **No sensitive or personal information — ever.** Commit messages, PR bodies, issue bodies, and code comments must contain only technical content relevant to the change. This rule has no exceptions:
+   - No session or chat URLs
+   - No real names or personal identifiers
+   - No local directory paths
+   - No tokens, credentials, or secrets
+   - When in doubt, leave it out. Every push is public.
+6. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
    go in CLAUDE_REFERENCE.md. Split criterion: *what to build and why* → CLAUDE.md,
    *how it is implemented* → CLAUDE_REFERENCE.md.
-6. **Cross-check first.** Before proposing any design change or code update, verify
+7. **Cross-check first.** Before proposing any design change or code update, verify
    it aligns with the Key Design Principles below.
-7. **Read before editing.** When editing a specific module, read the corresponding
+8. **Read before editing.** When editing a specific module, read the corresponding
    CLAUDE_REFERENCE.md section for implementation constraints.
-8. **Respect declared module boundaries.** Do not introduce a dependency the design
+9. **Respect declared module boundaries.** Do not introduce a dependency the design
    forbids (e.g. the per-source instance table must not know about the registry;
    user functions must never receive the DB connection).
-9. **Guarantees require tests.** Any new behavioral guarantee documented in either
+10. **Guarantees require tests.** Any new behavioral guarantee documented in either
    file must have corresponding tests.
-10. **Don't silently resolve open questions.** Items under Active Deferred Work are
+11. **Don't silently resolve open questions.** Items under Active Deferred Work are
     undecided; surface them rather than encoding an answer in code.
-11. **Wave workflow for batched delivery.** When multiple issues have no dependency
+12. **Wave workflow for batched delivery.** When multiple issues have no dependency
     on each other, implement them as a wave:
     - **Parallel agents** — each implementation agent works with `isolation:
       "worktree"`, pushes to its own feature branch, and opens no PR against main.
