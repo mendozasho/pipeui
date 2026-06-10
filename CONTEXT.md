@@ -152,6 +152,16 @@ Built-ins are exposed in two places in the UI:
 
 **Filter config shape:** `{ column: col_id, operator: eq|neq|gt|gte|lt|lte|contains|not_contains|is_null|is_not_null, value: string }` — single-condition row filter in v1; multi-condition (AND/OR) deferred.
 
+## effective column set
+
+The set of columns available to a pipeline step at a given position. For steps after a join, this includes the original source's columns plus any columns brought in by the join. Computed server-side at dry-run time and returned in the dry-run response as `available_columns: [{ column_id, column_name, column_type }]`. The frontend parameter mapping modal uses this list instead of the static source column list.
+
+## join source picker
+
+The first step of the built-in attach modal for a join step. The user selects the right-hand report to join against. All registered sources are shown (excluding the current source). For sources that have a pipeline with transform steps, a **"Use transformed output"** toggle is shown — off by default (joins against raw ingested data). When the toggle is on, the system runs that source's pipeline on-the-fly at join execution time and joins against the result.
+
+The column picker in step 2 reflects the chosen mode: raw shows `column_registry` columns; transformed shows the post-pipeline output columns. The card and popup design for this flow goes through a Claude Design pass — the user needs enough context about the right-hand report (row count, column list, pipeline summary) to make an informed decision without the UI becoming cluttered.
+
 ## builtin_registry
 
 A catalog table seeded at DB init time with one row per supported built-in type (`join`, `pivot`, `filter`). Mirrors `function_registry` in purpose: holds the name, display name, description, and parameter schema for each built-in type. The Functions screen Built-ins tab and the Builder RightPalette Built-ins tab both fetch from `GET /builtins` backed by this table. This is distinct from `source_builtin_map`, which records which built-in steps are attached to a specific source's pipeline.
