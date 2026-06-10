@@ -19,8 +19,11 @@ Response shape:
   8. Validation per-function response shape: function_id, function_name, set_name, set_id,
      status, rows_passed, rows_failed, pass_rate, failing_rows, error.
   9. pass_rate is a float 0..1 when status=ok; null when status=failed.
-  10. failing_rows is [] in this slice.
+  10. failing_rows is [] when all rows pass or when status=failed.
   11. run_type=transforms path is unaffected by the validation shape change.
+  12. failing_rows contains correct full-row dicts for pd.Series[bool] result.
+  13. failing_rows is [] when all rows pass.
+  14. failing_rows is [] on worker crash (status=failed).
 """
 from __future__ import annotations
 
@@ -256,7 +259,7 @@ def test_validation_step_response_shape(client, db, tmp_path):
     # pass_rate is float 0..1 on success (Guarantee 9)
     assert isinstance(step["pass_rate"], float)
     assert 0.0 <= step["pass_rate"] <= 1.0
-    # failing_rows is [] in this slice (Guarantee 10)
+    # failing_rows is [] when all rows pass (Guarantee 10/13)
     assert step["failing_rows"] == []
 
 
@@ -390,3 +393,88 @@ def test_worker_crash_returns_failed_status_subsequent_steps_run(client, db, tmp
     assert steps[0]["status"] == "failed"
     assert steps[0]["error"] is not None
     assert steps[1]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Guarantee 12: failing_rows populated for pd.Series[bool] result
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_failing_rows_populated_for_series_bool_result(client, db, tmp_path):
+    """Guarantee 12: failing_rows contains full row dicts for rows where pd.Series result is False."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    # val > 15 → r1 (val=10) fails, r2 (val=20) and r3 (val=30) pass
+    fn_path = write_fn(tmp_path, "gt15_fr", "data", "return data > 15")
+    seed_validation_step(db, source_id, col_id, "gt15_fr", fn_path, position=0)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    step = r.json()["steps"][0]
+    assert step["status"] == "ok"
+    assert step["rows_failed"] == 1
+    failing = step["failing_rows"]
+    assert len(failing) == 1
+    # Full row values present (not just PK)
+    assert "id" in failing[0]
+    assert "val" in failing[0]
+    assert failing[0]["id"] == "r1"
+    assert failing[0]["val"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Guarantee 13: failing_rows is [] when all rows pass
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_failing_rows_empty_when_all_pass(client, db, tmp_path):
+    """Guarantee 13: failing_rows is [] when every row passes the validation."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    # val > 0 → all rows pass (10, 20, 30 all > 0)
+    fn_path = write_fn(tmp_path, "all_pass_fr", "data", "return data > 0")
+    seed_validation_step(db, source_id, col_id, "all_pass_fr", fn_path, position=0)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    step = r.json()["steps"][0]
+    assert step["status"] == "ok"
+    assert step["rows_failed"] == 0
+    assert step["failing_rows"] == []
+
+
+# ---------------------------------------------------------------------------
+# Guarantee 14: failing_rows is [] on worker crash (status=failed)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_failing_rows_empty_on_worker_crash(client, db, tmp_path):
+    """Guarantee 14: failing_rows is [] when the worker crashes (status=failed)."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_path = write_fn(tmp_path, "val_crash_fr", "data", "raise RuntimeError('crash')")
+    seed_validation_step(db, source_id, col_id, "val_crash_fr", fn_path, position=0)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    step = r.json()["steps"][0]
+    assert step["status"] == "failed"
+    assert step["failing_rows"] == []

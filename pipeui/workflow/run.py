@@ -365,20 +365,33 @@ def _execute_validation_step(
             })
             continue
 
-        # Interpret boolean result
+        # Interpret boolean result and collect failing row indices
+        failing_mask = None
         if isinstance(result, pd.Series):
-            passed = int(result.astype(bool).sum())
-            failed = len(result) - passed
+            bool_series = result.reset_index(drop=True).astype(bool)
+            passed = int(bool_series.sum())
+            failed = len(bool_series) - passed
+            failing_mask = ~bool_series
         elif isinstance(result, pd.DataFrame):
-            bool_col = result.iloc[:, 0].astype(bool)
+            bool_col = result.iloc[:, 0].astype(bool).reset_index(drop=True)
             passed = int(bool_col.sum())
             failed = len(bool_col) - passed
+            failing_mask = ~bool_col
         elif isinstance(result, bool):
             passed = 1 if result else 0
             failed = 0 if result else 1
+            failing_mask = None  # scalar: no individual rows to surface
         else:
             passed = 0
             failed = 0
+            failing_mask = None
+
+        # Collect failing rows (full row dicts, uncapped)
+        if failing_mask is not None and failed > 0:
+            original_reset = original.reset_index(drop=True)
+            failing_rows = original_reset[failing_mask].to_dict(orient="records")
+        else:
+            failing_rows = []
 
         total = passed + failed
         pass_rate = (passed / total) if total > 0 else None
@@ -392,7 +405,7 @@ def _execute_validation_step(
             "rows_passed": passed,
             "rows_failed": failed,
             "pass_rate": pass_rate,
-            "failing_rows": [],
+            "failing_rows": failing_rows,
             "error": None,
         })
 
