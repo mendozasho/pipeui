@@ -4,6 +4,29 @@ Terms resolved during grilling sessions. Implementation details live in CLAUDE_R
 
 ---
 
+## src-layout reshape + CLI entry point (resolved)
+
+The package must be restructured to `src/pipeui/` before v2 work begins. This is a prerequisite for shipping proper CLI entry points (via `pyproject.toml` `[project.scripts]`) that allow users to install pipeui into their own project environment and manage it from the command line. Two commands only:
+
+- **`pipeui init`** — idempotent; creates `pipeui.config.json` and the DuckDB file in the user's **working directory** (project root), not inside the installed package. Safe to re-run on an existing database (no-op). Config is always managed through the Settings screen at runtime; `init` only seeds the initial files.
+- **`pipeui start`** — launches the uvicorn server.
+
+Writing config and the database to the project root (not the package directory) avoids write permission issues when pipeui is installed as a dependency. `db.py` rename and `src/` reshape are separate issues.
+
+---
+
+## PK uniqueness (resolved)
+
+The app does not enforce PK uniqueness at registration or ingestion time. Duplicate PK handling is covered by the ingestion-method model (`upsert`/`append`/`skip`). A UI-only warning badge is shown in the source detail drawer when `row_count > COUNT(DISTINCT pk_column)` — no backend schema changes, no registration rejection. Full enforcement (e.g. rejecting a source whose PK is non-unique) is deferred to v2.
+
+---
+
+## return-type vocabulary (resolved)
+
+The canonical vocabulary for function return types is Python type annotation casing throughout: `pd.Series`, `pd.Series[bool]`, `pd.DataFrame`. The prose terms `vector` and `matrix` are retired — any remaining references are stale and should be replaced. `function_class` uses lowercase `pd.dataframe` as a stored enum value (DuckDB VARCHAR); the Python-facing display uses `pd.DataFrame`. This was resolved during Phase D implementation; the Active Deferred Work entry in CLAUDE.md should be struck.
+
+---
+
 ## function_return_type
 
 The shape and type of a function's return value, stored in `function_registry`. Determines how the execution layer aggregates results across alias_map runs.
