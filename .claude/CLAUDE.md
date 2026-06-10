@@ -66,17 +66,24 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
    file must have corresponding tests.
 10. **Don't silently resolve open questions.** Items under Active Deferred Work are
     undecided; surface them rather than encoding an answer in code.
-11. **Parallel agents for unblocked work; approval gate for blocked work.** When
-    multiple issues have no dependency between them, launch them as parallel agents
-    in a single message. When a slice is blocked by another, surface it explicitly
-    and wait for user approval before starting it — do not proceed past a blocker
-    without confirmation.
-    **Always use `isolation: "worktree"` for every implementation agent that will
-    commit or push code.** Without it, all parallel agents share the same git
-    working directory — a `git checkout` by one agent switches the working tree
-    under every other agent, causing commits to land on the wrong branches. Worktree
-    isolation gives each agent its own checkout so branch switches are fully
-    isolated. Read-only / research agents that make no git changes do not need it.
+11. **Wave workflow for batched delivery.** When multiple issues have no dependency
+    on each other, implement them as a wave:
+    - **Parallel agents** — each implementation agent works with `isolation:
+      "worktree"`, pushes to its own feature branch, and opens no PR against main.
+    - **Wave integrator** — after all agents complete, a single integrator agent
+      merges all feature branches into one `wave/N` branch (e.g. `wave2`), resolves
+      any conflicts using the issue specs and design intent (include all additions
+      from all branches; never drop a component added by any branch), runs `pytest`,
+      and opens one PR: `wave/N → main`.
+    - **One PR to review** — the user reviews and merges a single clean diff rather
+      than resolving conflicts across multiple PRs.
+    - When a slice is blocked by another, surface it explicitly and wait for user
+      approval before starting — do not proceed past a blocker without confirmation.
+    - **Always use `isolation: "worktree"` for every agent** (implementation or
+      integrator) that will commit or push code. Without it, parallel agents share
+      the same git working directory — a `git checkout` by one agent switches the
+      working tree under every other agent, causing commits to land on the wrong
+      branches. Read-only / research agents that make no git changes do not need it.
 
 ---
 
