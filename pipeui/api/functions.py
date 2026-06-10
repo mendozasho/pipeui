@@ -40,7 +40,7 @@ def scan(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
     Returns {"log": [...]} with one entry per discovered function (added,
     re-registered, or skipped with reason).
     """
-    from pipeui.api.settings import load_settings
+    from pipeui.helpers import load_settings
     settings = load_settings()
     log = scan_functions(conn, settings.functions_paths)
     return JSONResponse({"log": log})
