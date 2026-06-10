@@ -763,6 +763,27 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
       key: "status", label: "Status",
       render: (_, row) => <StatusPill status={row.date_ingested ? "ingested" : "registered"} />,
     },
+    {
+      key: "_run", label: "",
+      render: (_, row) => {
+        const isRunning = runningSourceId === row.source_id;
+        return (
+          <button
+            onClick={e => { e.stopPropagation(); handleRunSource(row); }}
+            disabled={isRunning}
+            style={{
+              padding: "4px 12px", fontSize: 12, fontWeight: 600,
+              background: isRunning ? "var(--panel-3)" : "var(--accent)",
+              color: isRunning ? "var(--text-3)" : "#fff",
+              border: "none", borderRadius: "var(--radius)", cursor: isRunning ? "default" : "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {isRunning ? "Running…" : "Run"}
+          </button>
+        );
+      },
+    },
   ];
 
   return (
