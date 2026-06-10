@@ -45,7 +45,7 @@ def test_ingest_creates_instance_table_jit(db, tmp_path):
     tables_before = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
     assert tname not in tables_before
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path)
     assert not failed.has_failures(), failed
 
     tables_after = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
@@ -59,7 +59,7 @@ def test_ingest_append_writes_rows(db, tmp_path):
     source_id, failed = create_source(db, path, "data", "id", "append")
     assert not failed.has_failures()
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path)
+    rows_in, skipped, failed, diff = ingest_source(db, source_id, path)
     assert not failed.has_failures(), failed
     assert rows_in == 2
     assert skipped == []
@@ -80,7 +80,7 @@ def test_ingest_upsert_overwrites_existing_rows(db, tmp_path):
 
     # Re-ingest with updated value for r1
     path2 = make_csv(tmp_path, "v2.csv", ["id", "val"], [["r1", 99]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2)
     assert not failed.has_failures(), failed
 
     tname = instance_table_name(source_id)
@@ -100,7 +100,7 @@ def test_ingest_skip_reports_dropped_pk_values(db, tmp_path):
 
     # Re-ingest: r1 already exists (skip), r3 is new (insert)
     path2 = make_csv(tmp_path, "update.csv", ["id", "val"], [["r1", 99], ["r3", 30]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2)
     assert not failed.has_failures(), failed
 
     assert "r1" in skipped
@@ -124,7 +124,7 @@ def test_ingest_atomicity_on_failure(db, tmp_path):
 
     # Duplicate id on append should fail and leave table unchanged
     path2 = make_csv(tmp_path, "dup.csv", ["id", "val"], [["r1", 99]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2, ingestion_method="append")
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2, ingestion_method="append")
     assert failed.has_failures()
 
     tname = instance_table_name(source_id)
@@ -141,7 +141,7 @@ def test_ingest_idempotent_table_creation(db, tmp_path):
 
     ingest_source(db, source_id, path)
     # Second ingest — IF NOT EXISTS must not raise
-    _, _, failed2 = ingest_source(db, source_id, path)
+    _, _, failed2, _diff = ingest_source(db, source_id, path)
     assert not failed2.has_failures()
 
 
@@ -152,7 +152,7 @@ def test_ingest_invalid_method_returns_failure(db, tmp_path):
     source_id, failed = create_source(db, path, "data", "id", "upsert")
     assert not failed.has_failures()
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path, ingestion_method="merge")
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path, ingestion_method="merge")
     assert failed.has_failures()
     assert rows_in == 0
 
