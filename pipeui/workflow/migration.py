@@ -163,7 +163,17 @@ def migrate_column(
 
     # Step 10 pre-check: compute the new content_hash_id and check for collision
     # BEFORE opening the transaction so we can bail early.
-    new_hash = _content_hash_id("column_registry", column_name, new_type_upper)
+    # Build a ColumnRegistryEntry from the existing row to feed into ColumnRegistryUpdate,
+    # then read update_obj.content_hash_id — same pattern as update_function_set() (§3).
+    existing_col_entry = ColumnRegistryEntry(
+        column_id=_col_id,
+        column_name=column_name,
+        column_type=current_type,
+    )
+    update_obj = ColumnRegistryUpdate.from_existing(
+        existing_col_entry, column_type=new_type_upper
+    )
+    new_hash = update_obj.content_hash_id
 
     # Check for collision: same hash on a DIFFERENT column_registry row
     collision_row = conn.execute(
