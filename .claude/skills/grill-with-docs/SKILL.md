@@ -75,6 +75,10 @@ When a term is resolved, update `CONTEXT.md` right there. Don't batch these up â
 
 `CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
 
+### Commit CONTEXT.md once at the end
+
+Do **not** commit after every question. Accumulate all `CONTEXT.md` edits during the session and commit them **once** at the very end of the grill â€” after the final question is answered and before handing off to `/to-prd`. One commit, one push, on the current working branch.
+
 ### Offer ADRs sparingly
 
 Only offer to create an ADR when all three are true:

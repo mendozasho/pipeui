@@ -6,7 +6,12 @@ Terms resolved during grilling sessions. Implementation details live in CLAUDE_R
 
 ## src-layout reshape + CLI entry point (resolved)
 
-The package must be restructured to `src/pipeui/` before v2 work begins. This is a prerequisite for shipping proper CLI entry points (via `pyproject.toml` `[project.scripts]`) that allow users to install pipeui into their own project environment and manage it from the command line (e.g. `pipeui init` to create the database, `pipeui start` to launch the app). The flat `pipeui/` layout used during v1 development is retired with this change. `db.py` rename and `src/` reshape are separate issues (same import-site churn, but different scopes and reviewable independently).
+The package must be restructured to `src/pipeui/` before v2 work begins. This is a prerequisite for shipping proper CLI entry points (via `pyproject.toml` `[project.scripts]`) that allow users to install pipeui into their own project environment and manage it from the command line. Two commands only:
+
+- **`pipeui init`** — idempotent; creates `pipeui.config.json` and the DuckDB file in the user's **working directory** (project root), not inside the installed package. Safe to re-run on an existing database (no-op). Config is always managed through the Settings screen at runtime; `init` only seeds the initial files.
+- **`pipeui start`** — launches the uvicorn server.
+
+Writing config and the database to the project root (not the package directory) avoids write permission issues when pipeui is installed as a dependency. `db.py` rename and `src/` reshape are separate issues.
 
 ---
 
