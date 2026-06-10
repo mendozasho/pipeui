@@ -21,7 +21,7 @@ import uuid
 import pandas as pd
 import pytest
 
-from pipeui.duckdb import create_schema, get_connection
+from pipeui.db import create_schema, get_connection
 from pipeui.ids import content_hash_id, new_id
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow.attach import attach_function
