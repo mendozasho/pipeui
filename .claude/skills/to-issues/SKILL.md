@@ -122,6 +122,15 @@ The relevant design choices from the PRD that apply to this slice — schema dec
 - [ ] Criterion 2
 - [ ] Criterion 3
 
+## Manual verification checklist
+
+Steps the human reviewer should take in the running app to confirm the feature works end-to-end. Written as concrete UI actions, not test assertions — the reviewer should be able to follow these without reading the code.
+
+- [ ] Start the app (`uv run pipeui start`) and navigate to [Screen]
+- [ ] [Specific action 1 — e.g. "Import a CSV file and confirm it appears in the source list"]
+- [ ] [Specific action 2 — e.g. "Drag a function onto the pipeline canvas and verify the parameter modal opens"]
+- [ ] [Edge case — e.g. "Leave all scalar inputs blank and confirm the step saves without error"]
+
 ## Blocked by
 
 - A reference to the blocking ticket (if any)
