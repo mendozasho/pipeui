@@ -521,14 +521,12 @@ return ⇒ `validation`; any non-boolean return ⇒ `transform`.
 
 **`function_return_type`** — determines how results are delivered (a looped
 scalar return must store per-row results and return them once all rows run; a
-column-shaped return runs as a vector and is returned directly).
+column-shaped return runs as a `pd.Series` and is returned directly).
 
-**[DEFERRED] — return-type vocabulary.** design.md uses `vector`/`matrix` for
-`function_return_type` and `pd.series`/`pd.dataframe` for `function_class`. These
-are **not yet reconciled** (CLAUDE.md → Active Deferred Work). This section is
-written vocabulary-agnostic: a "column-shaped" (1-D) return and a "table-shaped"
-(2-D) return are described by behavior; do not encode a single canonical spelling
-until the reconciliation is decided.
+The canonical vocabulary for `function_return_type` is **`scalar`**, **`boolean`**,
+**`pd.Series`**, and **`pd.DataFrame`** — matching the stored enum values `pd.series`
+and `pd.dataframe` (lowercase) used in the database. The legacy terms `vector` and
+`matrix` are retired.
 
 **Collapse on re-upload (Principle 2).** Functions sharing `function_name`,
 `function_class`, and `function_return_type` collapse **strictly on
