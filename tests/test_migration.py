@@ -11,7 +11,7 @@ from pipeui.workflow.ingestion import ingest_source
 from pipeui.workflow.migration import migrate_column, ALLOWED_COLUMN_TYPES
 from pipeui.sql_user_table import instance_table_name
 from pipeui.ids import content_hash_id
-from tests.conftest import make_registered_source
+from tests.conftest import make_registered_source, make_quirky_file
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +425,35 @@ def test_content_hash_id_collision_returns_structured_failure(db, tmp_path):
     )
     assert result["ok"] is False
     assert result["error"] == "content_hash_id_collision"
+
+
+# ---------------------------------------------------------------------------
+# make_quirky_file: mixed_type exercises TRY_CAST uncastable-row count path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_quirky_mixed_type_trycast_uncastable_count(db, tmp_path):
+    """make_quirky_file mixed_type=True produces a column where 'abc' is un-castable
+    to INTEGER; dry_run must report exactly 1 uncastable and 2 castable rows."""
+    p = make_quirky_file(tmp_path, {"mixed_type": True})
+    source_id, failed = create_source(db, str(p), "quirky_mixed", "id", "upsert")
+    assert not failed.has_failures(), str(failed)
+    ingest_source(db, source_id, str(p))
+
+    cols = get_column_id(db, source_id)
+    col = next(c for c in cols if c[1] == "mixed_col")
+
+    result = migrate_column(db, source_id, col[0], "INTEGER", dry_run=True)
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    # "abc" is un-castable; "123" and "456" are castable
+    assert result["uncastable"] == 1
+    assert result["castable"] == 2
+
+    # on_uncastable="abort" must refuse the migration
+    result_abort = migrate_column(db, source_id, col[0], "INTEGER", on_uncastable="abort")
+    assert result_abort["ok"] is False
+    assert result_abort["error"] == "uncastable_rows"
 
 
 # ---------------------------------------------------------------------------
