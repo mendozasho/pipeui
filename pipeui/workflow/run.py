@@ -513,3 +513,140 @@ def run_pipeline(
         "run_type": run_type,
         "steps": step_results,
     }
+
+
+def run_validation_across_sources(
+    conn: duckdb.DuckDBPyConnection,
+    function_id: uuid.UUID,
+) -> dict | None:
+    """Run a validation function across all sources it is attached to.
+
+    Returns None if function_id is not found in function_registry.
+    Returns { function_id, function_name, sources: [...] } on completion.
+
+    Each source entry has:
+      source_id, source_name, status, rows_passed, rows_failed,
+      pass_rate, failing_rows, error
+
+    A worker crash on one source marks that entry status="failed" without
+    blocking the remaining sources.
+    """
+    # Verify function exists and is a validation function
+    fn_row = conn.execute(
+        "SELECT function_id, function_name FROM function_registry WHERE function_id = ?",
+        [function_id],
+    ).fetchone()
+    if fn_row is None:
+        return None
+
+    fn_id_str, fn_name = str(fn_row[0]), fn_row[1]
+
+    # Find all sources attached to this function via function_set_map + source_function_map
+    source_rows = conn.execute(
+        """
+        SELECT DISTINCT sfm.source_id, sr.source_name
+        FROM function_set_map fsm
+        JOIN source_function_map sfm ON sfm.set_id = fsm.set_id
+        JOIN source_registry sr ON sr.source_id = sfm.source_id
+        WHERE fsm.function_id = ?
+        ORDER BY sr.source_name
+        """,
+        [function_id],
+    ).fetchall()
+
+    source_results = []
+    for (source_id_raw, source_name) in source_rows:
+        source_id = uuid.UUID(str(source_id_raw))
+        try:
+            # Run validations for this source (validation-type run)
+            result = run_pipeline(conn, source_id, "validations")
+            if result is None:
+                source_results.append({
+                    "source_id": str(source_id),
+                    "source_name": source_name,
+                    "status": "failed",
+                    "rows_passed": None,
+                    "rows_failed": None,
+                    "pass_rate": None,
+                    "failing_rows": [],
+                    "error": "Source not found during run",
+                })
+                continue
+
+            # Find results for this specific function
+            fn_steps = [s for s in (result.get("steps") or []) if s.get("function_id") == fn_id_str]
+
+            if not fn_steps:
+                # Function attached via set but produced no results (may be filtered out)
+                source_results.append({
+                    "source_id": str(source_id),
+                    "source_name": source_name,
+                    "status": "ok",
+                    "rows_passed": None,
+                    "rows_failed": None,
+                    "pass_rate": None,
+                    "failing_rows": [],
+                    "error": None,
+                })
+                continue
+
+            # Aggregate across multiple steps if the function appears more than once
+            total_passed = 0
+            total_failed = 0
+            all_failing_rows: list[dict] = []
+            any_error = None
+            any_failed_status = False
+
+            for step in fn_steps:
+                if step.get("status") == "failed":
+                    any_failed_status = True
+                    any_error = step.get("error") or "worker failed"
+                    continue
+                rp = step.get("rows_passed") or 0
+                rf = step.get("rows_failed") or 0
+                total_passed += rp
+                total_failed += rf
+                all_failing_rows.extend(step.get("failing_rows") or [])
+
+            if any_failed_status and total_passed == 0 and total_failed == 0:
+                source_results.append({
+                    "source_id": str(source_id),
+                    "source_name": source_name,
+                    "status": "failed",
+                    "rows_passed": None,
+                    "rows_failed": None,
+                    "pass_rate": None,
+                    "failing_rows": [],
+                    "error": any_error,
+                })
+            else:
+                total = total_passed + total_failed
+                pass_rate = (total_passed / total) if total > 0 else None
+                source_results.append({
+                    "source_id": str(source_id),
+                    "source_name": source_name,
+                    "status": "failed" if any_failed_status else "ok",
+                    "rows_passed": total_passed,
+                    "rows_failed": total_failed,
+                    "pass_rate": pass_rate,
+                    "failing_rows": all_failing_rows,
+                    "error": any_error,
+                })
+
+        except Exception as exc:
+            source_results.append({
+                "source_id": str(source_id),
+                "source_name": source_name,
+                "status": "failed",
+                "rows_passed": None,
+                "rows_failed": None,
+                "pass_rate": None,
+                "failing_rows": [],
+                "error": str(exc),
+            })
+
+    return {
+        "function_id": fn_id_str,
+        "function_name": fn_name,
+        "sources": source_results,
+    }

@@ -55,6 +55,9 @@ function App() {
   const [screen, setScreen] = useState("data");
   const [flashes, setFlashes] = useState([]);
   const [validationResults, setValidationResults] = useState({});
+  const [crossSourceResults, setCrossSourceResults] = useState({});
+  // resultsContext carries { source_id? } passed when navigating to Results from Builder
+  const [resultsContext, setResultsContext] = useState(null);
 
   const flash = useCallback((text, kind = "ok") => {
     const id = ++_flashId;
@@ -64,6 +67,14 @@ function App() {
 
   const dismissFlash = useCallback(id => setFlashes(f => f.filter(m => m.id !== id)), []);
 
+  // onNavigate(screen, context?) — context is optional, used by Builder deep-links
+  const handleNavigate = useCallback((targetScreen, context) => {
+    if (targetScreen === "results" && context && context.source_id) {
+      setResultsContext({ source_id: context.source_id });
+    }
+    setScreen(targetScreen);
+  }, []);
+
   return (
     <>
       <NavRail active={screen} onChange={setScreen} />
@@ -71,8 +82,17 @@ function App() {
       <main style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         {screen === "data"     && <ScreenData flash={flash} />}
         {screen === "modules"  && <ScreenModules flash={flash} />}
-        {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={setScreen} />}
-        {screen === "results"  && <ScreenResults flash={flash} validationResults={validationResults} setValidationResults={setValidationResults} />}
+        {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={handleNavigate} />}
+        {screen === "results"  && (
+          <ScreenResults
+            flash={flash}
+            validationResults={validationResults}
+            setValidationResults={setValidationResults}
+            crossSourceResults={crossSourceResults}
+            setCrossSourceResults={setCrossSourceResults}
+            resultsContext={resultsContext}
+          />
+        )}
         {screen === "settings" && <ScreenSettings flash={flash} />}
       </main>
 
