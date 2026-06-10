@@ -266,6 +266,6 @@ def test_quirky_varchar_fallback_infers_varchar(db, tmp_path):
     )
 
     # Ingestion must succeed and rows must be present
-    rows_in, skipped, failed_ing = ingest_source(db, source_id, str(p))
+    rows_in, skipped, failed_ing, _schema_diff = ingest_source(db, source_id, str(p))
     assert not failed_ing.has_failures(), str(failed_ing)
     assert rows_in == 3
