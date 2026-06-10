@@ -740,9 +740,29 @@ Read at startup into an `AppSettings` pydantic model; written back on `PATCH /se
 
 ## §15 — Package structure
 
-The Python package uses a flat layout (`pipeui/` at the repo root). The `src/`
-move is deferred to production packaging. The React frontend is a peer directory
-at the repo root. Current layout after Phase A, with planned additions annotated:
+The Python package lives under `src/pipeui/` (src-style layout). The React frontend is bundled inside the package at `src/pipeui/frontend/` so it is served as package data. `uv run pipeui start` is the canonical way to run the app.
+
+**Required `pyproject.toml` settings — do not remove:**
+
+```toml
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pipeui*"]
+
+[tool.setuptools.package-data]
+pipeui = ["frontend/**/*"]
+
+[tool.uv]
+package = true
+
+[tool.mypy]
+mypy_path = "src"
+explicit_package_bases = true
+```
+
+The `[tool.mypy]` block with `mypy_path = "src"` and `explicit_package_bases = true` is required for `uv run pipeui start` to resolve the `pipeui` module correctly. Removing it breaks the entry point with `ModuleNotFoundError: No module named 'pipeui'`.
+
+Current layout:
 
 ```
 pipeui/

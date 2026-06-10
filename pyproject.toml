@@ -44,3 +44,7 @@ pipeui = ["frontend/**/*"]
 
 [tool.uv]
 package = true
+
+[tool.mypy]
+mypy_path = "src"
+explicit_package_bases = true
