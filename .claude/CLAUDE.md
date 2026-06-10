@@ -73,6 +73,7 @@ Every unit of work follows this four-step sequence. Do not skip steps.
    - **Never push directly to main** — not for code, not for docs, not for skill updates. Every push requires a branch and a PR tied to a GitHub issue.
    - **Every change needs a ticket.** If there is no issue for it, don't push it. Doc and skill changes are not exempt.
    - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
+   - **No sensitive or personal information in commits, PRs, or issues.** This includes session/chat URLs, real names, local directory paths, tokens, credentials, or any other personal identifiers. Commit messages, PR bodies, issue bodies, and code comments must contain only technical content relevant to the change.
 5. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
    go in CLAUDE_REFERENCE.md. Split criterion: *what to build and why* → CLAUDE.md,
    *how it is implemented* → CLAUDE_REFERENCE.md.
