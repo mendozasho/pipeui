@@ -282,7 +282,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
         setEditorOpen(false);
         setEditingSetId(null);
         loadSets();
-        flash && flash(isEdit ? "Set updated." : "Set created.", "success");
+        flash && flash(isEdit ? "Set updated." : "Set created.", "ok");
       })
       .catch(() => { setSaving(false); flash && flash("Failed to save set.", "error"); });
   }
@@ -354,7 +354,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                     if (r.status === 204) {
                       setEditorOpen(false); setEditingSetId(null);
                       loadSets();
-                      flash && flash("Set deleted.", "success");
+                      flash && flash("Set deleted.", "ok");
                     } else {
                       flash && flash("Failed to delete set.", "error");
                     }
