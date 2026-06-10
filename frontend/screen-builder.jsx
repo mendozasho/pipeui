@@ -983,7 +983,7 @@ function SidePanel({ source, onClose, onNavigate }) {
             resultTags={resultTags}
             runningSetId={runningSetId}
             onRunSet={handleRunSet}
-            onNavigateResults={() => onNavigate && onNavigate("results")}
+            onNavigateResults={() => onNavigate && onNavigate("results", { source_id: source.source_id })}
           />
         )}
         {!loading && !error && pipeline && pipeline.steps.length === 0 && !pendingStep && (

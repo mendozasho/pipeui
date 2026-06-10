@@ -708,6 +708,7 @@ FastAPI route modules — one file per screen domain. Route modules call
 | `settings.py` | `GET /settings` · `PATCH /settings` | A2 |
 | `functions.py` | `GET /functions` · `POST /functions` · `GET /functions/{id}` | D |
 | `pipelines.py` | `GET /pipelines/{source_id}` · `POST /pipelines/{source_id}/steps` · `DELETE /pipelines/{source_id}/steps/{step_id}` · `POST /pipelines/{source_id}/run` | E |
+| `validations.py` | `POST /validations/run?function_id={id}` — fan-out: run one validation function across all sources it is attached to; returns `{ function_id, function_name, sources: [{ source_id, source_name, status, rows_passed, rows_failed, pass_rate, failing_rows, error }] }`; 404 on unknown function | F1 |
 
 FastAPI also mounts `frontend/` as a `StaticFiles` directory so a single
 `uvicorn src.pipeui.api:app` process serves both the UI and the JSON endpoints.
@@ -722,6 +723,7 @@ FastAPI also mounts `frontend/` as a `StaticFiles` directory so a single
 | C | Data drawer | Schema type dropdowns + castability modal | `PATCH /sources/{id}/columns/{col_id}` |
 | D | Functions | Module list + function cards | `GET /functions` · `POST /functions` |
 | E | Builder | Reports rail, function palette, pipeline steps, run results | all `pipelines.py` routes |
+| F1 | Results (Validations) | Placeholder replaced; By Source + By Function sub-tabs | `POST /pipelines/{source_id}/run?run_type=validations` · `POST /validations/run?function_id={id}` · `GET /sources` · `GET /functions` |
 
 ### Settings config (`pipeui.config.json`)
 

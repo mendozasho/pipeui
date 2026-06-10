@@ -10,6 +10,7 @@ from pipeui.api.functions import router as functions_router
 from pipeui.api.pipelines import router as pipelines_router
 from pipeui.api.settings import load_settings, router as settings_router
 from pipeui.api.sources import router as sources_router
+from pipeui.api.validations import router as validations_router
 from pipeui.duckdb import get_connection, create_schema
 
 # frontend/ is a sibling of the pipeui package, two levels up from this file
@@ -25,6 +26,7 @@ app.include_router(sources_router)
 app.include_router(functions_router)
 app.include_router(function_sets_router)
 app.include_router(pipelines_router)
+app.include_router(validations_router)
 
 # Serve the React frontend from the root after routes are registered
 if FRONTEND_DIR.exists():
