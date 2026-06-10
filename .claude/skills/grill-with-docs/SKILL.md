@@ -79,6 +79,10 @@ When a term is resolved, update `CONTEXT.md` right there. Don't batch these up â
 
 Do **not** commit after every question. Accumulate all `CONTEXT.md` edits during the session and commit them **once** at the very end of the grill â€” after the final question is answered and before handing off to `/to-prd`. One commit, one push, on the current working branch.
 
+**Commit message format:** The subject line must summarise *what domain decisions were captured*, not just "update CONTEXT.md". Example: `docs(context): resolve built-in step types, scalar persistence, and join source picker`. Keep it under 72 characters.
+
+**Never include the Claude Code session URL** (`https://claude.ai/code/session_...`) in commit messages. That URL is session-internal and must not appear in the repository history.
+
 ### Offer ADRs sparingly
 
 Only offer to create an ADR when all three are true:
