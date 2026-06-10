@@ -1,4 +1,4 @@
-"""Behavioral guarantees for built-in pipeline steps (join and pivot).
+"""Behavioral guarantees for built-in pipeline steps (join, pivot, filter).
 
 Guarantees:
   B1. attach_builtin creates a source_builtin_map row for a valid join config.
@@ -12,6 +12,10 @@ Guarantees:
   B8. execute_builtin_step (join) produces a DataFrame with the correct merged shape.
   B9. execute_builtin_step (pivot) output columns match the aggregation specification.
   B10. get_unified_pipeline returns None for an unknown source_id.
+  B11. builtin_registry is seeded with exactly 3 rows (join, pivot, filter) on a fresh DB.
+  B12. Re-running create_schema on an existing DB does not duplicate builtin rows.
+  B13. GET /builtins returns all 3 rows with required fields.
+  B14. source_builtin_map accepts builtin_type = "filter" without error.
 """
 from __future__ import annotations
 
@@ -342,3 +346,70 @@ def test_execute_builtin_pivot(db):
 
 def test_unified_pipeline_unknown_source(db):
     assert get_unified_pipeline(db, uuid.uuid4()) is None
+
+
+# ---------------------------------------------------------------------------
+# B11 — builtin_registry seeded with exactly 3 rows on fresh DB
+# ---------------------------------------------------------------------------
+
+def test_builtin_registry_seeded_with_three_rows(db):
+    rows = db.execute("SELECT builtin_type FROM builtin_registry ORDER BY builtin_type").fetchall()
+    types = [r[0] for r in rows]
+    assert len(types) == 3
+    assert "filter" in types
+    assert "join" in types
+    assert "pivot" in types
+
+
+# ---------------------------------------------------------------------------
+# B12 — re-running create_schema does not duplicate builtin rows
+# ---------------------------------------------------------------------------
+
+def test_create_schema_idempotent_no_duplicates(db):
+    from pipeui.db import create_schema
+    create_schema(db)
+    create_schema(db)
+    count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
+    assert count == 3
+
+
+# ---------------------------------------------------------------------------
+# B13 — GET /builtins returns all 3 rows with required fields
+# ---------------------------------------------------------------------------
+
+def test_get_builtins_endpoint(db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from pipeui.api.builtins import catalog_router, get_conn
+    app = FastAPI()
+    app.include_router(catalog_router)
+    app.dependency_overrides[get_conn] = lambda: db
+    client = TestClient(app)
+    resp = client.get("/builtins")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+    types = {row["builtin_type"] for row in data}
+    assert types == {"join", "pivot", "filter"}
+    for row in data:
+        assert "builtin_id" in row
+        assert "display_name" in row
+        assert "description" in row
+        assert "config_schema" in row
+
+
+# ---------------------------------------------------------------------------
+# B14 — source_builtin_map accepts builtin_type = "filter"
+# ---------------------------------------------------------------------------
+
+def test_attach_builtin_filter_accepted(source):
+    conn, source_id, _ = source
+    cfg = {"column": "col_0", "operator": "eq", "value": 1}
+    result = attach_builtin(conn, source_id, "filter", cfg)
+    assert result["ok"] is True
+    row = conn.execute(
+        "SELECT builtin_type FROM source_builtin_map WHERE step_id = ?",
+        [result["step_id"]],
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "filter"

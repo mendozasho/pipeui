@@ -531,8 +531,13 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
             No sets yet. Click "New Set" to create one.
           </div>
         )}
+        {!setsLoading && sets.length > 0 && sets.every(s => (s.member_count ?? s.function_count) === 1) && (
+          <div style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 16 }}>
+            No multi-function sets yet. Sets are created automatically when you drag multiple functions onto a pipeline.
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-          {sets.map(s => (
+          {sets.filter(s => (s.member_count ?? s.function_count) !== 1).map(s => (
             <div key={s.set_id} onClick={() => openEdit(s.set_id)} style={{
               background: "var(--panel)", border: "1px solid var(--border)",
               borderRadius: "var(--radius-lg)", padding: "16px",
@@ -581,88 +586,113 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// BuiltinsTab — two built-in step cards: Join and Pivot
+// BuiltinsTab — cards fetched from GET /builtins, with detail drawer
 // ---------------------------------------------------------------------------
 
-const BUILTINS = [
-  {
-    id: "join",
-    label: "Join",
-    description: "Combine this source with another source by matching on one or more column pairs. Supports inner, left, right, and full join types.",
-    defaultConfig: {
-      right_source_id: "",
-      join_type: "inner",
-      on: [{ left_col: "", right_col: "" }],
-      keep_columns: "all",
-    },
-  },
-  {
-    id: "pivot",
-    label: "Pivot",
-    description: "Reshape data by rotating unique values of a pivot column into new columns, aggregating with sum, avg, min, max, or count.",
-    defaultConfig: {
-      index_columns: [],
-      pivot_column: "",
-      value_columns: [{ col_name: "", aggregations: ["sum"] }],
-    },
-  },
-];
-
-function BuiltinCard({ builtin, onDragStart }) {
-  const { Btn } = window.__UI__;
+function BuiltinDetailDrawer({ builtin, onClose }) {
+  const { Drawer } = window.__UI__;
+  if (!builtin) return null;
+  const schema = builtin.config_schema;
+  const schemaFields = schema && typeof schema === "object" ? Object.entries(schema) : [];
   return (
-    <div
-      draggable
-      onDragStart={e => onDragStart && onDragStart(e, builtin)}
-      style={{
-        background: "var(--panel)", border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)", padding: "16px 18px",
-        marginBottom: 12, cursor: "grab", userSelect: "none",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <span style={{
-          fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
-          textTransform: "uppercase", padding: "2px 8px",
-          borderRadius: 4, background: "var(--accent)", color: "var(--accent-ink)",
+    <Drawer open={!!builtin} onClose={onClose} title={builtin.display_name} width={480}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <div style={{
+          display: "inline-block", fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+          textTransform: "uppercase", padding: "2px 8px", borderRadius: 4,
+          background: "var(--accent)", color: "var(--accent-ink)",
         }}>
-          Built-in
-        </span>
-        <span style={{ fontWeight: 600, fontSize: 15, color: "var(--text)" }}>
-          {builtin.label}
-        </span>
+          {builtin.builtin_type}
+        </div>
+        {builtin.description && (
+          <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>
+            {builtin.description}
+          </div>
+        )}
+        {schemaFields.length > 0 && (
+          <div>
+            <div style={{
+              fontSize: 11, color: "var(--text-3)", fontWeight: 600,
+              letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 10,
+            }}>Config schema</div>
+            <div style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "'Geist Mono', monospace" }}>
+                <thead>
+                  <tr style={{ background: "var(--panel-2)" }}>
+                    <th style={{ padding: "6px 12px", textAlign: "left", fontWeight: 600, color: "var(--text-2)", borderBottom: "1px solid var(--border)" }}>field</th>
+                    <th style={{ padding: "6px 12px", textAlign: "left", fontWeight: 600, color: "var(--text-2)", borderBottom: "1px solid var(--border)" }}>type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schemaFields.map(([field, type], i) => (
+                    <tr key={field} style={{ background: i % 2 === 0 ? "transparent" : "var(--panel-2)" }}>
+                      <td style={{ padding: "5px 12px", borderBottom: "1px solid var(--border-soft)", color: "var(--text)" }}>{field}</td>
+                      <td style={{ padding: "5px 12px", borderBottom: "1px solid var(--border-soft)", color: "var(--text-3)" }}>{String(type)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
-      <div style={{ fontSize: 13, color: "var(--text-3)", lineHeight: 1.55 }}>
-        {builtin.description}
-      </div>
-      <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-4)" }}>
-        Drag onto the Builder canvas to add this step to a pipeline.
-      </div>
-    </div>
+    </Drawer>
   );
 }
 
-function BuiltinsTab() {
-  function handleDragStart(e, builtin) {
-    e.dataTransfer.setData("application/pipeui-builtin", JSON.stringify({
-      builtin_type: builtin.id,
-      builtin_config: builtin.defaultConfig,
-      label: builtin.label,
-    }));
-    e.dataTransfer.effectAllowed = "copy";
-  }
+function BuiltinsTab({ flash }) {
+  const { LoadingState } = window.__UI__;
+  const [builtins, setBuiltins] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedBuiltin, setSelectedBuiltin] = useState(null);
+
+  useEffect(() => {
+    fetch("/builtins")
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setBuiltins(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Built-in Steps</div>
         <div style={{ color: "var(--text-3)", fontSize: 12 }}>
-          Drag a built-in card onto the Report Builder canvas to configure and add it as a pipeline step.
+          Click a card to view details. These steps are available in the Report Builder palette.
         </div>
       </div>
-      {BUILTINS.map(b => (
-        <BuiltinCard key={b.id} builtin={b} onDragStart={handleDragStart} />
-      ))}
+      {loading && <LoadingState />}
+      {!loading && builtins.map(b => {
+        const excerpt = b.description ? b.description.split(".")[0] + "." : "";
+        return (
+          <div
+            key={b.builtin_type}
+            onClick={() => setSelectedBuiltin(b)}
+            style={{
+              background: "var(--panel)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)", padding: "16px 18px",
+              marginBottom: 12, cursor: "pointer",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{
+                fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+                textTransform: "uppercase", padding: "2px 8px",
+                borderRadius: 4, background: "var(--accent)", color: "var(--accent-ink)",
+              }}>
+                {b.builtin_type}
+              </span>
+              <span style={{ fontWeight: 600, fontSize: 15, color: "var(--text)" }}>
+                {b.display_name}
+              </span>
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-3)", lineHeight: 1.55 }}>
+              {excerpt}
+            </div>
+          </div>
+        );
+      })}
+      <BuiltinDetailDrawer builtin={selectedBuiltin} onClose={() => setSelectedBuiltin(null)} />
     </div>
   );
 }
@@ -677,6 +707,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
   const [scanOpen, setScanOpen] = useState(false);
   const [selectedFunction, setSelectedFunction] = useState(null);
   const [runningFns, setRunningFns] = useState({}); // function_id -> bool
+  const [collapsedModules, setCollapsedModules] = useState(new Set()); // Set of collapsed module_path strings
 
   function loadFunctions() {
     return fetch("/functions")
@@ -774,7 +805,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
             </button>
           ))}
         </div>
-        {activeTab === "builtins" && <BuiltinsTab />}
+        {activeTab === "builtins" && <BuiltinsTab flash={flash} />}
         {activeTab === "sets" && <SetsTab flash={flash} allFunctions={functions} addResultCard={addResultCard} onNavigate={onNavigate} />}
       </div>
     );
@@ -888,16 +919,27 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
             No functions registered yet. Add a directory in Settings → functions_paths and press Rescan.
           </div>
         )}
-        {!loading && Object.entries(byFile).map(([filePath, fns]) => (
+        {!loading && Object.entries(byFile).map(([filePath, fns]) => {
+          const isCollapsed = collapsedModules.has(filePath);
+          return (
           <div key={filePath} style={{
             background: "var(--panel)", border: "1px solid var(--border)",
             borderRadius: "var(--radius-lg)", marginBottom: 12, overflow: "hidden",
           }}>
-            {/* File header */}
-            <div style={{
-              padding: "10px 16px", borderBottom: "1px solid var(--border-soft)",
-              display: "flex", alignItems: "center", gap: 8,
-            }}>
+            {/* File header — click to collapse/expand */}
+            <div
+              onClick={() => setCollapsedModules(prev => {
+                const next = new Set(prev);
+                if (next.has(filePath)) next.delete(filePath);
+                else next.add(filePath);
+                return next;
+              })}
+              style={{
+                padding: "10px 16px", borderBottom: isCollapsed ? "none" : "1px solid var(--border-soft)",
+                display: "flex", alignItems: "center", gap: 8,
+                cursor: "pointer", userSelect: "none",
+              }}
+            >
               <Icon name="file" size={14} style={{ color: "var(--text-3)" }} />
               <span style={{ fontWeight: 600, fontFamily: "'Geist Mono', monospace", fontSize: 13 }}>
                 {filePath.split("/").pop()}
@@ -908,9 +950,12 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
               <span style={{ marginLeft: 8, fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>
                 {fns.length} function{fns.length !== 1 ? "s" : ""}
               </span>
+              <span style={{ fontSize: 14, lineHeight: 1, color: "var(--text-3)", marginLeft: 4, flexShrink: 0 }}>
+                {isCollapsed ? "›" : "∨"}
+              </span>
             </div>
-            {/* Function cards — clickable to open drawer */}
-            {fns.map(fn => (
+            {/* Function cards — hidden when collapsed */}
+            {!isCollapsed && fns.map(fn => (
               <div key={fn.function_id} onClick={() => setSelectedFunction(fn)} style={{
                 padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: 12,
                 borderBottom: "1px solid var(--border-soft)",
@@ -944,7 +989,8 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
               </div>
             ))}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Function detail drawer */}

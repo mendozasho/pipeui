@@ -34,6 +34,7 @@ function NavRail({ active, onChange }) {
           border: active === item.id ? "1px solid var(--accent-line)" : "1px solid transparent",
           color: active === item.id ? "var(--accent)" : "var(--text-3)",
           transition: "all .15s",
+          ...(item.id === "settings" ? { marginTop: "auto" } : {}),
         }}>
           <Icon name={item.icon} size={18} />
         </button>
