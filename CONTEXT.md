@@ -78,6 +78,24 @@ Derived from `function_return_type`. `validation` when return is `boolean` or `p
 
 A list of folder paths in `pipeui.config.json` (alongside `db_path`). Each entry points to a directory on the user's machine containing `.py` function modules. The app does not copy or upload files — `module_path` in `function_registry` stores the user's actual file path. The Settings screen has an add/remove list UI for managing the paths. All paths are scanned together on rescan.
 
+## SQL function
+
+A `.sql` file registered via the same `functions_paths` scan as `.py` files. Always operates at DataFrame granularity — the full source instance table is the input, substituted via a `{source_table}` placeholder at run time. No parameter binding; SQL functions are attached to sources like any other function but have no `alias_map` rows.
+
+Metadata is declared in a comment block at the top of the file:
+```sql
+-- name: clean_nulls
+-- description: Remove rows where key columns are null
+-- type: transform
+SELECT * FROM {source_table} WHERE col_a IS NOT NULL
+```
+
+`-- type` must be `transform` or `validation`. If omitted, `function_type` is stored as `unknown`. The Functions screen shows an **Unknown** type badge on such functions; hovering the badge shows a tooltip: *"Type unknown — add `-- type: transform` or `-- type: validation` to this file's header and rescan."* The function still registers and can be attached.
+
+Any helpers shared between `.py` and `.sql` scanning (e.g. writing to `function_registry`, building `FailedFunctionEntry`) live in a shared module rather than being duplicated per scanner.
+
+---
+
 ## function scanning (rescan model)
 
 Functions are registered by scanning `functions_path`, not by file upload. The registry does **not** auto-update on app startup or when files change on disk. A rescan is triggered explicitly in two ways: (1) saving a changed `functions_path` in Settings, or (2) pressing "Rescan" on the Functions screen. On rescan, the backend discovers all `.py` files in `functions_path`, inspects each function, and registers or re-registers it. Re-registration uses the function collapse rule (Principle 2): same `content_hash_id` → preserve surrogate `function_id`, overwrite mutables only.
