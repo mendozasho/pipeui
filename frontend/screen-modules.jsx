@@ -29,7 +29,7 @@ function FnKV({ label, children }) {
   );
 }
 
-function FunctionDrawer({ functionId, onClose, flash }) {
+function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
   const { Drawer, KindTag } = window.__UI__;
   const [detail, setDetail] = useState(null);
 
@@ -53,7 +53,7 @@ function FunctionDrawer({ functionId, onClose, flash }) {
       {fn && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
-          {/* Header: kind badge + active status */}
+          {/* Header: kind badge + active status + run */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <KindTag kind={fn.function_type} />
             <span style={{
@@ -65,6 +65,21 @@ function FunctionDrawer({ functionId, onClose, flash }) {
             }}>
               {fn.is_active ? "active" : "inactive"}
             </span>
+            {fn.is_active && (
+              <button
+                onClick={() => onRun && onRun(fn)}
+                disabled={!!running}
+                style={{
+                  marginLeft: "auto", padding: "5px 16px", fontSize: 12, fontWeight: 600,
+                  background: running ? "var(--panel-3)" : "var(--run, var(--accent))",
+                  color: running ? "var(--text-3)" : "var(--accent-ink, #fff)",
+                  border: "none", borderRadius: "var(--radius)",
+                  cursor: running ? "default" : "pointer",
+                }}
+              >
+                {running ? "Running…" : "Run"}
+              </button>
+            )}
           </div>
 
           {/* Signature */}
@@ -589,8 +604,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
       .catch(() => setScanning(false));
   }
 
-  function handleRunFn(e, fn) {
-    e.stopPropagation();
+  function handleRunFn(_e, fn) {
     setRunningFns(prev => ({ ...prev, [fn.function_id]: true }));
     fetch(`/validations/run?function_id=${fn.function_id}`, { method: "POST" })
       .then(r => r.json().then(data => ({ ok: r.ok, data })))
@@ -827,22 +841,6 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
                     {fn.function_name}{fn.function_signature}
                   </div>
                 </div>
-                {fn.is_active && (
-                  <button
-                    onClick={e => handleRunFn(e, fn)}
-                    disabled={!!runningFns[fn.function_id]}
-                    style={{
-                      padding: "4px 12px", fontSize: 11, fontWeight: 600,
-                      background: runningFns[fn.function_id] ? "var(--panel-3)" : "var(--run, var(--accent))",
-                      color: runningFns[fn.function_id] ? "var(--text-3)" : "var(--accent-ink, #fff)",
-                      border: "none", borderRadius: "var(--radius)",
-                      cursor: runningFns[fn.function_id] ? "default" : "pointer",
-                      flexShrink: 0, alignSelf: "center",
-                    }}
-                  >
-                    {runningFns[fn.function_id] ? "Running…" : "Run"}
-                  </button>
-                )}
               </div>
             ))}
           </div>
@@ -854,6 +852,8 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
         functionId={selectedFunction?.function_id}
         onClose={() => setSelectedFunction(null)}
         flash={flash}
+        onRun={fn => handleRunFn({ stopPropagation: () => {} }, fn)}
+        running={selectedFunction ? !!runningFns[selectedFunction.function_id] : false}
       />
     </div>
   );
