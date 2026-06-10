@@ -310,9 +310,9 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
-### Phase F1 — Validations Tab within Results Screen
+### Phase F1 — Validations Screen *(complete)*
 
-- [ ] **Validations tab** — Full implementation of the pass/fail summary view for validation function results within the Results screen. Per-source, per-function breakdown of rows passing/failing. Export capability (CSV). Fills in the Phase E2 Results screen placeholder.
+- [x] **Validations screen** (#87, #88, #89) — Full implementation of the Validations screen within the Results nav item. Two sub-tabs: **By Source** (pick a source, run validations, see per-function pass/fail counts + expandable failing rows preview, export per-function CSV) and **By Function** (pick a validation function, run across all attached sources via `POST /validations/run?function_id={id}`, per-source results + export). Results are ephemeral React state (session-only); export is the durable artifact. Builder result-tag click deep-links to By Source pre-scoped to the relevant source.
 
 ---
 
