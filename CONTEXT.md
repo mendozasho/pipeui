@@ -4,6 +4,12 @@ Terms resolved during grilling sessions. Implementation details live in CLAUDE_R
 
 ---
 
+## PK uniqueness (resolved)
+
+The app does not enforce PK uniqueness at registration or ingestion time. Duplicate PK handling is covered by the ingestion-method model (`upsert`/`append`/`skip`). A UI-only warning badge is shown in the source detail drawer when `row_count > COUNT(DISTINCT pk_column)` — no backend schema changes, no registration rejection. Full enforcement (e.g. rejecting a source whose PK is non-unique) is deferred to v2.
+
+---
+
 ## return-type vocabulary (resolved)
 
 The canonical vocabulary for function return types is Python type annotation casing throughout: `pd.Series`, `pd.Series[bool]`, `pd.DataFrame`. The prose terms `vector` and `matrix` are retired — any remaining references are stale and should be replaced. `function_class` uses lowercase `pd.dataframe` as a stored enum value (DuckDB VARCHAR); the Python-facing display uses `pd.DataFrame`. This was resolved during Phase D implementation; the Active Deferred Work entry in CLAUDE.md should be struck.
