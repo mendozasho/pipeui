@@ -4,6 +4,12 @@ Terms resolved during grilling sessions. Implementation details live in CLAUDE_R
 
 ---
 
+## return-type vocabulary (resolved)
+
+The canonical vocabulary for function return types is Python type annotation casing throughout: `pd.Series`, `pd.Series[bool]`, `pd.DataFrame`. The prose terms `vector` and `matrix` are retired — any remaining references are stale and should be replaced. `function_class` uses lowercase `pd.dataframe` as a stored enum value (DuckDB VARCHAR); the Python-facing display uses `pd.DataFrame`. This was resolved during Phase D implementation; the Active Deferred Work entry in CLAUDE.md should be struck.
+
+---
+
 ## function_return_type
 
 The shape and type of a function's return value, stored in `function_registry`. Determines how the execution layer aggregates results across alias_map runs.
