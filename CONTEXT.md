@@ -110,7 +110,7 @@ The worker process uses `sys.executable` — the same Python interpreter running
 
 A source in `source_registry` whose `pattern` field is non-null acts as a group anchor — it represents a named report that accepts multiple ingested files matching that pattern over time. The group name shown in the UI is a human-readable rendering of the `pattern` regex (e.g. `sales_jan_\d+` → `"sales_jan_*"`) — the raw regex is never shown directly. No separate group table; `source_id` from `source_registry` is the group identity (one source, many ingestion files).
 
-**Column mismatch warning:** when a file being ingested has columns that don't match the group's established `column_registry` schema (new columns, removed columns, or type mismatches), the user sees a confirmation popup before ingestion proceeds. The user's confirmation is stored (a `schema_override_confirmed` flag or equivalent) so the warning is not repeated for the same mismatch on subsequent ingests.
+**Column mismatch warning:** when a file being ingested has columns that don't match the source's current `source_column_map` (new columns, removed columns, or type mismatches), the user sees a confirmation popup showing the diff before ingestion proceeds. On confirmation, the normal column_registry + source_column_map write path executes — new columns get new UUID4/UUID5 rows, type changes go through copy-on-write. No extra flag or table needed; the accepted state is fully captured by what is in `source_column_map` after the confirmed write.
 
 **Future (not in current scope):** auto-infer files on disk matching the pattern and offer bulk-ingest with a confirmation list (user removes files they don't want before committing).
 
