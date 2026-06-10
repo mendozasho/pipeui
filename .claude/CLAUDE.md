@@ -71,6 +71,12 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
     in a single message. When a slice is blocked by another, surface it explicitly
     and wait for user approval before starting it — do not proceed past a blocker
     without confirmation.
+    **Always use `isolation: "worktree"` for every implementation agent that will
+    commit or push code.** Without it, all parallel agents share the same git
+    working directory — a `git checkout` by one agent switches the working tree
+    under every other agent, causing commits to land on the wrong branches. Worktree
+    isolation gives each agent its own checkout so branch switches are fully
+    isolated. Read-only / research agents that make no git changes do not need it.
 
 ---
 
