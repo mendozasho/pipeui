@@ -376,6 +376,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [skipReport, setSkipReport] = useState(null);
   const [previewData, setPreviewData] = useState(null); // { columns, rows } | null
   const [nullifiedRows, setNullifiedRows] = useState([]); // [{pk, column}] after migration
+  const [columnsExpanded, setColumnsExpanded] = useState(false);
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -403,6 +404,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     setPreviewData(null);
     setSkipReport(null);
     setNullifiedRows([]);
+    setColumnsExpanded(false);
     if (!sourceId) return;
     (async () => {
       try {
@@ -462,6 +464,18 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               <span style={{ fontSize: 13, color: "var(--text-3)" }}>
                 {source.row_count} row{source.row_count !== 1 ? "s" : ""}
               </span>
+              {source.row_count != null && source.distinct_pk_count != null && source.row_count > source.distinct_pk_count && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  background: "var(--warn-soft, rgba(255,180,0,.15))",
+                  color: "var(--warn, #e6a000)",
+                  border: "1px solid var(--warn, #e6a000)",
+                  borderRadius: 99, padding: "2px 8px", fontSize: 11, fontWeight: 600,
+                }}>
+                  <Icon name="warn" size={12} />
+                  Duplicate PK values
+                </span>
+              )}
               <Btn
                 variant="ghost"
                 style={{ marginLeft: "auto", fontSize: 12 }}
@@ -493,8 +507,21 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               <KV label="Last ingested">{source.date_ingested || "—"}</KV>
             </Section>
 
-            <Section title={`Columns (${source.columns?.length ?? 0})`}>
-              {(source.columns || []).map(col => (
+            <div>
+              <div
+                onClick={() => setColumnsExpanded(x => !x)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", userSelect: "none", marginBottom: columnsExpanded ? 10 : 0,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>Columns</span>
+                <span style={{ fontSize: 12, color: "var(--text-3)", display: "flex", alignItems: "center", gap: 4 }}>
+                  {source.columns?.length ?? 0}
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{columnsExpanded ? " ∨" : " ›"}</span>
+                </span>
+              </div>
+              {columnsExpanded && (source.columns || []).map(col => (
                 <ColumnTypeRow
                   key={col.column_id}
                   col={col}
@@ -510,7 +537,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                   }}
                 />
               ))}
-            </Section>
+            </div>
 
             {/* Nullified values — shown only after a migration that produced nullified rows */}
             {nullifiedRows.length > 0 && (

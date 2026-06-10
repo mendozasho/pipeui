@@ -241,11 +241,19 @@ def get_source_detail(
         [source_id],
     ).fetchall()
 
+    primary_key = row[5]
     tname = instance_table_name(source_id)
     try:
         row_count: int = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()[0]
     except Exception:
         row_count = 0
+
+    try:
+        distinct_pk_count: int | None = conn.execute(
+            f'SELECT COUNT(DISTINCT "{primary_key}") FROM "{tname}"'
+        ).fetchone()[0]
+    except Exception:
+        distinct_pk_count = None
 
     return {
         "source_id": str(row[0]),
@@ -253,8 +261,9 @@ def get_source_detail(
         "date_ingested": row[2].isoformat() if row[2] else None,
         "date_registered": row[3].isoformat() if row[3] else None,
         "ingestion_method": row[4],
-        "primary_key": row[5],
+        "primary_key": primary_key,
         "row_count": row_count,
+        "distinct_pk_count": distinct_pk_count,
         "columns": [
             {"column_id": str(c[0]), "column_name": c[1], "column_type": c[2]}
             for c in col_rows
