@@ -756,10 +756,6 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
       ),
     },
     {
-      key: "ingestion_method", label: "Method",
-      render: v => <span style={{ fontSize: 12, color: "var(--text-3)" }}>{v}</span>,
-    },
-    {
       key: "status", label: "Status",
       render: (_, row) => <StatusPill status={row.date_ingested ? "ingested" : "registered"} />,
     },
@@ -803,17 +799,42 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
       <div style={{ flex: 1, overflow: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
         <DropZone onFiles={files => setPendingFile(files[0])} />
 
-        <div style={{
-          background: "var(--panel)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)", overflow: "hidden",
-        }}>
-          <DataTable
-            columns={columns}
-            rows={sources.map(s => ({ ...s, id: s.source_id }))}
-            onRowClick={row => setSelectedSource(row)}
-            selectedId={selectedSource?.source_id}
-          />
-        </div>
+        {(() => {
+          // Partition sources into flat (no pattern) and grouped (by pattern_label).
+          // If pattern_label is absent, derive it client-side from `pattern` by
+          // replacing digit sequences with *, e.g. "sales_2024" → "sales_*".
+          const grouped = {}, flat = [];
+          for (const s of sources) {
+            const label = s.pattern_label
+              || (s.pattern ? s.pattern.replace(/\d+/g, "*") : null);
+            if (label) {
+              (grouped[label] ??= []).push({ ...s, _pattern_label: label });
+            } else {
+              flat.push(s);
+            }
+          }
+          const groups = Object.entries(grouped).map(([label, rows]) => ({
+            key: label,
+            label,
+            rows: rows.map(s => ({ ...s, id: s.source_id })),
+            rowCount: rows.reduce((n, s) => n + (s.date_ingested ? (s.row_count || 0) : 0), 0),
+          }));
+
+          return (
+            <div style={{
+              background: "var(--panel)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)", overflow: "hidden",
+            }}>
+              <DataTable
+                columns={columns}
+                rows={flat.map(s => ({ ...s, id: s.source_id }))}
+                groups={groups.length > 0 ? groups : undefined}
+                onRowClick={row => setSelectedSource(row)}
+                selectedId={selectedSource?.source_id}
+              />
+            </div>
+          );
+        })()}
       </div>
 
       {/* Register modal */}
