@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from pipeui.duckdb import create_schema
+from pipeui.db import create_schema
 from tests.conftest import make_registered_source
 
 REGISTRY_TABLES = {"source_registry", "function_registry", "column_registry", "parameter"}

@@ -69,7 +69,7 @@ def patch_settings(patch: SettingsPatch):
     if paths_changed:
         # Trigger immediate rescan when functions_paths changes (CONTEXT.md § function scanning)
         from pipeui.main import DB_PATH
-        from pipeui.duckdb import create_schema, get_connection
+        from pipeui.db import create_schema, get_connection
         from pipeui.workflow.functions import scan_functions
         conn = get_connection(str(DB_PATH))
         create_schema(conn)

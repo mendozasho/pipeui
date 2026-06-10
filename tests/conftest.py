@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from pipeui.ids import content_hash_id
-from pipeui.duckdb import create_schema, get_connection
+from pipeui.db import create_schema, get_connection
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from pipeui.duckdb import get_conn
+from pipeui.db import get_conn
 from pipeui.workflow.function_sets import (
     create_function_set,
     delete_function_set,
