@@ -220,8 +220,6 @@ Undecided or out-of-scope-for-now. Do not encode an answer in code without a
 decision.
 
 - **`column_type` enum** — ~~resolved; see below~~
-- **Return-type vocabulary** — reconcile `vector`/`matrix` (function-classification
-  prose) with `pd.series`/`pd.dataframe` (`function_class`). Pick one vocabulary.
 - **Single-column PK / no uniqueness check (M4)** — design assumes the first column
   is the PK when one can't be determined; there is no validation that the chosen
   PK is unique. Decide whether to enforce.
@@ -237,6 +235,7 @@ decision.
   signature for keyword binding — §1, §12. (It was never deliberately dropped.)
 - **`column_type` uninferable fallback** → **`VARCHAR`** (was written as `var`).
 - **`column_type` enum** → **`INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`**. Derived from the types DuckDB infers from CSV/xlsx uploads (`PYTHON_TO_DUCKDB`). Exotic types (`HUGEINT`, `FLOAT`, `REAL`, `SMALLINT`, `TINYINT`, `TIMESTAMPTZ`) excluded — never inferred at upload, never offered in the migration UI. `VARCHAR` is always a safe widening target. Validated at the app layer as a constrained `VARCHAR`; promotion to DuckDB native `ENUM` deferred until the set was final (now it is).
+- **Return-type vocabulary** → **`pd.Series`/`pd.DataFrame`** throughout. The legacy terms `vector` and `matrix` are retired from all docs; the stored enum values `pd.series`/`pd.dataframe` (lowercase) in the database are unchanged.
 
 ---
 
