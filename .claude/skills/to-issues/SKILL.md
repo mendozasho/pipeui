@@ -122,15 +122,6 @@ The relevant design choices from the PRD that apply to this slice — schema dec
 - [ ] Criterion 2
 - [ ] Criterion 3
 
-## Manual verification checklist
-
-Steps the human reviewer should take in the running app to confirm the feature works end-to-end. Written as concrete UI actions, not test assertions — the reviewer should be able to follow these without reading the code.
-
-- [ ] Start the app (`uv run pipeui start`) and navigate to [Screen]
-- [ ] [Specific action 1 — e.g. "Import a CSV file and confirm it appears in the source list"]
-- [ ] [Specific action 2 — e.g. "Drag a function onto the pipeline canvas and verify the parameter modal opens"]
-- [ ] [Edge case — e.g. "Leave all scalar inputs blank and confirm the step saves without error"]
-
 ## Blocked by
 
 - A reference to the blocking ticket (if any)
@@ -145,7 +136,7 @@ Or "None - can start immediately" if no blockers.
 - Use `git commit -m "subject" -m "body"` with repeated `-m` flags for multi-paragraph messages. Do NOT use heredoc (`<<'EOF'`) syntax — it does not evaluate correctly in all shell contexts and will corrupt the commit message.
 - **Before opening a PR, go through every acceptance criterion in this issue one by one and verify each is met.** For each criterion: state what you built that satisfies it, and confirm it works (run the relevant test, or describe the observable behaviour). Do not open the PR until every criterion is checked off. If a criterion cannot be met, surface it explicitly rather than skipping it.
 - **Check off each acceptance criterion on the GitHub issue as you confirm it.** Use the `mcp__github__issue_write` tool with `method: "update"` to update the issue body, replacing `- [ ]` with `- [x]` for each criterion you have verified. Do this before opening the PR so the issue reflects the confirmed state.
-- When all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body so the issue is auto-closed on merge.
+- When all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body so the issue is auto-closed on merge. The PR body must include a **`## How to verify`** section — a short ordered checklist of concrete UI steps the reviewer can follow in the running app (`uv run pipeui start`) to confirm the feature works end-to-end. Written as actions ("Navigate to X, do Y, confirm Z"), not as test assertions. Cover the happy path and at least one edge case.
 - **After opening the PR, verify it is actually open.** Use `mcp__github__list_pull_requests` with `state: "open"` and confirm your PR appears in the list. A force-push or history rewrite can silently auto-close a PR — if your PR is missing or closed, re-open it before ending your turn. Do not end your turn without confirming the PR is visible and open.
 
 </issue-template>
