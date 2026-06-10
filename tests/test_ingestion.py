@@ -9,6 +9,7 @@ import pytest
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.sql_user_table import instance_table_name
+from tests.conftest import make_quirky_file
 
 
 def make_csv(tmp_path, name, columns, rows):
@@ -234,3 +235,37 @@ def test_get_source_rows_respects_limit(db, tmp_path):
 
     rows = get_source_rows(db, source_id, limit=3)
     assert len(rows) == 3
+
+
+# ---------------------------------------------------------------------------
+# make_quirky_file: varchar_fallback forces VARCHAR inference
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_quirky_varchar_fallback_infers_varchar(db, tmp_path):
+    """make_quirky_file varchar_fallback=True generates a column with mixed content
+    (str, int, bool) that must be inferred as VARCHAR after ingestion."""
+    p = make_quirky_file(tmp_path, {"varchar_fallback": True})
+    source_id, failed = create_source(db, str(p), "quirky_varchar", "id", "upsert")
+    assert not failed.has_failures(), str(failed)
+
+    # The column_registry must record VARCHAR for the mixed-content column
+    col_rows = db.execute(
+        """
+        SELECT cr.column_name, cr.column_type
+        FROM column_registry cr
+        JOIN source_column_map scm ON scm.column_id = cr.column_id
+        WHERE scm.source_id = ?
+        """,
+        [source_id],
+    ).fetchall()
+    col_types = {name: ctype for name, ctype in col_rows}
+    assert "varchar_col" in col_types, f"varchar_col missing; got {col_types}"
+    assert col_types["varchar_col"] == "VARCHAR", (
+        f"Expected VARCHAR fallback, got {col_types['varchar_col']}"
+    )
+
+    # Ingestion must succeed and rows must be present
+    rows_in, skipped, failed_ing = ingest_source(db, source_id, str(p))
+    assert not failed_ing.has_failures(), str(failed_ing)
+    assert rows_in == 3
