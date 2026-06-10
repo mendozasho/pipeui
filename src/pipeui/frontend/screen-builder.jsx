@@ -530,10 +530,73 @@ function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, onNavig
 }
 
 // ---------------------------------------------------------------------------
-// Right palette — Functions + Sets tabs
+// Right palette — Functions + Sets + Built-ins tabs
 // ---------------------------------------------------------------------------
 
-function PaletteFunctionCard({ fn, onDragStart }) {
+// Read-only function drawer used from the palette (no run/attach controls)
+function PaletteFunctionDrawer({ functionId, onClose, flash }) {
+  const { Drawer, KindTag, StatusPill } = window.__UI__;
+  const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    setDetail(null);
+    if (!functionId) return;
+    fetch(`/functions/${functionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setDetail(d))
+      .catch(() => flash && flash("Could not load function detail.", "error"));
+  }, [functionId]);
+
+  if (!functionId) return null;
+  const fn = detail;
+
+  return (
+    <Drawer open={!!functionId} onClose={onClose} title={fn?.function_name ?? "…"} width={440}>
+      {fn && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <KindTag kind={fn.function_type || "transform"} />
+            <StatusPill status={fn.is_active ? "active" : "inactive"} />
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-4)", fontFamily: "'Geist Mono', monospace" }}>
+              {fn.function_class}
+            </span>
+          </div>
+          {fn.function_doc && (
+            <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>
+              {fn.function_doc}
+            </div>
+          )}
+          <div style={{
+            fontFamily: "'Geist Mono', monospace", fontSize: 12,
+            background: "var(--panel-2)", border: "1px solid var(--border)",
+            borderRadius: "var(--radius)", padding: "8px 12px", color: "var(--text)",
+          }}>
+            {fn.function_name}{fn.function_signature}
+          </div>
+          {fn.parameters && fn.parameters.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 8 }}>
+                Parameters ({fn.parameters.length})
+              </div>
+              {fn.parameters.map((p, i) => (
+                <div key={p.param_id} style={{
+                  display: "flex", justifyContent: "space-between", padding: "5px 0",
+                  borderBottom: "1px solid var(--border-soft)", fontSize: 12,
+                  fontFamily: "'Geist Mono', monospace",
+                }}>
+                  <span style={{ color: "var(--text)" }}>{p.param_name}</span>
+                  <span style={{ color: "var(--text-3)" }}>{p.param_type}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+function PaletteFunctionCard({ fn, onDragStart, onOpenDrawer }) {
   return (
     <div
       draggable
@@ -542,13 +605,14 @@ function PaletteFunctionCard({ fn, onDragStart }) {
         e.dataTransfer.setData("palette/function_name", fn.function_name);
         if (onDragStart) onDragStart();
       }}
+      onClick={e => { if (onOpenDrawer) onOpenDrawer(fn.function_id); }}
       title={fn.function_doc || fn.function_name}
       style={{
         padding: "7px 10px",
         borderRadius: "var(--radius)",
         border: "1px solid var(--border)",
         background: "var(--panel)",
-        cursor: "grab",
+        cursor: "pointer",
         marginBottom: 5,
       }}
     >
@@ -571,7 +635,7 @@ function PaletteFunctionCard({ fn, onDragStart }) {
   );
 }
 
-function PaletteSetCard({ set, onDragStart }) {
+function PaletteSetCard({ set, onDragStart, onOpenDrawer }) {
   const setType = deriveSetType(set.functions || []);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   return (
@@ -582,13 +646,14 @@ function PaletteSetCard({ set, onDragStart }) {
         e.dataTransfer.setData("palette/set_name", set.set_name);
         if (onDragStart) onDragStart();
       }}
+      onClick={() => { if (onOpenDrawer) onOpenDrawer(set.set_id); }}
       title={set.set_description || set.set_name}
       style={{
         padding: "7px 10px",
         borderRadius: "var(--radius)",
         border: "1px solid var(--border)",
         background: "var(--panel)",
-        cursor: "grab",
+        cursor: "pointer",
         marginBottom: 5,
       }}
     >
@@ -612,22 +677,136 @@ function PaletteSetCard({ set, onDragStart }) {
   );
 }
 
-function RightPalette({ selectedSource }) {
+// ---------------------------------------------------------------------------
+// SetDetailDrawer — read-only drawer for a function set
+// ---------------------------------------------------------------------------
+
+function SetDetailDrawer({ setId, onClose, flash }) {
+  const { Drawer, KindTag, StatusPill } = window.__UI__;
+  const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    setDetail(null);
+    if (!setId) return;
+    fetch(`/function-sets/${setId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setDetail(d))
+      .catch(() => flash && flash("Could not load set detail.", "error"));
+  }, [setId]);
+
+  if (!setId) return null;
+
+  const hasInactive = detail && detail.members && detail.members.some(m => !m.is_active);
+
+  return (
+    <Drawer open={!!setId} onClose={onClose} title={detail?.set_name ?? "…"} width={440}>
+      {detail && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {detail.set_description && (
+            <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>
+              {detail.set_description}
+            </div>
+          )}
+          {hasInactive && (
+            <div style={{
+              background: "var(--warn-soft, rgba(232,160,32,.12))",
+              border: "1px solid var(--warn, #e8a020)",
+              borderRadius: "var(--radius)", padding: "10px 14px",
+              fontSize: 12, color: "var(--warn, #e8a020)", fontWeight: 500,
+            }}>
+              This set contains inactive functions and may produce incomplete results.
+            </div>
+          )}
+          <div>
+            <div style={{
+              fontSize: 11, color: "var(--text-3)", fontWeight: 600,
+              letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 8,
+            }}>
+              Members ({detail.members?.length ?? 0})
+            </div>
+            {(detail.members || []).map((m, i) => (
+              <div key={m.function_id} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 0", borderBottom: "1px solid var(--border-soft)",
+                opacity: m.is_active ? 1 : 0.5,
+              }}>
+                <span style={{ fontSize: 11, color: "var(--text-4)", minWidth: 18, textAlign: "right" }}>{i + 1}</span>
+                <KindTag kind={m.function_type || "transform"} />
+                <span style={{ fontSize: 13, flex: 1 }}>{m.function_name}</span>
+                <StatusPill status={m.is_active ? "active" : "inactive"} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BuiltinPaletteCard — draggable card for a builtin step
+// ---------------------------------------------------------------------------
+
+function BuiltinPaletteCard({ builtin, onDragStart }) {
+  return (
+    <div
+      draggable
+      onDragStart={e => {
+        e.dataTransfer.setData("palette/builtin_type", builtin.builtin_type);
+        if (onDragStart) onDragStart();
+      }}
+      title={builtin.description || builtin.display_name}
+      style={{
+        padding: "7px 10px",
+        borderRadius: "var(--radius)",
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        cursor: "grab",
+        marginBottom: 5,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, flex: 1, color: "var(--text)" }}>
+          {builtin.display_name}
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 99,
+          background: "var(--accent)", color: "var(--accent-ink)",
+          fontFamily: "'Geist Mono', monospace",
+        }}>
+          {builtin.builtin_type}
+        </span>
+      </div>
+      {builtin.description && (
+        <div style={{ fontSize: 10, color: "var(--text-4)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {builtin.description.split(".")[0]}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RightPalette({ selectedSource, flash }) {
   const { LoadingState } = window.__UI__;
   const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
   const [sets, setSets] = useState([]);
   const [setsDetail, setSetsDetail] = useState({});
+  const [builtins, setBuiltins] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [selectedFunctionId, setSelectedFunctionId] = useState(null);
+  const [selectedSetId, setSelectedSetId] = useState(null);
 
   useEffect(() => {
     setLoading(true);
     Promise.all([
       fetch("/functions").then(r => r.ok ? r.json() : []),
       fetch("/function-sets").then(r => r.ok ? r.json() : []),
-    ]).then(([fns, sts]) => {
+      fetch("/builtins").then(r => r.ok ? r.json() : []),
+    ]).then(([fns, sts, bts]) => {
       setFunctions(Array.isArray(fns) ? fns : []);
       setSets(Array.isArray(sts) ? sts : []);
+      setBuiltins(Array.isArray(bts) ? bts : []);
       setLoading(false);
       (Array.isArray(sts) ? sts : []).forEach(s => {
         fetch("/function-sets/" + s.set_id)
@@ -646,6 +825,8 @@ function RightPalette({ selectedSource }) {
     ...s,
     functions: (setsDetail[s.set_id] && setsDetail[s.set_id].functions) || [],
   }));
+  // Filter single-member sets from palette
+  const multiMemberSets = setsWithDetail.filter(s => (s.member_count ?? s.function_count) !== 1);
 
   const tabStyle = (tab) => ({
     flex: 1, padding: "6px 0", fontSize: 11, fontWeight: 600,
@@ -666,6 +847,7 @@ function RightPalette({ selectedSource }) {
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         <button style={tabStyle("functions")} onClick={() => setActiveTab("functions")}>Functions</button>
         <button style={tabStyle("sets")} onClick={() => setActiveTab("sets")}>Sets</button>
+        <button style={tabStyle("builtins")} onClick={() => setActiveTab("builtins")}>Built-ins</button>
       </div>
       <div style={{ flex: 1, overflow: "auto", padding: "10px 10px 10px" }}>
         {loading && <LoadingState />}
@@ -674,13 +856,13 @@ function RightPalette({ selectedSource }) {
             {validationFns.length > 0 && (
               <>
                 <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-3)", letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 6 }}>Validation</div>
-                {validationFns.map(fn => <PaletteFunctionCard key={fn.function_id} fn={fn} />)}
+                {validationFns.map(fn => <PaletteFunctionCard key={fn.function_id} fn={fn} onOpenDrawer={id => setSelectedFunctionId(id)} />)}
               </>
             )}
             {transformFns.length > 0 && (
               <>
                 <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-3)", letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 6, marginTop: validationFns.length > 0 ? 10 : 0 }}>Transform</div>
-                {transformFns.map(fn => <PaletteFunctionCard key={fn.function_id} fn={fn} />)}
+                {transformFns.map(fn => <PaletteFunctionCard key={fn.function_id} fn={fn} onOpenDrawer={id => setSelectedFunctionId(id)} />)}
               </>
             )}
             {functions.length === 0 && (
@@ -690,14 +872,34 @@ function RightPalette({ selectedSource }) {
         )}
         {!loading && activeTab === "sets" && (
           <>
-            {setsWithDetail.length === 0 ? (
-              <div style={{ fontSize: 11, color: "var(--text-4)", textAlign: "center", paddingTop: 20 }}>No function sets.</div>
+            {multiMemberSets.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--text-4)", textAlign: "center", paddingTop: 20 }}>
+                {setsWithDetail.length > 0
+                  ? "No multi-function sets yet. Sets are created automatically when you drag multiple functions onto a pipeline."
+                  : "No function sets."}
+              </div>
             ) : (
-              setsWithDetail.map(s => <PaletteSetCard key={s.set_id} set={s} />)
+              multiMemberSets.map(s => <PaletteSetCard key={s.set_id} set={s} onOpenDrawer={id => setSelectedSetId(id)} />)
+            )}
+          </>
+        )}
+        {!loading && activeTab === "builtins" && (
+          <>
+            {builtins.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--text-4)", textAlign: "center", paddingTop: 20 }}>No built-ins available.</div>
+            ) : (
+              builtins.map(b => <BuiltinPaletteCard key={b.builtin_type} builtin={b} />)
             )}
           </>
         )}
       </div>
+      {/* Function detail drawer (read-only from palette) */}
+      {selectedFunctionId && (
+        <PaletteFunctionDrawer functionId={selectedFunctionId} onClose={() => setSelectedFunctionId(null)} flash={flash} />
+      )}
+      {selectedSetId && (
+        <SetDetailDrawer setId={selectedSetId} onClose={() => setSelectedSetId(null)} flash={flash} />
+      )}
     </div>
   );
 }
@@ -706,7 +908,7 @@ function RightPalette({ selectedSource }) {
 // Side panel
 // ---------------------------------------------------------------------------
 
-function SidePanel({ source, onClose, onNavigate }) {
+function SidePanel({ source, onClose, onNavigate, flash }) {
   const { LoadingState, InlineError } = window.__UI__;
   const [pipeline, setPipeline] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -751,6 +953,15 @@ function SidePanel({ source, onClose, onNavigate }) {
     setIsDragOver(false);
     const functionId = e.dataTransfer.getData("palette/function_id");
     const setId = e.dataTransfer.getData("palette/set_id");
+    const builtinType = e.dataTransfer.getData("palette/builtin_type");
+
+    // Builtin drop — show placeholder toast (modal not yet implemented)
+    if (builtinType) {
+      const label = builtinType.charAt(0).toUpperCase() + builtinType.slice(1);
+      flash && flash(`${label} modal coming soon`, "ok");
+      return;
+    }
+
     const draggedName = functionId
       ? e.dataTransfer.getData("palette/function_name")
       : e.dataTransfer.getData("palette/set_name");
@@ -992,11 +1203,12 @@ function ScreenBuilder({ flash, onNavigate }) {
             source={selectedSource}
             onClose={() => setSelectedSource(null)}
             onNavigate={onNavigate}
+            flash={flash}
           />
         )}
 
-        {/* Right panel — function / set palette */}
-        <RightPalette selectedSource={selectedSource} />
+        {/* Right panel — function / set / built-ins palette */}
+        <RightPalette selectedSource={selectedSource} flash={flash} />
 
       </div>
     </div>

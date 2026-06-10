@@ -380,6 +380,8 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [nullifiedRows, setNullifiedRows] = useState([]); // [{pk, column}] after migration
   const [migrationError, setMigrationError] = useState(null);
   const [columnsExpanded, setColumnsExpanded] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(true);
+  const [dataExpanded, setDataExpanded] = useState(false);
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -408,6 +410,8 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     setSkipReport(null);
     setNullifiedRows([]);
     setColumnsExpanded(false);
+    setDetailsExpanded(true);
+    setDataExpanded(false);
     if (!sourceId) return;
     (async () => {
       try {
@@ -503,12 +507,26 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               </div>
             )}
 
-            <Section title="Details">
-              <KV label="Primary key">{source.primary_key}</KV>
-              <KV label="Ingestion">{source.ingestion_method}</KV>
-              <KV label="Registered">{source.date_registered}</KV>
-              <KV label="Last ingested">{source.date_ingested || "—"}</KV>
-            </Section>
+            <div>
+              <div
+                onClick={() => setDetailsExpanded(x => !x)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", userSelect: "none", marginBottom: detailsExpanded ? 10 : 0,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>Details</span>
+                <span style={{ fontSize: 14, lineHeight: 1, color: "var(--text-3)" }}>{detailsExpanded ? "∨" : "›"}</span>
+              </div>
+              {detailsExpanded && (
+                <>
+                  <KV label="Primary key">{source.primary_key}</KV>
+                  <KV label="Ingestion">{source.ingestion_method}</KV>
+                  <KV label="Registered">{source.date_registered}</KV>
+                  <KV label="Last ingested">{source.date_ingested || "—"}</KV>
+                </>
+              )}
+            </div>
 
             <div>
               <div
@@ -569,49 +587,61 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
             )}
 
             {/* Data preview */}
-            <Section title="Data">
-              {!source.date_ingested ? (
-                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>
-                  No data yet — ingest a file to preview rows.
-                </div>
-              ) : !previewData ? (
-                <LoadingState />
-              ) : previewData.rows.length === 0 ? (
-                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
-              ) : (
-                <div style={{ overflowX: "auto", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
-                  <table style={{
-                    borderCollapse: "collapse", width: "100%", fontSize: 12,
-                    fontFamily: "'Geist Mono', monospace",
-                  }}>
-                    <thead>
-                      <tr style={{ background: "var(--panel-2)" }}>
-                        {previewData.columns.map(col => (
-                          <th key={col} style={{
-                            padding: "6px 10px", textAlign: "left", fontWeight: 600,
-                            borderBottom: "1px solid var(--border)", color: "var(--text-2)",
-                            whiteSpace: "nowrap",
-                          }}>{col}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewData.rows.map((row, i) => (
-                        <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : "var(--panel-2)" }}>
+            <div>
+              <div
+                onClick={() => setDataExpanded(x => !x)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", userSelect: "none", marginBottom: dataExpanded ? 10 : 0,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>Data</span>
+                <span style={{ fontSize: 14, lineHeight: 1, color: "var(--text-3)" }}>{dataExpanded ? "∨" : "›"}</span>
+              </div>
+              {dataExpanded && (
+                !source.date_ingested ? (
+                  <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>
+                    No data yet — ingest a file to preview rows.
+                  </div>
+                ) : !previewData ? (
+                  <LoadingState />
+                ) : previewData.rows.length === 0 ? (
+                  <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
+                ) : (
+                  <div style={{ overflowX: "auto", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+                    <table style={{
+                      borderCollapse: "collapse", width: "100%", fontSize: 12,
+                      fontFamily: "'Geist Mono', monospace",
+                    }}>
+                      <thead>
+                        <tr style={{ background: "var(--panel-2)" }}>
                           {previewData.columns.map(col => (
-                            <td key={col} style={{
-                              padding: "5px 10px", borderBottom: "1px solid var(--border-soft)",
-                              color: "var(--text)", whiteSpace: "nowrap", maxWidth: 200,
-                              overflow: "hidden", textOverflow: "ellipsis",
-                            }}>{row[col] == null ? <span style={{ color: "var(--text-4)" }}>null</span> : String(row[col])}</td>
+                            <th key={col} style={{
+                              padding: "6px 10px", textAlign: "left", fontWeight: 600,
+                              borderBottom: "1px solid var(--border)", color: "var(--text-2)",
+                              whiteSpace: "nowrap",
+                            }}>{col}</th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {previewData.rows.map((row, i) => (
+                          <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : "var(--panel-2)" }}>
+                            {previewData.columns.map(col => (
+                              <td key={col} style={{
+                                padding: "5px 10px", borderBottom: "1px solid var(--border-soft)",
+                                color: "var(--text)", whiteSpace: "nowrap", maxWidth: 200,
+                                overflow: "hidden", textOverflow: "ellipsis",
+                              }}>{row[col] == null ? <span style={{ color: "var(--text-4)" }}>null</span> : String(row[col])}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
               )}
-            </Section>
+            </div>
           </div>
         )}
       </Drawer>
