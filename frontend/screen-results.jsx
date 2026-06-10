@@ -4,7 +4,7 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
-const { timeAgo } = window.__UI__;
+const { timeAgo, LoadingState, InlineError } = window.__UI__;
 
 // ── Filename helpers ──────────────────────────────────────────────────────────
 function sanitiseFilename(str) {
@@ -314,10 +314,10 @@ function TransformExpand({ card }) {
   }, []);
 
   if (loading) {
-    return <div style={{ color: "var(--text-4)", fontSize: 13 }}>Loading staging data…</div>;
+    return <LoadingState label="Loading staging data…" />;
   }
   if (error) {
-    return <div style={{ color: "var(--bad)", fontSize: 13 }}>{error}</div>;
+    return <InlineError variant="panel">{error}</InlineError>;
   }
   if (!stagingData || stagingData.rows.length === 0) {
     return <div style={{ color: "var(--text-4)", fontSize: 13 }}>No staging data available.</div>;

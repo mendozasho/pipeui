@@ -613,6 +613,7 @@ function PaletteSetCard({ set, onDragStart }) {
 }
 
 function RightPalette({ selectedSource }) {
+  const { LoadingState } = window.__UI__;
   const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
   const [sets, setSets] = useState([]);
@@ -667,7 +668,7 @@ function RightPalette({ selectedSource }) {
         <button style={tabStyle("sets")} onClick={() => setActiveTab("sets")}>Sets</button>
       </div>
       <div style={{ flex: 1, overflow: "auto", padding: "10px 10px 10px" }}>
-        {loading && <div style={{ fontSize: 11, color: "var(--text-4)", textAlign: "center", paddingTop: 20 }}>Loading...</div>}
+        {loading && <LoadingState />}
         {!loading && activeTab === "functions" && (
           <>
             {validationFns.length > 0 && (
@@ -706,6 +707,7 @@ function RightPalette({ selectedSource }) {
 // ---------------------------------------------------------------------------
 
 function SidePanel({ source, onClose, onNavigate }) {
+  const { LoadingState, InlineError } = window.__UI__;
   const [pipeline, setPipeline] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -855,15 +857,9 @@ function SidePanel({ source, onClose, onNavigate }) {
           transition: "background .1s",
         }}
       >
-        {pendingDryRunning && (
-          <div style={{ color: "var(--text-4)", fontSize: 12, textAlign: "center", paddingBottom: 8 }}>Loading parameters...</div>
-        )}
-        {loading && (
-          <div style={{ color: "var(--text-4)", fontSize: 13, textAlign: "center", paddingTop: 30 }}>Loading...</div>
-        )}
-        {error && (
-          <div style={{ color: "#e05252", fontSize: 13 }}>{error}</div>
-        )}
+        {pendingDryRunning && <LoadingState label="Loading parameters…" />}
+        {loading && <LoadingState />}
+        {error && <InlineError variant="panel">{error}</InlineError>}
         {!loading && !error && pipeline && (
           <PipelineCanvas
             sourceId={source.source_id}

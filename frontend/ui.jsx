@@ -128,12 +128,28 @@ function SourceBadge({ name, style }) {
 }
 
 // ── Spinner ───────────────────────────────────────────────────────────────────
-function Spinner({ size = 14, color = "currentColor" }) {
+function Spinner({ size = 14, color = "currentColor", strokeWidth = 2 }) {
+  const r = 8;
+  const cx = 12, cy = 12;
+  const circumference = 2 * Math.PI * r;
+  const arcLength = circumference * 0.3;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ animation: "spin 1s linear infinite" }}>
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-      <circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeOpacity="0.25" />
-      <path d="M12 3a9 9 0 0 1 9 9" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+      <circle cx={cx} cy={cy} r={r} stroke={color} strokeWidth={strokeWidth} strokeOpacity="0.22" />
+      <circle cx={cx} cy={cy} r={r} stroke={color} strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={`${arcLength} ${circumference - arcLength}`}
+        strokeDashoffset="0"
+      >
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from={`0 ${cx} ${cy}`}
+          to={`360 ${cx} ${cy}`}
+          dur="0.7s"
+          repeatCount="indefinite"
+        />
+      </circle>
     </svg>
   );
 }
@@ -338,22 +354,48 @@ function Drawer({ open, onClose, title, children, width = 420 }) {
   );
 }
 
-// ── LoadingState / InlineError stubs (referenced in export) ──────────────────
-function LoadingState({ message = "Loading…" }) {
+// ── LoadingState ──────────────────────────────────────────────────────────────
+function LoadingState({ label = "Loading…", size = 22 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-3)", fontSize: 13 }}>
-      <Spinner size={14} />
-      <span>{message}</span>
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: 8, padding: "40px 0", color: "var(--text-3)",
+    }}>
+      <Spinner size={size} />
+      <span style={{ fontSize: 12, letterSpacing: ".02em" }}>{label}</span>
     </div>
   );
 }
 
-function InlineError({ message }) {
-  if (!message) return null;
+// ── InlineError ───────────────────────────────────────────────────────────────
+function InlineError({ children, variant = "field", onDismiss, style }) {
+  if (!children) return null;
+  if (variant === "panel") {
+    return (
+      <div style={{
+        display: "flex", alignItems: "flex-start", gap: 8,
+        padding: "10px 14px", borderRadius: "var(--radius)",
+        background: "rgba(248,113,113,.08)", border: "1px solid var(--bad)",
+        color: "var(--bad)", fontSize: 13, ...style,
+      }}>
+        <Icon name="warn" size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+        <span style={{ flex: 1 }}>{children}</span>
+        {onDismiss && (
+          <button onClick={onDismiss} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", lineHeight: 1, padding: 0 }}>
+            <Icon name="close" size={12} />
+          </button>
+        )}
+      </div>
+    );
+  }
+  // variant === "field"
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--bad)", fontSize: 13 }}>
-      <Icon name="warn" size={14} />
-      <span>{message}</span>
+    <div style={{
+      display: "flex", alignItems: "center", gap: 5,
+      color: "var(--bad)", fontSize: 12, ...style,
+    }}>
+      <Icon name="warn" size={12} style={{ flexShrink: 0 }} />
+      <span>{children}</span>
     </div>
   );
 }
