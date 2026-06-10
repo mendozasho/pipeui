@@ -15,8 +15,8 @@ from pipeui.api.sources import router as sources_router
 from pipeui.api.validations import router as validations_router
 from pipeui.db import get_connection, create_schema
 
-# frontend/ is a sibling of the pipeui package, two levels up from this file
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+# frontend/ is bundled as package data inside the pipeui package directory
+FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 # Load (and eagerly create if absent) the config file at startup
 _settings = load_settings()

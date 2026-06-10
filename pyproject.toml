@@ -38,3 +38,9 @@ dev = [
     "pytest>=9.0.3",
     "httpx>=0.27",
 ]
+
+[tool.setuptools.package-data]
+pipeui = ["frontend/**/*"]
+
+[tool.uv]
+package = true
