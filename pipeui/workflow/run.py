@@ -700,3 +700,74 @@ def run_validation_across_sources(
         "function_name": fn_name,
         "sources": source_results,
     }
+
+
+def run_set_across_sources(
+    conn: duckdb.DuckDBPyConnection,
+    set_id: uuid.UUID,
+) -> dict | None:
+    """Run a function set across all sources it is attached to.
+
+    Returns None if set_id is not found in function_set.
+    Returns { set_id, set_name, sources: [...] } on completion.
+
+    Each source entry has:
+      source_id, source_name, steps: [...]
+
+    A worker crash on one source marks that source's steps as failed without
+    blocking the remaining sources.
+    """
+    # Verify set exists
+    set_row = conn.execute(
+        "SELECT set_id, set_name FROM function_set WHERE set_id = ?",
+        [set_id],
+    ).fetchone()
+    if set_row is None:
+        return None
+
+    set_id_str, set_name = str(set_row[0]), set_row[1]
+
+    # Find all sources attached to this set via source_function_map
+    source_rows = conn.execute(
+        """
+        SELECT sfm.source_id, sr.source_name
+        FROM source_function_map sfm
+        JOIN source_registry sr ON sr.source_id = sfm.source_id
+        WHERE sfm.set_id = ?
+        ORDER BY sr.source_name
+        """,
+        [set_id],
+    ).fetchall()
+
+    source_results = []
+    for (source_id_raw, source_name) in source_rows:
+        source_id = uuid.UUID(str(source_id_raw))
+        try:
+            result = run_pipeline(conn, source_id, "set", set_id=set_id)
+            if result is None:
+                source_results.append({
+                    "source_id": str(source_id),
+                    "source_name": source_name,
+                    "steps": [],
+                    "error": "Source not found during run",
+                })
+                continue
+            source_results.append({
+                "source_id": str(source_id),
+                "source_name": source_name,
+                "steps": result.get("steps") or [],
+                "error": result.get("error"),
+            })
+        except Exception as exc:
+            source_results.append({
+                "source_id": str(source_id),
+                "source_name": source_name,
+                "steps": [],
+                "error": str(exc),
+            })
+
+    return {
+        "set_id": set_id_str,
+        "set_name": set_name,
+        "sources": source_results,
+    }
