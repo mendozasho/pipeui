@@ -1,5 +1,6 @@
-"""API routes for built-in pipeline steps (join, pivot).
+"""API routes for built-in pipeline steps (join, pivot, filter).
 
+GET    /builtins                                       — list all builtin_registry rows
 POST   /sources/{source_id}/attach-builtin          — attach a built-in step
 DELETE /sources/{source_id}/attach-builtin/{step_id} — remove a built-in step
 PATCH  /sources/{source_id}/attach-builtin/{step_id} — update config or position
@@ -7,6 +8,7 @@ GET    /sources/{source_id}/pipeline                  — unified pipeline (func
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import duckdb
@@ -23,6 +25,29 @@ from pipeui.workflow.builtins import (
 )
 
 router = APIRouter(prefix="/sources", tags=["builtins"])
+catalog_router = APIRouter(tags=["builtins"])
+
+
+# ---------------------------------------------------------------------------
+# Catalog route — GET /builtins
+# ---------------------------------------------------------------------------
+
+@catalog_router.get("/builtins")
+def list_builtins(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
+    """Return all rows from builtin_registry."""
+    rows = conn.execute(
+        "SELECT builtin_id, builtin_type, display_name, description, config_schema FROM builtin_registry ORDER BY builtin_type"
+    ).fetchall()
+    result = []
+    for builtin_id, builtin_type, display_name, description, config_schema in rows:
+        result.append({
+            "builtin_id": str(builtin_id),
+            "builtin_type": builtin_type,
+            "display_name": display_name,
+            "description": description,
+            "config_schema": json.loads(config_schema) if isinstance(config_schema, str) else config_schema,
+        })
+    return result
 
 
 def _parse_source_id(source_id: str) -> uuid.UUID:

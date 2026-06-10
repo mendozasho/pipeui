@@ -79,14 +79,37 @@ CREATE TABLE IF NOT EXISTS function_set_map (
     position    INTEGER NOT NULL
 );
 
--- Built-in pipeline steps (join, pivot) attached to a source.
--- Each row is either a join or a pivot configuration stored as JSON.
+-- Catalog of built-in pipeline step types (join, pivot, filter).
+-- Seeded once at create_schema time; builtin_type is the stable identifier.
+CREATE TABLE IF NOT EXISTS builtin_registry (
+    builtin_id    UUID PRIMARY KEY,
+    builtin_type  VARCHAR UNIQUE NOT NULL,  -- "join" | "pivot" | "filter"
+    display_name  VARCHAR NOT NULL,
+    description   TEXT,
+    config_schema JSON
+);
+
+-- Built-in pipeline steps (join, pivot, filter) attached to a source.
+-- Each row is a join, pivot, or filter configuration stored as JSON.
 CREATE TABLE IF NOT EXISTS source_builtin_map (
     step_id       UUID PRIMARY KEY,
     source_id     UUID NOT NULL,   -- references source_registry(source_id)
-    builtin_type  VARCHAR NOT NULL, -- "join" or "pivot"
+    builtin_type  VARCHAR NOT NULL, -- "join" | "pivot" | "filter"
     builtin_config JSON    NOT NULL,
     position      INTEGER NOT NULL DEFAULT 0
 );
+"""
+
+SEED_BUILTINS = """
+INSERT OR IGNORE INTO builtin_registry (builtin_id, builtin_type, display_name, description, config_schema) VALUES
+  ('a1b2c3d4-0001-0001-0001-000000000001'::UUID, 'join',   'Join',
+   'Merge two reports on matching column values. Produces a wider table combining columns from both sources.',
+   '{"right_source_id": "string", "join_type": "string", "on": "array", "keep_columns": "string"}'),
+  ('a1b2c3d4-0001-0001-0001-000000000002'::UUID, 'pivot',  'Pivot',
+   'Reshape rows into columns. Groups by index columns, spreads a pivot column''s values into new columns, and aggregates values.',
+   '{"index_columns": "array", "pivot_column": "string", "value_columns": "array"}'),
+  ('a1b2c3d4-0001-0001-0001-000000000003'::UUID, 'filter', 'Filter',
+   'Keep only rows matching a condition (column + operator + value). Supported operators: eq, neq, gt, gte, lt, lte, contains, not_contains, is_null, is_not_null.',
+   '{"column": "string", "operator": "string", "value": "any"}');
 """
 """Creates the base application tables on initialization."""

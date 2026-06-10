@@ -86,14 +86,16 @@ def attach_builtin(
 
     Returns {"ok": True, "step_id": "<uuid>"} or {"ok": False, "detail": "..."}.
     """
-    if builtin_type not in ("join", "pivot"):
-        return {"ok": False, "detail": f"builtin_type must be 'join' or 'pivot'; got {builtin_type!r}"}
+    if builtin_type not in ("join", "pivot", "filter"):
+        return {"ok": False, "detail": f"builtin_type must be 'join', 'pivot', or 'filter'; got {builtin_type!r}"}
 
     # Validate config shape
     if builtin_type == "join":
         err = _validate_join_config(builtin_config)
-    else:
+    elif builtin_type == "pivot":
         err = _validate_pivot_config(builtin_config)
+    else:
+        err = None  # filter config validation deferred
     if err:
         return {"ok": False, "detail": err}
 

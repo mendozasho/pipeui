@@ -6,7 +6,7 @@ from pathlib import Path
 import duckdb
 
 from pipeui.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
-from pipeui.schema.queries import DDL as _DDL
+from pipeui.schema.queries import DDL as _DDL, SEED_BUILTINS as _SEED_BUILTINS
 
 
 ############################
@@ -44,6 +44,7 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """
     conn.execute(_DDL)
     _run_migrations(conn)
+    conn.execute(_SEED_BUILTINS)
 
 
 # Registry schema migrations — additive ALTER TABLE statements for DBs created
