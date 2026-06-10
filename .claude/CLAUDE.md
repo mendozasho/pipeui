@@ -70,6 +70,9 @@ Every unit of work follows this four-step sequence. Do not skip steps.
 3. **design.md is the source of design intent.** Reference it; this file is its
    distilled form. Keep the two consistent.
 4. **One branch per unit of work.** Each piece of work happens on its own branch. When the work is complete, open a pull request with `Closes #<issue-number>` in the body so the issue is auto-closed on merge.
+   - **Never push directly to main** — not for code, not for docs, not for skill updates. Every push requires a branch and a PR tied to a GitHub issue.
+   - **Every change needs a ticket.** If there is no issue for it, don't push it. Doc and skill changes are not exempt.
+   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
 5. **Doc split.** New design decisions go in CLAUDE.md; new implementation details
    go in CLAUDE_REFERENCE.md. Split criterion: *what to build and why* → CLAUDE.md,
    *how it is implemented* → CLAUDE_REFERENCE.md.
