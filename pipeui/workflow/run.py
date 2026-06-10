@@ -320,6 +320,7 @@ def _execute_validation_step(
                 "function_name": fn_name,
                 "set_name": set_name,
                 "set_id": set_id,
+                "function_type": "validation",
                 "status": "failed",
                 "rows_passed": None,
                 "rows_failed": None,
@@ -356,6 +357,7 @@ def _execute_validation_step(
                 "function_name": fn_name,
                 "set_name": set_name,
                 "set_id": set_id,
+                "function_type": "validation",
                 "status": "failed",
                 "rows_passed": None,
                 "rows_failed": None,
@@ -401,6 +403,7 @@ def _execute_validation_step(
             "function_name": fn_name,
             "set_name": set_name,
             "set_id": set_id,
+            "function_type": "validation",
             "status": "ok",
             "rows_passed": passed,
             "rows_failed": failed,
@@ -428,7 +431,7 @@ def run_pipeline(
     Returns None if source_id is not found.
     Returns { run_type, steps: [...] } on completion.
 
-    run_type values: "transforms", "validations", "set"
+    run_type values: "transforms", "validations", "set", "all"
     When run_type="set", set_id must be provided.
     """
     # Verify source exists
@@ -450,6 +453,9 @@ def run_pipeline(
             active_steps = []
         else:
             active_steps = [s for s in steps if s["set_id"] == str(set_id)]
+    elif run_type == "all":
+        # Execute all steps regardless of function_type, preserving position order
+        active_steps = steps
     else:
         active_steps = steps
 
