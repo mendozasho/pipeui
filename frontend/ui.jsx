@@ -19,6 +19,7 @@ const ICONS = {
   plus:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 4v12M4 10h12"/></svg>,
   trash:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 6h12l-1 11H5L4 6zM8 6V4h4v2M2 6h16"/></svg>,
   results:  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="14" height="14" rx="1.5"/><path d="M7 13V10M10 13V7M13 13v-2"/></svg>,
+  group:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="16" height="3" rx="1"/><rect x="4" y="10" width="12" height="2.5" rx="1" opacity=".6"/><rect x="6" y="14.5" width="8" height="2" rx="1" opacity=".35"/></svg>,
 };
 
 function Icon({ name, size = 16, style }) {
@@ -137,8 +138,97 @@ function Spinner({ size = 14, color = "currentColor" }) {
   );
 }
 
+// ── GroupHeader ───────────────────────────────────────────────────────────────
+function GroupHeader({ name, count, rowCount, colSpan, collapsed, onToggle }) {
+  return (
+    <tr style={{ background: "var(--panel-2)" }}>
+      <td colSpan={colSpan} style={{
+        borderTop: "1px solid var(--border)",
+        borderBottom: "1px solid var(--border-soft)",
+        padding: "5px 12px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Left side */}
+          <Icon name="group" size={14} style={{ color: "var(--text-3)", flexShrink: 0 }} />
+          <span style={{
+            fontFamily: "'Geist Mono', monospace", fontSize: 12,
+            color: "var(--text-2)", fontWeight: 500,
+          }}>
+            {name}
+          </span>
+          <span style={{
+            padding: "1px 7px", borderRadius: 99,
+            background: "var(--panel-3)", border: "1px solid var(--border)",
+            color: "var(--text-3)", fontSize: 11, fontWeight: 500,
+          }}>
+            {count} source{count !== 1 ? "s" : ""}
+          </span>
+          {/* Right side */}
+          <span style={{
+            marginLeft: "auto",
+            fontFamily: "'Geist Mono', monospace", fontSize: 11,
+            color: "var(--text-3)",
+          }}>
+            {rowCount.toLocaleString()} rows
+          </span>
+          <button
+            onClick={onToggle}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: "var(--text-3)", display: "inline-flex", alignItems: "center",
+              padding: 2,
+            }}
+          >
+            <Icon name="chevron" size={14} style={{
+              transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
+              transition: "transform .15s",
+            }} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ── DataTable ─────────────────────────────────────────────────────────────────
-function DataTable({ columns, rows, onRowClick, selectedId }) {
+function DataTable({ columns, rows, groups, onRowClick, selectedId }) {
+  const [collapsedKeys, setCollapsedKeys] = useState(new Set());
+
+  function toggleGroup(key) {
+    setCollapsedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function renderRow(row, i) {
+    return (
+      <tr key={row.id ?? i}
+        onClick={() => onRowClick && onRowClick(row)}
+        style={{
+          cursor: onRowClick ? "pointer" : "default",
+          background: selectedId && row.id === selectedId ? "var(--hover)" : "transparent",
+          borderBottom: "1px solid var(--border-soft)",
+          transition: "background .1s",
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+        onMouseLeave={e => e.currentTarget.style.background = (selectedId && row.id === selectedId) ? "var(--hover)" : "transparent"}
+      >
+        {columns.map((c, ci) => (
+          <td key={c.key} style={{
+            padding: "9px 12px",
+            paddingLeft: ci === 0 && row.__grouped ? 34 : 12,
+            color: "var(--text)", verticalAlign: "middle",
+          }}>
+            {c.render ? c.render(row[c.key], row) : row[c.key]}
+          </td>
+        ))}
+      </tr>
+    );
+  }
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -156,26 +246,30 @@ function DataTable({ columns, rows, onRowClick, selectedId }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}
-              onClick={() => onRowClick && onRowClick(row)}
-              style={{
-                cursor: onRowClick ? "pointer" : "default",
-                background: selectedId && row.id === selectedId ? "var(--hover)" : "transparent",
-                borderBottom: "1px solid var(--border-soft)",
-                transition: "background .1s",
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
-              onMouseLeave={e => e.currentTarget.style.background = (selectedId && row.id === selectedId) ? "var(--hover)" : "transparent"}
-            >
-              {columns.map(c => (
-                <td key={c.key} style={{ padding: "9px 12px", color: "var(--text)", verticalAlign: "middle" }}>
-                  {c.render ? c.render(row[c.key], row) : row[c.key]}
-                </td>
-              ))}
-            </tr>
-          ))}
-          {rows.length === 0 && (
+          {/* Flat (ungrouped) rows */}
+          {rows.map((row, i) => renderRow(row, i))}
+
+          {/* Grouped rows */}
+          {groups && groups.map(group => {
+            const collapsed = collapsedKeys.has(group.key);
+            return (
+              <React.Fragment key={group.key}>
+                <GroupHeader
+                  name={group.label}
+                  count={group.rows.length}
+                  rowCount={group.rowCount}
+                  colSpan={columns.length}
+                  collapsed={collapsed}
+                  onToggle={() => toggleGroup(group.key)}
+                />
+                {!collapsed && group.rows.map((row, i) =>
+                  renderRow({ ...row, __grouped: true }, i)
+                )}
+              </React.Fragment>
+            );
+          })}
+
+          {rows.length === 0 && (!groups || groups.length === 0) && (
             <tr>
               <td colSpan={columns.length} style={{ padding: "32px 12px", textAlign: "center", color: "var(--text-4)" }}>
                 No data yet
@@ -244,4 +338,71 @@ function Drawer({ open, onClose, title, children, width = 420 }) {
   );
 }
 
-window.__UI__ = { Icon, Btn, Spinner, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer };
+// ── LoadingState / InlineError stubs (referenced in export) ──────────────────
+function LoadingState({ message = "Loading…" }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-3)", fontSize: 13 }}>
+      <Spinner size={14} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function InlineError({ message }) {
+  if (!message) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--bad)", fontSize: 13 }}>
+      <Icon name="warn" size={14} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+// ── Checkbox ──────────────────────────────────────────────────────────────────
+function Checkbox({ checked, onChange, disabled }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span role="checkbox" aria-checked={checked}
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => !disabled && onChange && onChange(!checked)}
+      onKeyDown={e => { if ((e.key === " " || e.key === "Enter") && !disabled)
+        { e.preventDefault(); onChange && onChange(!checked); } }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ width: 17, height: 17, flexShrink: 0, display: "inline-flex",
+        alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)",
+        background: checked ? "var(--accent)" : "var(--panel-2)",
+        border: "1px solid " + (checked ? "transparent"
+          : hover && !disabled ? "var(--accent-line)" : "var(--border)"),
+        color: "var(--accent-ink)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
+        transition: "background .12s, border-color .12s" }}>
+      {checked && <Icon name="check" size={12} />}
+    </span>
+  );
+}
+
+// ── OrderBadge ────────────────────────────────────────────────────────────────
+function OrderBadge({ n, dragging, ...dragProps }) {
+  const [hover, setHover] = useState(false);
+  const bg = dragging ? "var(--accent-soft)" : hover ? "var(--hover)" : "var(--panel-3)";
+  const border = dragging || hover ? "var(--accent-line)" : "var(--border)";
+  const ink = dragging ? "var(--accent)" : "var(--text-2)";
+  return (
+    <span {...dragProps} title="Drag to reorder"
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ width: 26, height: 26, flexShrink: 0, cursor: "grab",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)", background: bg,
+        border: "1px solid " + border, color: ink,
+        transition: "background .12s, border-color .12s, color .12s" }}>
+      {hover && !dragging
+        ? <Icon name="drag" size={16} style={{ color: "var(--text-3)" }} />
+        : <span className="mono" style={{ fontSize: 12, fontWeight: 600,
+            lineHeight: 1 }}>{n}</span>}
+    </span>
+  );
+}
+
+window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge };

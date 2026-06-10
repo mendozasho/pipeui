@@ -122,6 +122,7 @@ function FunctionRow({ fn }) {
 // ---------------------------------------------------------------------------
 
 function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCancel, saving, saveError }) {
+  const { Checkbox } = window.__UI__;
   const params = dryRunResult.params || [];
 
   // str params can be toggled between "text" (scalar) and "column" (column-backed) mode
@@ -290,21 +291,16 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
                 {sourceColumns.map(col => {
                   const selected = (selections[p.param_id] || []).includes(col.column_id);
                   return (
-                    <label key={col.column_id} style={{
-                      display: "flex", alignItems: "center", gap: 5,
-                      cursor: "pointer", fontSize: 11,
-                      color: selected ? "var(--accent)" : "var(--text)",
-                      fontWeight: selected ? 600 : 400,
-                    }}>
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => handleColumnToggle(p.param_id, col.column_id)}
-                        style={{ cursor: "pointer" }}
-                      />
-                      <span style={{ fontFamily: "'Geist Mono', monospace" }}>{col.column_name}</span>
+                    <div key={col.column_id} onClick={() => handleColumnToggle(p.param_id, col.column_id)}
+                      style={{ display: "flex", alignItems: "center", gap: 8,
+                        cursor: "pointer", fontSize: 11,
+                        color: selected ? "var(--accent)" : "var(--text)",
+                        fontWeight: selected ? 600 : 400 }}>
+                      <Checkbox checked={selected}
+                        onChange={() => handleColumnToggle(p.param_id, col.column_id)} />
+                      <span className="mono">{col.column_name}</span>
                       <span style={{ fontSize: 10, color: "var(--text-4)" }}>{col.column_type}</span>
-                    </label>
+                    </div>
                   );
                 })}
               </div>
@@ -356,7 +352,8 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
 // Step card
 // ---------------------------------------------------------------------------
 
-function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, onNavigateResults }) {
+function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, onNavigateResults }) {
+  const { OrderBadge } = window.__UI__;
   const setType = deriveSetType(step.functions);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   const [removing, setRemoving] = useState(false);
@@ -384,27 +381,17 @@ function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEn
 
   return (
     <div
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       style={{
         background: "var(--panel)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)", padding: "12px 14px",
         display: "flex", flexDirection: "column", gap: 8,
         opacity: isDragging ? 0.4 : 1,
-        cursor: "grab",
         transition: "opacity .15s",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{
-          fontSize: 10, fontWeight: 700,
-          background: "var(--panel-3)", color: "var(--text-3)",
-          borderRadius: 99, padding: "2px 7px", flexShrink: 0,
-        }}>
-          {"#" + step.position}
-        </span>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <OrderBadge n={order} dragging={isDragging} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />
         <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {step.set_name}
         </span>
@@ -528,6 +515,7 @@ function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, onNavig
           key={step.source_function_map_id}
           step={step}
           sourceId={sourceId}
+          order={index + 1}
           onRemoved={onReloadPipeline}
           isDragging={dragIndexRef.current === index}
           onDragStart={() => handleDragStart(index)}
