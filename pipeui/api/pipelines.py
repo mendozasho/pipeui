@@ -233,6 +233,7 @@ def run_pipeline_route(
     ?run_type=transforms  — execute only transform steps (default)
     ?run_type=validations — execute only validation steps
     ?run_type=set&set_id={id} — execute only the specified set
+    ?run_type=all         — execute all steps (validation + transform) in position order
 
     Returns { run_type, steps: [...] } with per-step status.
     404 when source not found.

@@ -608,13 +608,14 @@ function KV({ label, children }) {
   );
 }
 
-function ScreenData({ flash }) {
+function ScreenData({ flash, addResultCard, onNavigate }) {
   const { DataTable, SourceBadge, StatusPill, Icon } = window.__UI__;
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pendingFile, setPendingFile] = useState(null);
   const [registering, setRegistering] = useState(false);
   const [selectedSource, setSelectedSource] = useState(null);
+  const [runningSourceId, setRunningSourceId] = useState(null);
 
   async function loadSources() {
     try {
@@ -658,6 +659,65 @@ function ScreenData({ flash }) {
       flash("Network error during registration.", "error");
     } finally {
       setRegistering(false);
+    }
+  }
+
+  async function handleRunSource(source) {
+    setRunningSourceId(source.source_id);
+    try {
+      const res = await fetch(`/pipelines/${source.source_id}/run?run_type=all`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        flash(err?.detail || "Run failed", "error");
+        return;
+      }
+      const data = await res.json();
+      const steps = data.steps || [];
+      const validationSteps = steps.filter(s => s.function_type === "validation");
+      const transformSteps = steps.filter(s => s.function_type === "transform");
+
+      if (validationSteps.length > 0) {
+        const passed = validationSteps.reduce((sum, s) => sum + (s.rows_passed ?? 0), 0);
+        const failed = validationSteps.reduce((sum, s) => sum + (s.rows_failed ?? 0), 0);
+        const total = passed + failed;
+        addResultCard({
+          run_id: crypto.randomUUID(),
+          card_type: "validation",
+          trigger: "source",
+          source_id: source.source_id,
+          source_name: source.source_name,
+          run_at: new Date().toISOString(),
+          summary: {
+            rows_passed: passed,
+            rows_failed: failed,
+            pass_rate: total > 0 ? passed / total : null,
+          },
+          steps: validationSteps,
+        });
+      }
+
+      if (transformSteps.length > 0) {
+        const lastOk = [...transformSteps].reverse().find(s => s.status === "ok");
+        addResultCard({
+          run_id: crypto.randomUUID(),
+          card_type: "transform",
+          trigger: "source",
+          source_id: source.source_id,
+          source_name: source.source_name,
+          run_at: new Date().toISOString(),
+          summary: {
+            rows_affected: lastOk?.rows_affected ?? 0,
+            columns: [],
+          },
+          steps: transformSteps,
+        });
+      }
+
+      onNavigate("results", { source_id: source.source_id });
+    } catch (err) {
+      flash("Run failed", "error");
+    } finally {
+      setRunningSourceId(null);
     }
   }
 

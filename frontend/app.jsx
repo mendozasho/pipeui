@@ -54,9 +54,9 @@ function App() {
 
   const [screen, setScreen] = useState("data");
   const [flashes, setFlashes] = useState([]);
-  const [validationResults, setValidationResults] = useState({});
-  const [crossSourceResults, setCrossSourceResults] = useState({});
-  // resultsContext carries { source_id? } passed when navigating to Results from Builder
+  // Unified result cards array — most-recent-first
+  const [resultCards, setResultCards] = useState([]);
+  // resultsContext carries { source_id? } passed when navigating to Results from Builder/Data
   const [resultsContext, setResultsContext] = useState(null);
 
   const flash = useCallback((text, kind = "ok") => {
@@ -67,7 +67,12 @@ function App() {
 
   const dismissFlash = useCallback(id => setFlashes(f => f.filter(m => m.id !== id)), []);
 
-  // onNavigate(screen, context?) — context is optional, used by Builder deep-links
+  // addResultCard(card) — prepends to resultCards (most-recent-first)
+  const addResultCard = useCallback((card) => {
+    setResultCards(prev => [card, ...prev]);
+  }, []);
+
+  // onNavigate(screen, context?) — context is optional, used by Builder/Data deep-links
   const handleNavigate = useCallback((targetScreen, context) => {
     if (targetScreen === "results" && context && context.source_id) {
       setResultsContext({ source_id: context.source_id });
@@ -80,16 +85,13 @@ function App() {
       <NavRail active={screen} onChange={setScreen} />
 
       <main style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
-        {screen === "data"     && <ScreenData flash={flash} />}
+        {screen === "data"     && <ScreenData flash={flash} addResultCard={addResultCard} onNavigate={handleNavigate} />}
         {screen === "modules"  && <ScreenModules flash={flash} />}
         {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={handleNavigate} />}
         {screen === "results"  && (
           <ScreenResults
             flash={flash}
-            validationResults={validationResults}
-            setValidationResults={setValidationResults}
-            crossSourceResults={crossSourceResults}
-            setCrossSourceResults={setCrossSourceResults}
+            resultCards={resultCards}
             resultsContext={resultsContext}
           />
         )}
