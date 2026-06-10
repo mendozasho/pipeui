@@ -12,3 +12,4 @@ build/
 *.db
 pipeui.config.json
 .claude/worktrees/
+uv.lock
