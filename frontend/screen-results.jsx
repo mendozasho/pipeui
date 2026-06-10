@@ -4,7 +4,15 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
-const { timeAgo, LoadingState, InlineError, Icon, Btn } = window.__UI__;
+const { LoadingState, InlineError, Icon, Btn } = window.__UI__;
+
+function timeAgo(iso) {
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 // ── Filename helpers ──────────────────────────────────────────────────────────
 function sanitiseFilename(str) {
