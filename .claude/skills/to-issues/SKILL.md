@@ -45,27 +45,22 @@ Some slices cannot be fully spec'd without visual design decisions — modal lay
 
 **What makes a slice design-gated:** it introduces a new multi-step modal, a new interactive primitive (toggle, segmented control, drag behaviour), or a new screen layout — anything where the "correct" spec depends on visual composition that prose alone cannot resolve.
 
-**The issue body IS the Claude Design brief.** The human takes design-gated issues to Claude Design manually (not via an agent). The issue body must be written so Claude Design can produce the interactive HTML spec from it without any additional context. That means the issue body must include:
+**The issue body is the handoff to Claude Design.** The human takes the issue to Claude Design; Claude Design makes all visual and UX decisions (layout, component anatomy, interaction model, transitions). I do not make design decisions — my job is to write the issue with enough domain context that Claude Design can work from it cold.
 
-- **`## Context for the Design agent`** — everything Claude Design needs to know:
-  - Where this UI lives in the app (which screen file, which component, what triggers it)
-  - The domain model — data shapes, field names, semantics — using the canonical names from `CONTEXT.md`
-  - The existing patterns the new UI must match (e.g. existing modal chrome, existing drag payload format, existing component names from `ui.jsx`)
-  - The five context sources Claude Design reads before writing any HTML:
-    1. A prior design brief HTML — for house chrome (from `.claude/design-briefs/`)
-    2. `src/pipeui/frontend/index.html` — for `:root` token names and values
-    3. `src/pipeui/frontend/ui.jsx` — for `ICONS` entries and exported component names
-    4. The target screen file(s) — for existing patterns to extend or refactor
-    5. `CONTEXT.md` — for canonical data shapes
-  - **What to produce** — a numbered list of specific decisions Claude Design must resolve: layout variants, component breakdown, interaction behaviour, transition style
+The issue body must include:
 
-- **Acceptance criteria** — every criterion must be something the implementing agent can verify after the design is attached. Start with `Design assets / spec attached to this issue.`
+- **`## Context for the Design agent`** — everything Claude Design needs:
+  - Which screen file and component this lives in, and what triggers it
+  - The domain model — data shapes, field names, semantics — using canonical names from `CONTEXT.md`
+  - The existing patterns the new UI must fit (modal chrome, drag payload format, component names from `ui.jsx`)
+  - **What to produce** — a numbered list of specific decisions Claude Design must resolve (layout, component breakdown, interaction behaviour, transitions)
+  - **Out of scope** — anything explicitly deferred
 
-- **Out of scope** — explicitly list anything deferred. Claude Design will carry this into the constraints banner of the HTML brief.
+- **Acceptance criteria** — checkboxes an implementing agent can verify. Start with `Design assets / spec attached to this issue.`
 
-**Label and blocker:** publish design-gated issues with the `blocked-on-design` label — NOT `ready-for-agent`. Set `## Blocked by` to reference the design gate explicitly (e.g. `- Claude Design pass (this issue)`).
+**Label and blocker:** publish with the `blocked-on-design` label — NOT `ready-for-agent`. Set `## Blocked by` to `- Claude Design pass (this issue)` plus any implementation prerequisites.
 
-When Claude Design delivers the brief, the human updates the issue body with the full spec (using `/claude-design` to trigger the update), the `blocked-on-design` label is replaced with `ready-for-agent`, and implementation can proceed. Do not start implementation until that label change has happened.
+When the human brings back the Claude Design brief, I extract the spec decisions and update the issue body directly. The label then changes to `ready-for-agent`. Do not start implementation until that happens.
 
 ### 5. Quiz the user
 
