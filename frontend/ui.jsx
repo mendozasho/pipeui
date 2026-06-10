@@ -57,18 +57,33 @@ function Btn({ children, variant = "default", size = "md", icon, onClick, disabl
   );
 }
 
-// ── KindTag (validation / transform) ─────────────────────────────────────────
+// ── KindTag (validation / transform / sql / unknown) ─────────────────────────
 function KindTag({ kind }) {
-  const isCheck = kind === "validation";
+  const isCheck   = kind === "validation";
+  const isSql     = kind === "sql";
+  const isUnknown = kind === "unknown";
+
+  let bg, color, label, title;
+  if (isCheck) {
+    bg = "var(--check-bg)"; color = "var(--check)"; label = kind;
+  } else if (isSql) {
+    bg = "rgba(139,92,246,.15)"; color = "rgb(139,92,246)"; label = "SQL";
+  } else if (isUnknown) {
+    bg = "var(--panel-3)"; color = "var(--text-3)"; label = "Unknown";
+    title = "Type unknown — add `-- type: transform` or `-- type: validation` to this file's header and rescan.";
+  } else {
+    bg = "var(--xform-bg)"; color = "var(--xform)"; label = kind;
+  }
+
   return (
-    <span style={{
+    <span title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "2px 8px", borderRadius: 99,
-      background: isCheck ? "var(--check-bg)" : "var(--xform-bg)",
-      color: isCheck ? "var(--check)" : "var(--xform)",
+      background: bg, color,
       fontSize: 11, fontWeight: 600, letterSpacing: ".03em",
+      cursor: isUnknown ? "help" : undefined,
     }}>
-      {kind}
+      {label}
     </span>
   );
 }
@@ -80,6 +95,8 @@ function StatusPill({ status }) {
     ingested:   { color: "var(--good)",   bg: "rgba(52,211,153,.1)" },
     error:      { color: "var(--bad)",    bg: "rgba(248,113,113,.1)" },
     running:    { color: "var(--run)",    bg: "rgba(96,165,250,.1)" },
+    active:     { color: "var(--good)",   bg: "rgba(52,211,153,.1)" },
+    inactive:   { color: "var(--text-3)", bg: "var(--panel-3)" },
   };
   const s = map[status] || map.registered;
   return (
@@ -106,6 +123,17 @@ function SourceBadge({ name, style }) {
     }}>
       {initials}
     </span>
+  );
+}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+function Spinner({ size = 14, color = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ animation: "spin 1s linear infinite" }}>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeOpacity="0.25" />
+      <path d="M12 3a9 9 0 0 1 9 9" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -216,25 +244,4 @@ function Drawer({ open, onClose, title, children, width = 420 }) {
   );
 }
 
-// ── timeAgo — pure relative-time helper ──────────────────────────────────────
-// Returns a human-readable relative string for an ISO 8601 timestamp.
-// Breakpoints: <1 min → "just now"; <1 hr → "N minutes ago";
-//              <24 hr → "N hours ago"; <7 days → "N days ago";
-//              otherwise → short date e.g. "Jun 8".
-function timeAgo(isoString) {
-  if (!isoString) return "";
-  const then = new Date(isoString);
-  if (isNaN(then.getTime())) return isoString;
-  const diffMs = Date.now() - then.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} minute${diffMin !== 1 ? "s" : ""} ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} hour${diffHr !== 1 ? "s" : ""} ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay} day${diffDay !== 1 ? "s" : ""} ago`;
-  return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, timeAgo };
+window.__UI__ = { Icon, Btn, Spinner, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer };

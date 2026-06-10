@@ -47,6 +47,46 @@ from pipeui.workflow.worker import call_function
 
 
 # ---------------------------------------------------------------------------
+# SQL function execution
+# ---------------------------------------------------------------------------
+
+def _execute_sql_function(
+    conn: duckdb.DuckDBPyConnection,
+    module_path: str,
+    source_id: uuid.UUID,
+) -> "pd.DataFrame | FailedFunctionEntry":
+    """Execute a SQL function by substituting {source_table} and running on DuckDB.
+
+    Returns a DataFrame on success or a FailedFunctionEntry on error.
+    """
+    try:
+        sql_source = Path(module_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        entry = FailedFunctionEntry()
+        entry.add("sql_read", f"cannot read SQL file: {exc}")
+        return entry
+
+    # Strip leading comment header lines to get the actual SQL body
+    body_lines = [ln for ln in sql_source.splitlines() if not ln.strip().startswith("--")]
+    sql_body = "\n".join(body_lines).strip()
+
+    if not sql_body:
+        entry = FailedFunctionEntry()
+        entry.add("sql_empty", "SQL file contains no query after header comments")
+        return entry
+
+    tname = instance_table_name(source_id)
+    sql = sql_body.replace("{source_table}", f'"{tname}"')
+
+    try:
+        return conn.execute(sql).df()
+    except Exception as exc:
+        entry = FailedFunctionEntry()
+        entry.add("sql_exec", str(exc))
+        return entry
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -229,11 +269,14 @@ def _apply_output_mode(
 def _execute_transform_step(
     working: pd.DataFrame,
     step: dict,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    source_id: uuid.UUID | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Execute all functions in a transform step against the working table.
 
     Returns (new_working_table, error_message_or_None).
     On error the original working table is returned unchanged.
+    conn and source_id are required for SQL function execution.
     """
     current = working
     for fn in step["functions"]:
@@ -244,6 +287,17 @@ def _execute_transform_step(
         fn_name = fn["function_name"]
         fn_class = fn["function_class"]
         output_mode = step["output_mode"]
+
+        # SQL functions: execute directly on DuckDB connection
+        if module_path and module_path.endswith(".sql"):
+            if conn is None or source_id is None:
+                return working, "SQL function execution requires conn and source_id"
+            result = _execute_sql_function(conn, module_path, source_id)
+            if isinstance(result, FailedFunctionEntry):
+                errors = "; ".join(reason for _, reason in result.failures) if result.failures else "SQL execution failed"
+                return working, errors
+            current = result
+            continue
 
         try:
             fn_source = Path(module_path).read_text(encoding="utf-8")
@@ -292,12 +346,15 @@ def _execute_transform_step(
 def _execute_validation_step(
     original: pd.DataFrame,
     step: dict,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    source_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """Execute all validation functions in a step against the original table.
 
     Returns a list of per-function result dicts, each with:
       function_id, function_name, set_name, set_id, status,
       rows_passed, rows_failed, pass_rate, failing_rows, error
+    conn and source_id are required for SQL function execution.
     """
     results = []
     set_name = step["set_name"]
@@ -312,43 +369,62 @@ def _execute_validation_step(
         fn_class = fn["function_class"]
         module_path = fn["module_path"]
 
-        try:
-            fn_source = Path(module_path).read_text(encoding="utf-8")
-        except OSError as exc:
-            results.append({
-                "function_id": fn_id,
-                "function_name": fn_name,
-                "set_name": set_name,
-                "set_id": set_id,
-                "function_type": "validation",
-                "status": "failed",
-                "rows_passed": None,
-                "rows_failed": None,
-                "pass_rate": None,
-                "failing_rows": [],
-                "error": f"cannot read module: {exc}",
-            })
-            continue
-
-        params = fn["params"]
-        if fn_class == "pd.dataframe":
-            kwarg_name = "df"
-            for p in params:
-                if p["param_type"] == "pd.DataFrame":
-                    kwarg_name = p["param_name"]
-                    break
-            arg = original
+        # SQL functions: execute directly on DuckDB connection
+        if module_path and module_path.endswith(".sql"):
+            if conn is None or source_id is None:
+                results.append({
+                    "function_id": fn_id,
+                    "function_name": fn_name,
+                    "set_name": set_name,
+                    "set_id": set_id,
+                    "function_type": "validation",
+                    "status": "failed",
+                    "rows_passed": None,
+                    "rows_failed": None,
+                    "pass_rate": None,
+                    "failing_rows": [],
+                    "error": "SQL function execution requires conn and source_id",
+                })
+                continue
+            result = _execute_sql_function(conn, module_path, source_id)
         else:
-            bound_col = None
-            kwarg_name = params[0]["param_name"] if params else "data"
-            for p in params:
-                if p["param_type"] in ("pd.Series", "str") and p["bindings"]:
-                    bound_col = p["bindings"][0]
-                    kwarg_name = p["param_name"]
-                    break
-            arg = original[bound_col] if (bound_col and bound_col in original.columns) else original
+            try:
+                fn_source = Path(module_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                results.append({
+                    "function_id": fn_id,
+                    "function_name": fn_name,
+                    "set_name": set_name,
+                    "set_id": set_id,
+                    "function_type": "validation",
+                    "status": "failed",
+                    "rows_passed": None,
+                    "rows_failed": None,
+                    "pass_rate": None,
+                    "failing_rows": [],
+                    "error": f"cannot read module: {exc}",
+                })
+                continue
 
-        result = call_function(fn_source, fn_name, kwarg_name, arg)
+            params = fn["params"]
+            if fn_class == "pd.dataframe":
+                kwarg_name = "df"
+                for p in params:
+                    if p["param_type"] == "pd.DataFrame":
+                        kwarg_name = p["param_name"]
+                        break
+                arg = original
+            else:
+                bound_col = None
+                kwarg_name = params[0]["param_name"] if params else "data"
+                for p in params:
+                    if p["param_type"] in ("pd.Series", "str") and p["bindings"]:
+                        bound_col = p["bindings"][0]
+                        kwarg_name = p["param_name"]
+                        break
+                arg = original[bound_col] if (bound_col and bound_col in original.columns) else original
+
+            result = call_function(fn_source, fn_name, kwarg_name, arg)
 
         if isinstance(result, FailedFunctionEntry):
             error_msg = "; ".join(reason for _, reason in result.failures) if result.failures else "worker failed"
@@ -529,7 +605,7 @@ def run_pipeline(
         fn_type = step["function_type"]
 
         if fn_type == "transform":
-            new_working, error = _execute_transform_step(working_df, step)
+            new_working, error = _execute_transform_step(working_df, step, conn=conn, source_id=source_id)
             if error:
                 step_results.append({
                     "source_function_map_id": sfm_id,
@@ -556,7 +632,7 @@ def run_pipeline(
                 })
 
         elif fn_type == "validation":
-            fn_results = _execute_validation_step(original_df, step)
+            fn_results = _execute_validation_step(original_df, step, conn=conn, source_id=source_id)
             step_results.extend(fn_results)
 
     return {

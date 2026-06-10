@@ -1,6 +1,13 @@
 // Functions screen — Phase D: wired to real API data, with function detail drawer
 const { useState, useEffect } = React;
 
+function fnKind(fn) {
+  if (fn && fn.module_path && fn.module_path.endsWith(".sql")) {
+    return fn.function_type === "unknown" ? "unknown" : "sql";
+  }
+  return fn ? fn.function_type : "transform";
+}
+
 // ---------------------------------------------------------------------------
 // FunctionDrawer — detail drawer following the same pattern as SourceDrawer
 // ---------------------------------------------------------------------------
@@ -30,7 +37,7 @@ function FnKV({ label, children }) {
 }
 
 function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
-  const { Drawer, KindTag } = window.__UI__;
+  const { Drawer, KindTag, Btn, Spinner, StatusPill, SourceBadge, Icon } = window.__UI__;
   const [detail, setDetail] = useState(null);
 
   useEffect(() => {
@@ -53,33 +60,40 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
       {fn && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
-          {/* Header: kind badge + active status + run */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <KindTag kind={fn.function_type} />
-            <span style={{
-              fontSize: 11, fontWeight: 600, padding: "2px 8px",
-              borderRadius: 99,
-              background: fn.is_active ? "var(--good-soft, rgba(0,200,100,.12))" : "var(--panel-3)",
-              color: fn.is_active ? "var(--good, #00c864)" : "var(--text-3)",
-              border: `1px solid ${fn.is_active ? "var(--good, #00c864)" : "var(--border)"}`,
-            }}>
-              {fn.is_active ? "active" : "inactive"}
-            </span>
-            {fn.is_active && (
-              <button
-                onClick={() => onRun && onRun(fn)}
-                disabled={!!running}
-                style={{
-                  marginLeft: "auto", padding: "5px 16px", fontSize: 12, fontWeight: 600,
-                  background: running ? "var(--panel-3)" : "var(--run, var(--accent))",
-                  color: running ? "var(--text-3)" : "var(--accent-ink, #fff)",
-                  border: "none", borderRadius: "var(--radius)",
-                  cursor: running ? "default" : "pointer",
-                }}
-              >
-                {running ? "Running…" : "Run"}
-              </button>
-            )}
+          {/* Identity block */}
+          <div style={{
+            background: "var(--panel-2)", border: "1px solid var(--border)",
+            borderRadius: "var(--radius)", padding: "14px 16px",
+            display: "flex", flexDirection: "column", gap: 12,
+          }}>
+            {/* Top row: KindTag + StatusPill left, function_class right */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <KindTag kind={fnKind(fn)} />
+              <StatusPill status={fn.is_active ? "active" : "inactive"} />
+              <span style={{
+                marginLeft: "auto", fontSize: 11, color: "var(--text-4)",
+                fontFamily: "'Geist Mono', monospace",
+              }}>
+                {fn.function_class}
+              </span>
+            </div>
+            {/* Divider */}
+            <div style={{ height: 1, background: "var(--border-soft)" }} />
+            {/* Run action */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Btn variant="primary" size="md" onClick={() => onRun && onRun(fn)}
+                   disabled={!fn.is_active || !!running}
+                   style={{ alignSelf: "flex-start" }}>
+                {running
+                  ? <><Spinner size={13} color="var(--accent-ink)" /> Running…</>
+                  : "Run"}
+              </Btn>
+              {!fn.is_active && (
+                <span style={{ fontSize: 11.5, color: "var(--text-3)" }}>
+                  Inactive — source file missing on disk. Rescan to restore.
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Signature */}
@@ -134,18 +148,18 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
 
           {/* Metadata */}
           <FnSection title="Details">
-            <FnKV label="Return type">{fn.function_return_type}</FnKV>
-            <FnKV label="Function type">{fn.function_type}</FnKV>
-            <FnKV label="Function class">{fn.function_class}</FnKV>
+            <FnKV label="Return type"><span className="mono">{fn.function_return_type}</span></FnKV>
+            <FnKV label="Function type"><span className="mono">{fn.function_type}</span></FnKV>
+            <FnKV label="Function class"><span className="mono">{fn.function_class}</span></FnKV>
             <FnKV label="Source file">
-              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, wordBreak: "break-all" }}>
+              <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
                 {fn.module_path}
               </span>
             </FnKV>
           </FnSection>
 
           {/* Attached sources */}
-          <FnSection title="Attached to">
+          <FnSection title={`Attached to (${fn.attached_sources?.length ?? 0})`}>
             {(!fn.attached_sources || fn.attached_sources.length === 0) ? (
               <div style={{ color: "var(--text-3)", fontSize: 12, padding: "4px 0" }}>
                 Not attached to any sources yet.
@@ -153,10 +167,12 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
             ) : (
               fn.attached_sources.map(s => (
                 <div key={s.source_id} style={{
-                  padding: "6px 0", borderBottom: "1px solid var(--border-soft)",
-                  fontSize: 13, color: "var(--text)",
+                  display: "flex", alignItems: "center", gap: 11,
+                  padding: "8px 0", borderBottom: "1px solid var(--border-soft)",
                 }}>
-                  {s.source_name}
+                  <SourceBadge name={s.source_name} style={{ width: 24, height: 24, fontSize: 10 }} />
+                  <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{s.source_name}</span>
+                  <Icon name="file" size={13} style={{ color: "var(--text-4)", marginLeft: "auto" }} />
                 </div>
               ))
             )}
@@ -173,7 +189,7 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
 // ---------------------------------------------------------------------------
 
 function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
-  const { Icon, Btn, KindTag } = window.__UI__;
+  const { Icon, Btn, Spinner, KindTag } = window.__UI__;
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -418,7 +434,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                       background: already ? "var(--panel-2)" : undefined,
                     }}
                   >
-                    <KindTag kind={fn.function_type} />
+                    <KindTag kind={fnKind(fn)} />
                     <span style={{ fontSize: 13, flex: 1 }}>{fn.function_name}</span>
                     {already && <span style={{ fontSize: 11, color: "var(--text-3)" }}>added</span>}
                   </div>
@@ -451,7 +467,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                   <span style={{ fontSize: 11, color: "var(--text-3)", minWidth: 20, textAlign: "right" }}>
                     {i + 1}
                   </span>
-                  <KindTag kind={m.function_type} />
+                  <KindTag kind={fnKind(m)} />
                   <span style={{ fontSize: 13, flex: 1 }}>{m.function_name}</span>
                   <div style={{ display: "flex", gap: 2 }}>
                     <button
@@ -542,18 +558,11 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                 <div style={{ fontSize: 12, color: "var(--text-4)" }}>
                   {s.member_count} function{s.member_count !== 1 ? "s" : ""}
                 </div>
-                <button
-                  onClick={e => handleRunSet(e, s)}
-                  disabled={!!runningSets[s.set_id]}
-                  style={{
-                    padding: "3px 10px", fontSize: 11, fontWeight: 600,
-                    background: runningSets[s.set_id] ? "var(--panel-3)" : "var(--run, var(--accent))",
-                    color: runningSets[s.set_id] ? "var(--text-3)" : "var(--accent-ink, #fff)",
-                    border: "none", borderRadius: "var(--radius)", cursor: runningSets[s.set_id] ? "default" : "pointer",
-                  }}
-                >
-                  {runningSets[s.set_id] ? "Running…" : "Run"}
-                </button>
+                <Btn variant="primary" size="sm" onClick={e => handleRunSet(e, s)} disabled={!!runningSets[s.set_id]}>
+                  {runningSets[s.set_id]
+                    ? <><Spinner size={12} color="var(--accent-ink)" /> Running…</>
+                    : "Run"}
+                </Btn>
               </div>
             </div>
           ))}
@@ -817,7 +826,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
                 opacity: fn.is_active ? 1 : 0.5,
                 cursor: "pointer",
               }}>
-                <KindTag kind={fn.function_type} />
+                <KindTag kind={fnKind(fn)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 500, marginBottom: 2, display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ color: fn.is_active ? undefined : "var(--text-3)" }}>{fn.function_name}</span>

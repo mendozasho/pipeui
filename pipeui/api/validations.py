@@ -14,7 +14,7 @@ import uuid
 import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from pipeui.helpers import get_conn
+from pipeui.duckdb import get_conn
 from pipeui.workflow.run import run_validation_across_sources
 
 router = APIRouter(prefix="/validations", tags=["validations"])
