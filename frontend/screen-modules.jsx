@@ -1,6 +1,13 @@
 // Functions screen — Phase D: wired to real API data, with function detail drawer
 const { useState, useEffect } = React;
 
+function fnKind(fn) {
+  if (fn && fn.module_path && fn.module_path.endsWith(".sql")) {
+    return fn.function_type === "unknown" ? "unknown" : "sql";
+  }
+  return fn ? fn.function_type : "transform";
+}
+
 // ---------------------------------------------------------------------------
 // FunctionDrawer — detail drawer following the same pattern as SourceDrawer
 // ---------------------------------------------------------------------------
@@ -61,7 +68,7 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
           }}>
             {/* Top row: KindTag + StatusPill left, function_class right */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <KindTag kind={fn.function_type} />
+              <KindTag kind={fnKind(fn)} />
               <StatusPill status={fn.is_active ? "active" : "inactive"} />
               <span style={{
                 marginLeft: "auto", fontSize: 11, color: "var(--text-4)",
@@ -427,7 +434,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                       background: already ? "var(--panel-2)" : undefined,
                     }}
                   >
-                    <KindTag kind={fn.function_type} />
+                    <KindTag kind={fnKind(fn)} />
                     <span style={{ fontSize: 13, flex: 1 }}>{fn.function_name}</span>
                     {already && <span style={{ fontSize: 11, color: "var(--text-3)" }}>added</span>}
                   </div>
@@ -460,7 +467,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
                   <span style={{ fontSize: 11, color: "var(--text-3)", minWidth: 20, textAlign: "right" }}>
                     {i + 1}
                   </span>
-                  <KindTag kind={m.function_type} />
+                  <KindTag kind={fnKind(m)} />
                   <span style={{ fontSize: 13, flex: 1 }}>{m.function_name}</span>
                   <div style={{ display: "flex", gap: 2 }}>
                     <button
@@ -819,7 +826,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
                 opacity: fn.is_active ? 1 : 0.5,
                 cursor: "pointer",
               }}>
-                <KindTag kind={fn.function_type} />
+                <KindTag kind={fnKind(fn)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 500, marginBottom: 2, display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ color: fn.is_active ? undefined : "var(--text-3)" }}>{fn.function_name}</span>

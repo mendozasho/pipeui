@@ -57,18 +57,33 @@ function Btn({ children, variant = "default", size = "md", icon, onClick, disabl
   );
 }
 
-// ── KindTag (validation / transform) ─────────────────────────────────────────
+// ── KindTag (validation / transform / sql / unknown) ─────────────────────────
 function KindTag({ kind }) {
-  const isCheck = kind === "validation";
+  const isCheck   = kind === "validation";
+  const isSql     = kind === "sql";
+  const isUnknown = kind === "unknown";
+
+  let bg, color, label, title;
+  if (isCheck) {
+    bg = "var(--check-bg)"; color = "var(--check)"; label = kind;
+  } else if (isSql) {
+    bg = "rgba(139,92,246,.15)"; color = "rgb(139,92,246)"; label = "SQL";
+  } else if (isUnknown) {
+    bg = "var(--panel-3)"; color = "var(--text-3)"; label = "Unknown";
+    title = "Type unknown — add `-- type: transform` or `-- type: validation` to this file's header and rescan.";
+  } else {
+    bg = "var(--xform-bg)"; color = "var(--xform)"; label = kind;
+  }
+
   return (
-    <span style={{
+    <span title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "2px 8px", borderRadius: 99,
-      background: isCheck ? "var(--check-bg)" : "var(--xform-bg)",
-      color: isCheck ? "var(--check)" : "var(--xform)",
+      background: bg, color,
       fontSize: 11, fontWeight: 600, letterSpacing: ".03em",
+      cursor: isUnknown ? "help" : undefined,
     }}>
-      {kind}
+      {label}
     </span>
   );
 }

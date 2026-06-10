@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -111,7 +112,7 @@ def derive_function_type(function_return_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-file function discovery
+# Per-file function discovery (.py)
 # ---------------------------------------------------------------------------
 
 def _load_module(file_path: Path):
@@ -212,16 +213,107 @@ def discover_functions_in_file(file_path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Per-file function discovery (.sql)
+# ---------------------------------------------------------------------------
+
+_SQL_COMMENT_RE = re.compile(r"^--\s*(\w+)\s*:\s*(.+)$")
+
+# Return-type suffix per function_type for SQL functions
+_SQL_RETURN_SUFFIX: dict[str, str] = {
+    "transform": "pd.DataFrame",
+    "validation": "pd.Series[bool]",
+    "unknown": "unknown",
+}
+
+
+def _parse_sql_header(source: str) -> dict | str:
+    """Parse the leading comment block of a .sql file.
+
+    Returns a dict with classification data or a str skip reason.
+    """
+    meta: dict[str, str] = {}
+    for line in source.splitlines():
+        line = line.strip()
+        if not line:
+            continue  # skip blank lines (e.g. leading blank line after dedent)
+        if not line.startswith("--"):
+            break
+        m = _SQL_COMMENT_RE.match(line)
+        if m:
+            meta[m.group(1).lower()] = m.group(2).strip()
+
+    if "name" not in meta:
+        return "missing required `-- name:` header"
+
+    fn_name = meta["name"]
+    fn_doc = meta.get("description") or None
+    raw_type = meta.get("type", "").lower()
+
+    if raw_type == "transform":
+        fn_type = "transform"
+    elif raw_type == "validation":
+        fn_type = "validation"
+    else:
+        fn_type = "unknown"
+
+    fn_class = "pd.dataframe"
+    fn_return_type = _SQL_RETURN_SUFFIX[fn_type]
+    fn_sig = f"{{source_table}}: pd.DataFrame -> {fn_return_type}"
+
+    return {
+        "function_name": fn_name,
+        "function_doc": fn_doc,
+        "function_type": fn_type,
+        "function_class": fn_class,
+        "function_return_type": fn_return_type,
+        "function_signature": fn_sig,
+        "param_names": [],
+        "param_types": [],
+    }
+
+
+def discover_sql_functions_in_file(file_path: Path) -> list[dict]:
+    """Return a list of SQL function discovery dicts for a .sql file.
+
+    Each item is either:
+      {"function_name": str, "data": dict}    — eligible
+      {"function_name": str, "skip_reason": str}  — ineligible
+    """
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return [{"function_name": "<file>", "skip_reason": f"read error: {exc}"}]
+
+    result = _parse_sql_header(source)
+    if isinstance(result, str):
+        return [{"function_name": file_path.stem, "skip_reason": result}]
+
+    fn_name = result.pop("function_name")
+    return [{"function_name": fn_name, "data": result}]
+
+
+# ---------------------------------------------------------------------------
 # Registration (workflow layer — owns the DB connection and transactions)
 # ---------------------------------------------------------------------------
 
-def _register_one_function(
+def register_function_entry(
     conn: duckdb.DuckDBPyConnection,
     file_path: Path,
     fn_name: str,
     data: dict,
 ) -> str:
-    """Register a single function in one transaction.  Returns 'added' or 're-registered'.
+    """Register a single function entry in one transaction.  Returns 'added' or 're-registered'.
+
+    Shared helper used by both .py and .sql scanners.
+
+    ``data`` must contain:
+      - function_class (str)
+      - function_return_type (str | None)
+      - function_doc (str | None)
+      - function_signature (str)
+      - function_type (str)
+      - param_names (list[str])
+      - param_types (list[str])
 
     Implements §10 registration transaction + Principle 2 collapse logic.
     Raises on unexpected error (caller catches and logs skip).
@@ -230,7 +322,7 @@ def _register_one_function(
     fn_return_type = data["function_return_type"]
 
     # §2 content_hash_id: uuid5(table_namespace("function_registry"), name|class|return_type)
-    chid = content_hash_id("function_registry", fn_name, fn_class, fn_return_type)
+    chid = content_hash_id("function_registry", fn_name, fn_class, str(fn_return_type))
 
     # Principle 2: check for existing row with same content_hash_id
     existing = conn.execute(
@@ -316,6 +408,10 @@ def _register_one_function(
         raise
 
 
+# Keep the old name as an alias so existing internal callers remain unaffected.
+_register_one_function = register_function_entry
+
+
 # ---------------------------------------------------------------------------
 # Scan entry point
 # ---------------------------------------------------------------------------
@@ -325,6 +421,8 @@ def scan_functions(
     functions_paths: list[str],
 ) -> list[dict]:
     """Scan all directories in functions_paths and register eligible functions.
+
+    Discovers both .py and .sql files.
 
     Returns a session-only scan log: list of
       {"file": str, "function_name": str, "status": str}
@@ -341,33 +439,45 @@ def scan_functions(
             log.append({
                 "file": dir_str,
                 "function_name": "<directory>",
-                "status": f"skipped: path not found or not a directory",
+                "status": "skipped: path not found or not a directory",
             })
             continue
 
-        for py_file in sorted(dir_path.glob("*.py")):
-            seen_files.add(str(py_file))
-            discovered = discover_functions_in_file(py_file)
+        # Collect both .py and .sql files, sorted together for determinism
+        candidate_files: list[tuple[Path, str]] = []
+        for py_file in dir_path.glob("*.py"):
+            candidate_files.append((py_file, "py"))
+        for sql_file in dir_path.glob("*.sql"):
+            candidate_files.append((sql_file, "sql"))
+        candidate_files.sort(key=lambda x: x[0].name)
+
+        for src_file, kind in candidate_files:
+            seen_files.add(str(src_file))
+            if kind == "py":
+                discovered = discover_functions_in_file(src_file)
+            else:
+                discovered = discover_sql_functions_in_file(src_file)
+
             for item in discovered:
                 fn_name = item["function_name"]
                 if "skip_reason" in item:
                     log.append({
-                        "file": str(py_file),
+                        "file": str(src_file),
                         "function_name": fn_name,
                         "status": f"skipped: {item['skip_reason']}",
                     })
                     continue
 
                 try:
-                    status = _register_one_function(conn, py_file, fn_name, item["data"])
+                    status = register_function_entry(conn, src_file, fn_name, item["data"])
                     log.append({
-                        "file": str(py_file),
+                        "file": str(src_file),
                         "function_name": fn_name,
                         "status": status,
                     })
                 except Exception as exc:
                     log.append({
-                        "file": str(py_file),
+                        "file": str(src_file),
                         "function_name": fn_name,
                         "status": f"skipped: registration error: {exc}",
                     })
