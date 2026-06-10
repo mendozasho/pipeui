@@ -356,7 +356,7 @@ function PendingStepCard({ dryRunResult, stepName, sourceColumns, onSave, onCanc
 // Step card
 // ---------------------------------------------------------------------------
 
-function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, runningSetId, onRunSet, onNavigateResults }) {
+function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, onNavigateResults }) {
   const setType = deriveSetType(step.functions);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   const [removing, setRemoving] = useState(false);
@@ -429,23 +429,6 @@ function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEn
           </button>
         )}
         <button
-          onClick={e => { e.stopPropagation(); if (onRunSet) onRunSet(step.source_function_map_id); }}
-          disabled={runningSetId === step.source_function_map_id}
-          title="Run this set"
-          style={{
-            background: "none", border: "none",
-            cursor: runningSetId === step.source_function_map_id ? "default" : "pointer",
-            color: runningSetId === step.source_function_map_id ? "var(--accent)" : "var(--text-4)",
-            fontSize: 13, lineHeight: 1, padding: "2px 4px",
-            borderRadius: "var(--radius)", flexShrink: 0,
-            opacity: runningSetId === step.source_function_map_id ? 0.6 : 1,
-          }}
-          onMouseEnter={e => { if (runningSetId !== step.source_function_map_id) e.currentTarget.style.color = "var(--accent)"; }}
-          onMouseLeave={e => { if (runningSetId !== step.source_function_map_id) e.currentTarget.style.color = "var(--text-4)"; }}
-        >
-          {runningSetId === step.source_function_map_id ? "..." : "▶"}
-        </button>
-        <button
           onClick={handleRemove}
           disabled={removing}
           title="Remove step"
@@ -490,7 +473,7 @@ function StepCard({ step, sourceId, onRemoved, isDragging, onDragStart, onDragEn
 // Pipeline canvas — drag-to-reorder
 // ---------------------------------------------------------------------------
 
-function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, runningSetId, onRunSet, onNavigateResults }) {
+function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, onNavigateResults }) {
   const [localSteps, setLocalSteps] = useState(steps);
   const dragIndexRef = useRef(null);
 
@@ -551,8 +534,6 @@ function PipelineCanvas({ sourceId, steps, onReloadPipeline, resultTags, running
           onDragEnd={handleDragEnd}
           onDragOver={e => handleDragOver(e, index)}
           resultTag={resultTags && resultTags[step.source_function_map_id]}
-          runningSetId={runningSetId}
-          onRunSet={onRunSet}
           onNavigateResults={onNavigateResults}
         />
       ))}
@@ -742,8 +723,6 @@ function SidePanel({ source, onClose, onNavigate }) {
   const [error, setError] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [resultTags, setResultTags] = useState({});
-  const [runningType, setRunningType] = useState(null); // null | "validations" | "transforms"
-  const [runningSetId, setRunningSetId] = useState(null);
   // Pending step card state
   const [pendingStep, setPendingStep] = useState(null); // null | { dryRunResult, attachBody }
   const [pendingDryRunning, setPendingDryRunning] = useState(false);
@@ -763,49 +742,8 @@ function SidePanel({ source, onClose, onNavigate }) {
   useEffect(() => {
     setPipeline(null);
     setResultTags({});
-    setRunningType(null);
-    setRunningSetId(null);
     loadPipeline();
   }, [source && source.source_id]);
-
-  function applyRunResults(steps, data) {
-    const tags = {};
-    if (data && Array.isArray(data.steps)) {
-      data.steps.forEach(stepResult => {
-        // match by set_id from the pipeline steps
-        const matchingStep = steps.find(s => s.source_function_map_id === stepResult.source_function_map_id
-          || s.set_name === stepResult.set_name);
-        if (matchingStep) {
-          tags[matchingStep.source_function_map_id] = deriveResultTag(stepResult);
-        }
-      });
-    }
-    setResultTags(prev => ({ ...prev, ...tags }));
-  }
-
-  function handleRunType(runType) {
-    if (!pipeline || !pipeline.steps) return;
-    setRunningType(runType);
-    fetch("/pipelines/" + source.source_id + "/run?run_type=" + runType, { method: "POST" })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        applyRunResults(pipeline.steps, data);
-        setRunningType(null);
-      })
-      .catch(() => setRunningType(null));
-  }
-
-  function handleRunSet(setId) {
-    if (!pipeline || !pipeline.steps) return;
-    setRunningSetId(setId);
-    fetch("/pipelines/" + source.source_id + "/run?run_type=set&set_id=" + setId, { method: "POST" })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        applyRunResults(pipeline.steps, data);
-        setRunningSetId(null);
-      })
-      .catch(() => setRunningSetId(null));
-  }
 
   function handleDragOver(e) {
     if (e.dataTransfer.types.some(t => t.startsWith("palette/"))) {
@@ -888,13 +826,7 @@ function SidePanel({ source, onClose, onNavigate }) {
     setPendingDryRunning(false);
   }
 
-  const hasSteps = pipeline && pipeline.steps && pipeline.steps.length > 0;
   const sourceColumns = (pipeline && pipeline.source && pipeline.source.columns) || [];
-  const btnBase = {
-    flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
-    borderRadius: "var(--radius)", border: "1px solid var(--border)",
-    cursor: "pointer", transition: "opacity .15s",
-  };
 
   return (
     <div style={{
@@ -924,37 +856,6 @@ function SidePanel({ source, onClose, onNavigate }) {
         </button>
       </div>
 
-      {/* Run controls */}
-      <div style={{
-        padding: "10px 14px", borderBottom: "1px solid var(--border)",
-        display: "flex", gap: 8, flexShrink: 0,
-      }}>
-        <button
-          onClick={() => handleRunType("validations")}
-          disabled={!hasSteps || runningType !== null}
-          style={{
-            ...btnBase,
-            background: runningType === "validations" ? "var(--accent-soft)" : "var(--panel-2)",
-            color: runningType === "validations" ? "var(--accent)" : "var(--text)",
-            opacity: (!hasSteps || runningType !== null) ? 0.5 : 1,
-          }}
-        >
-          {runningType === "validations" ? "Running..." : "Run Validations"}
-        </button>
-        <button
-          onClick={() => handleRunType("transforms")}
-          disabled={!hasSteps || runningType !== null}
-          style={{
-            ...btnBase,
-            background: runningType === "transforms" ? "var(--accent-soft)" : "var(--panel-2)",
-            color: runningType === "transforms" ? "var(--accent)" : "var(--text)",
-            opacity: (!hasSteps || runningType !== null) ? 0.5 : 1,
-          }}
-        >
-          {runningType === "transforms" ? "Running..." : "Run Transforms"}
-        </button>
-      </div>
-
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -981,9 +882,7 @@ function SidePanel({ source, onClose, onNavigate }) {
             steps={pipeline.steps}
             onReloadPipeline={loadPipeline}
             resultTags={resultTags}
-            runningSetId={runningSetId}
-            onRunSet={handleRunSet}
-            onNavigateResults={() => onNavigate && onNavigate("results", { source_id: source.source_id })}
+            onNavigateResults={() => onNavigate && onNavigate("results", {})}
           />
         )}
         {!loading && !error && pipeline && pipeline.steps.length === 0 && !pendingStep && (
