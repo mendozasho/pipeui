@@ -253,7 +253,7 @@ function MigrationConfirmModal({ uncastable, sharedSources, onConfirm, onCancel 
   );
 }
 
-function ColumnTypeRow({ col, sourceId, onMigrated }) {
+function ColumnTypeRow({ col, sourceId, onMigrated, onError }) {
   const [selected, setSelected] = React.useState(col.column_type);
   const [pendingMigration, setPendingMigration] = React.useState(null); // { newType, prev, uncastable, sharedSources }
 
@@ -303,6 +303,7 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
     } catch (err) {
       console.error("Column type migration error:", err);
       setSelected(prev);
+      onError && onError("Column type migration failed.");
     }
   }
 
@@ -325,6 +326,7 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
     } catch (err) {
       console.error("Column type migration commit error:", err);
       setSelected(prev);
+      onError && onError("Column type migration failed.");
     }
   }
 
@@ -369,13 +371,15 @@ function ColumnTypeRow({ col, sourceId, onMigrated }) {
 }
 
 function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
-  const { Drawer, StatusPill, Btn, Icon } = window.__UI__;
+  const { Drawer, StatusPill, Btn, Icon, Spinner, InlineError, LoadingState } = window.__UI__;
   const [detail, setDetail] = useState(null);
   const [showIngest, setShowIngest] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [skipReport, setSkipReport] = useState(null);
   const [previewData, setPreviewData] = useState(null); // { columns, rows } | null
   const [nullifiedRows, setNullifiedRows] = useState([]); // [{pk, column}] after migration
+  const [migrationError, setMigrationError] = useState(null);
+  const [columnsExpanded, setColumnsExpanded] = useState(false);
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -403,6 +407,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     setPreviewData(null);
     setSkipReport(null);
     setNullifiedRows([]);
+    setColumnsExpanded(false);
     if (!sourceId) return;
     (async () => {
       try {
@@ -462,13 +467,25 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               <span style={{ fontSize: 13, color: "var(--text-3)" }}>
                 {source.row_count} row{source.row_count !== 1 ? "s" : ""}
               </span>
+              {source.row_count != null && source.distinct_pk_count != null && source.row_count > source.distinct_pk_count && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  background: "var(--warn-soft, rgba(255,180,0,.15))",
+                  color: "var(--warn, #e6a000)",
+                  border: "1px solid var(--warn, #e6a000)",
+                  borderRadius: 99, padding: "2px 8px", fontSize: 11, fontWeight: 600,
+                }}>
+                  <Icon name="warn" size={12} />
+                  Duplicate PK values
+                </span>
+              )}
               <Btn
                 variant="ghost"
-                style={{ marginLeft: "auto", fontSize: 12 }}
+                style={{ marginLeft: "auto", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}
                 onClick={() => setShowIngest(true)}
                 disabled={ingesting}
               >
-                {ingesting ? "Ingesting…" : "Ingest file"}
+                {ingesting ? <><Spinner size={12} /> Ingesting…</> : "Ingest file"}
               </Btn>
             </div>
 
@@ -493,13 +510,33 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
               <KV label="Last ingested">{source.date_ingested || "—"}</KV>
             </Section>
 
-            <Section title={`Columns (${source.columns?.length ?? 0})`}>
-              {(source.columns || []).map(col => (
+            <div>
+              <div
+                onClick={() => setColumnsExpanded(x => !x)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", userSelect: "none", marginBottom: columnsExpanded ? 10 : 0,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>Columns</span>
+                <span style={{ fontSize: 12, color: "var(--text-3)", display: "flex", alignItems: "center", gap: 4 }}>
+                  {source.columns?.length ?? 0}
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{columnsExpanded ? " ∨" : " ›"}</span>
+                </span>
+              </div>
+              {columnsExpanded && migrationError && (
+                <InlineError variant="panel" onDismiss={() => setMigrationError(null)} style={{ marginBottom: 8 }}>
+                  {migrationError}
+                </InlineError>
+              )}
+              {columnsExpanded && (source.columns || []).map(col => (
                 <ColumnTypeRow
                   key={col.column_id}
                   col={col}
                   sourceId={sourceId}
+                  onError={setMigrationError}
                   onMigrated={async (nullified) => {
+                    setMigrationError(null);
                     setNullifiedRows(nullified || []);
                     const dres = await fetch(`/sources/${sourceId}`);
                     if (dres.ok) {
@@ -510,7 +547,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                   }}
                 />
               ))}
-            </Section>
+            </div>
 
             {/* Nullified values — shown only after a migration that produced nullified rows */}
             {nullifiedRows.length > 0 && (
@@ -538,7 +575,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                   No data yet — ingest a file to preview rows.
                 </div>
               ) : !previewData ? (
-                <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>Loading…</div>
+                <LoadingState />
               ) : previewData.rows.length === 0 ? (
                 <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>No rows in this source.</div>
               ) : (
@@ -609,7 +646,7 @@ function KV({ label, children }) {
 }
 
 function ScreenData({ flash, addResultCard, onNavigate }) {
-  const { DataTable, SourceBadge, StatusPill, Icon } = window.__UI__;
+  const { DataTable, SourceBadge, StatusPill, Icon, Spinner, LoadingState } = window.__UI__;
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pendingFile, setPendingFile] = useState(null);
@@ -773,9 +810,10 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
               color: isRunning ? "var(--text-3)" : "#fff",
               border: "none", borderRadius: "var(--radius)", cursor: isRunning ? "default" : "pointer",
               whiteSpace: "nowrap",
+              display: "inline-flex", alignItems: "center", gap: 6,
             }}
           >
-            {isRunning ? "Running…" : "Run"}
+            {isRunning ? <><Spinner size={12} /> Running…</> : "Run"}
           </button>
         );
       },
@@ -799,7 +837,7 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
       <div style={{ flex: 1, overflow: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
         <DropZone onFiles={files => setPendingFile(files[0])} />
 
-        {(() => {
+        {loading ? <LoadingState /> : (() => {
           // Partition sources into flat (no pattern) and grouped (by pattern_label).
           // If pattern_label is absent, derive it client-side from `pattern` by
           // replacing digit sequences with *, e.g. "sales_2024" → "sales_*".

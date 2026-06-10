@@ -120,3 +120,62 @@ def test_get_sources_returns_registered_sources(client):
     names = [s["source_name"] for s in sources]
     assert "src_0" in names
     assert "src_1" in names
+
+
+@pytest.mark.integration
+def test_get_source_detail_distinct_pk_count_before_and_after_ingestion(client, db):
+    """GET /sources/{id} includes distinct_pk_count: null before ingest, correct count after.
+
+    Guarantee: distinct_pk_count is null when instance table does not yet exist,
+    and equals the number of distinct PK values after ingestion.
+    When a source has duplicate PKs inserted directly (bypassing the PK constraint),
+    distinct_pk_count < row_count.
+    """
+    # Register a source
+    name, data, mime = _csv_file("id,name\n1,alice\n2,bob\n3,carol\n")
+    resp = client.post(
+        "/sources",
+        data={"source_name": "pk_distinct_test", "primary_key": "id"},
+        files={"file": (name, data, mime)},
+    )
+    assert resp.status_code == 200
+    source_id = resp.json()["source"]["source_id"]
+
+    # Before ingestion: distinct_pk_count is null (instance table does not exist)
+    resp = client.get(f"/sources/{source_id}")
+    assert resp.status_code == 200
+    detail = resp.json()
+    assert "distinct_pk_count" in detail
+    assert detail["distinct_pk_count"] is None
+
+    # Ingest 3 rows with unique PKs
+    ingest_file = ("data.csv", io.BytesIO(b"id,name\n1,alice\n2,bob\n3,carol\n"), "text/csv")
+    resp = client.post(f"/sources/{source_id}/ingest", files={"file": ingest_file})
+    assert resp.status_code == 200
+
+    # After ingestion: distinct_pk_count equals row_count when all PKs are unique
+    resp = client.get(f"/sources/{source_id}")
+    assert resp.status_code == 200
+    detail = resp.json()
+    assert detail["distinct_pk_count"] == 3
+    assert detail["row_count"] == 3
+    assert detail["distinct_pk_count"] == detail["row_count"]
+
+    # Simulate duplicate PKs by recreating the instance table without the PK
+    # constraint and inserting a duplicate row — this tests the scenario that the
+    # warning badge detects (distinct_pk_count < row_count).
+    from pipeui.sql_user_table import instance_table_name
+    import uuid
+    tname = instance_table_name(uuid.UUID(source_id))
+    # Recreate without PK constraint so duplicates can be inserted
+    db.execute(f'CREATE TABLE "{tname}_nokey" AS SELECT * FROM "{tname}"')
+    db.execute(f'INSERT INTO "{tname}_nokey" VALUES (1, \'alice_dup\')')
+    db.execute(f'DROP TABLE "{tname}"')
+    db.execute(f'ALTER TABLE "{tname}_nokey" RENAME TO "{tname}"')
+
+    resp = client.get(f"/sources/{source_id}")
+    assert resp.status_code == 200
+    detail = resp.json()
+    assert detail["row_count"] == 4
+    assert detail["distinct_pk_count"] == 3
+    assert detail["row_count"] > detail["distinct_pk_count"]

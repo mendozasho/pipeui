@@ -189,7 +189,7 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
 // ---------------------------------------------------------------------------
 
 function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
-  const { Icon, Btn, Spinner, KindTag } = window.__UI__;
+  const { Icon, Btn, Spinner, KindTag, LoadingState, InlineError } = window.__UI__;
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -198,6 +198,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
 
   // Editor state
   const [setName, setSetName] = useState("");
+  const [nameError, setNameError] = useState(null);
   const [setDesc, setSetDesc] = useState("");
   const [members, setMembers] = useState([]); // [{function_id, function_name, function_type, is_active}]
   const [fnFilter, setFnFilter] = useState("");
@@ -257,7 +258,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
   }
 
   function handleSave() {
-    if (!setName.trim()) { flash && flash("Set name is required.", "error"); return; }
+    if (!setName.trim()) { setNameError("Set name is required."); return; }
     setSaving(true);
     const isEdit = editingSetId !== null;
     const url = isEdit ? `/function-sets/${editingSetId}` : "/function-sets";
@@ -374,15 +375,16 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
         <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <input
             value={setName}
-            onChange={e => setSetName(e.target.value)}
+            onChange={e => { setSetName(e.target.value); setNameError(null); }}
             placeholder="Set name (required)"
             style={{
               width: "100%", boxSizing: "border-box",
               padding: "8px 12px", borderRadius: "var(--radius)",
               border: "1px solid var(--border)", background: "var(--panel-2)",
-              color: "var(--text)", fontSize: 14, marginBottom: 8,
+              color: "var(--text)", fontSize: 14, marginBottom: nameError ? 4 : 8,
             }}
           />
+          {nameError && <InlineError style={{ marginBottom: 8 }}>{nameError}</InlineError>}
           <input
             value={setDesc}
             onChange={e => setSetDesc(e.target.value)}
@@ -523,6 +525,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+        {setsLoading && <LoadingState />}
         {!setsLoading && sets.length === 0 && (
           <div style={{ color: "var(--text-3)", fontSize: 13 }}>
             No sets yet. Click "New Set" to create one.
@@ -577,8 +580,95 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
 // ScreenModules
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// BuiltinsTab — two built-in step cards: Join and Pivot
+// ---------------------------------------------------------------------------
+
+const BUILTINS = [
+  {
+    id: "join",
+    label: "Join",
+    description: "Combine this source with another source by matching on one or more column pairs. Supports inner, left, right, and full join types.",
+    defaultConfig: {
+      right_source_id: "",
+      join_type: "inner",
+      on: [{ left_col: "", right_col: "" }],
+      keep_columns: "all",
+    },
+  },
+  {
+    id: "pivot",
+    label: "Pivot",
+    description: "Reshape data by rotating unique values of a pivot column into new columns, aggregating with sum, avg, min, max, or count.",
+    defaultConfig: {
+      index_columns: [],
+      pivot_column: "",
+      value_columns: [{ col_name: "", aggregations: ["sum"] }],
+    },
+  },
+];
+
+function BuiltinCard({ builtin, onDragStart }) {
+  const { Btn } = window.__UI__;
+  return (
+    <div
+      draggable
+      onDragStart={e => onDragStart && onDragStart(e, builtin)}
+      style={{
+        background: "var(--panel)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)", padding: "16px 18px",
+        marginBottom: 12, cursor: "grab", userSelect: "none",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+          textTransform: "uppercase", padding: "2px 8px",
+          borderRadius: 4, background: "var(--accent)", color: "var(--accent-ink)",
+        }}>
+          Built-in
+        </span>
+        <span style={{ fontWeight: 600, fontSize: 15, color: "var(--text)" }}>
+          {builtin.label}
+        </span>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-3)", lineHeight: 1.55 }}>
+        {builtin.description}
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-4)" }}>
+        Drag onto the Builder canvas to add this step to a pipeline.
+      </div>
+    </div>
+  );
+}
+
+function BuiltinsTab() {
+  function handleDragStart(e, builtin) {
+    e.dataTransfer.setData("application/pipeui-builtin", JSON.stringify({
+      builtin_type: builtin.id,
+      builtin_config: builtin.defaultConfig,
+      label: builtin.label,
+    }));
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Built-in Steps</div>
+        <div style={{ color: "var(--text-3)", fontSize: 12 }}>
+          Drag a built-in card onto the Report Builder canvas to configure and add it as a pipeline step.
+        </div>
+      </div>
+      {BUILTINS.map(b => (
+        <BuiltinCard key={b.id} builtin={b} onDragStart={handleDragStart} />
+      ))}
+    </div>
+  );
+}
+
 function ScreenModules({ flash, addResultCard, onNavigate }) {
-  const { KindTag, Icon, Btn } = window.__UI__;
+  const { KindTag, Icon, Btn, LoadingState } = window.__UI__;
   const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -661,7 +751,9 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
     byFile[key].push(fn);
   }
 
-  if (activeTab === "sets") {
+  const TAB_LABELS = { functions: "Functions", builtins: "Built-ins", sets: "Sets" };
+
+  if (activeTab === "sets" || activeTab === "builtins") {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {/* Tab bar */}
@@ -669,20 +761,21 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
           padding: "0 24px", borderBottom: "1px solid var(--border)",
           display: "flex", gap: 0, flexShrink: 0,
         }}>
-          {["functions", "sets"].map(tab => (
+          {["functions", "builtins", "sets"].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               padding: "14px 18px", background: "none", border: "none",
               borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
               color: activeTab === tab ? "var(--accent)" : "var(--text-3)",
               fontWeight: activeTab === tab ? 600 : 400,
-              fontSize: 14, cursor: "pointer", textTransform: "capitalize",
+              fontSize: 14, cursor: "pointer",
               marginBottom: -1,
             }}>
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {TAB_LABELS[tab]}
             </button>
           ))}
         </div>
-        <SetsTab flash={flash} allFunctions={functions} addResultCard={addResultCard} onNavigate={onNavigate} />
+        {activeTab === "builtins" && <BuiltinsTab />}
+        {activeTab === "sets" && <SetsTab flash={flash} allFunctions={functions} addResultCard={addResultCard} onNavigate={onNavigate} />}
       </div>
     );
   }
@@ -694,16 +787,16 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
         padding: "0 24px", borderBottom: "1px solid var(--border)",
         display: "flex", gap: 0, flexShrink: 0,
       }}>
-        {["functions", "sets"].map(tab => (
+        {["functions", "builtins", "sets"].map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
             padding: "14px 18px", background: "none", border: "none",
             borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
             color: activeTab === tab ? "var(--accent)" : "var(--text-3)",
             fontWeight: activeTab === tab ? 600 : 400,
-            fontSize: 14, cursor: "pointer", textTransform: "capitalize",
+            fontSize: 14, cursor: "pointer",
             marginBottom: -1,
           }}>
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {TAB_LABELS[tab]}
           </button>
         ))}
       </div>
@@ -789,9 +882,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
 
       {/* Function list */}
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
-        {loading && (
-          <div style={{ color: "var(--text-3)", fontSize: 13 }}>Loading functions…</div>
-        )}
+        {loading && <LoadingState />}
         {!loading && functions.length === 0 && (
           <div style={{ color: "var(--text-3)", fontSize: 13 }}>
             No functions registered yet. Add a directory in Settings → functions_paths and press Rescan.

@@ -422,7 +422,7 @@ def fn_client(tmp_path, monkeypatch):
 
     import duckdb
     from fastapi import FastAPI
-    from pipeui.duckdb import create_schema
+    from pipeui.db import create_schema
     import pipeui.api.functions as fn_mod
     importlib.reload(fn_mod)
 
