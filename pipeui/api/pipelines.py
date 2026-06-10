@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from pipeui.helpers import get_conn
 from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
-from pipeui.workflow.run import get_staging_rows, run_pipeline
+from pipeui.workflow.run import get_staging_rows, run_pipeline, run_set_across_sources
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -49,6 +49,31 @@ class PatchStepIn(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@router.post("/run-set")
+def run_set_route(
+    set_id: str = Query(...),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Run a function set across all sources it is attached to.
+
+    ?set_id={uuid} — required; the function_set to run.
+
+    Returns { set_id, set_name, sources: [...] } with per-source step results.
+    404 when set_id is unknown or the set has no attached sources.
+    """
+    try:
+        parsed_set_id = uuid.UUID(set_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid set_id: {set_id!r}")
+
+    result = run_set_across_sources(conn, parsed_set_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Set {set_id!r} not found")
+    if not result.get("sources"):
+        raise HTTPException(status_code=404, detail=f"Set {set_id!r} has no attached sources")
+    return result
+
 
 @router.get("/{source_id}")
 def read_pipeline(

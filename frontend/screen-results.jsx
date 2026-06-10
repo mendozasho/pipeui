@@ -372,8 +372,154 @@ function TransformExpand({ card }) {
   );
 }
 
+// ── Sources expand (function/set-scoped cards) ────────────────────────────────
+function SourcesExpand({ sources }) {
+  const [expandedSrc, setExpandedSrc] = useState({});
+  const srcs = sources || [];
+
+  const thStyle = {
+    padding: "6px 12px", textAlign: "left", fontSize: 11, fontWeight: 600,
+    color: "var(--text-3)", borderBottom: "1px solid var(--border)",
+    whiteSpace: "nowrap",
+  };
+  const tdStyle = {
+    padding: "8px 12px", fontSize: 13, borderBottom: "1px solid var(--border)",
+    verticalAlign: "middle",
+  };
+
+  if (srcs.length === 0) {
+    return <div style={{ color: "var(--text-4)", fontSize: 13 }}>No sources found.</div>;
+  }
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...thStyle, width: 24 }}></th>
+            <th style={thStyle}>Source</th>
+            <th style={thStyle}>Status</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Passed</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Failed</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Pass rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {srcs.map((src, i) => {
+            let rowsPassed = 0, rowsFailed = 0, allFailingRows = [];
+            let anyFailed = false;
+            for (const step of (src.steps || [])) {
+              if (step.status === "failed") { anyFailed = true; continue; }
+              rowsPassed += step.rows_passed || 0;
+              rowsFailed += step.rows_failed || 0;
+              if (step.failing_rows) allFailingRows.push(...step.failing_rows);
+            }
+            const srcStatus = src.error ? "failed" : (anyFailed ? "failed" : "ok");
+            const total = rowsPassed + rowsFailed;
+            const passRate = total > 0 ? rowsPassed / total : null;
+            const hasFailingRows = allFailingRows.length > 0;
+            const key = src.source_id || String(i);
+            const isExpanded = !!expandedSrc[key];
+            const preview = allFailingRows.slice(0, PREVIEW_CAP);
+            const cols = preview.length > 0 ? Object.keys(preview[0]) : [];
+
+            return (
+              <React.Fragment key={key}>
+                <tr
+                  style={{ background: "var(--panel)", cursor: hasFailingRows ? "pointer" : "default" }}
+                  onClick={() => {
+                    if (hasFailingRows) setExpandedSrc(prev => ({ ...prev, [key]: !prev[key] }));
+                  }}
+                >
+                  <td style={{ ...tdStyle, width: 24, paddingRight: 0, color: "var(--text-4)", fontSize: 11 }}>
+                    {hasFailingRows ? (isExpanded ? "▾" : "▸") : ""}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontWeight: 500 }}>{src.source_name}</span>
+                    {src.error && (
+                      <div style={{ color: "var(--bad)", fontSize: 11, marginTop: 3 }}>{src.error}</div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <ValidationBadge status={srcStatus} />
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {total > 0 ? rowsPassed.toLocaleString() : "—"}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {total > 0 ? rowsFailed.toLocaleString() : "—"}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {passRate !== null ? `${(passRate * 100).toFixed(1)}%` : "—"}
+                  </td>
+                </tr>
+                {isExpanded && hasFailingRows && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: "0 0 0 32px", background: "var(--panel-2)" }}>
+                      <div style={{ padding: "10px 12px 12px" }}>
+                        <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 8 }}>
+                          {allFailingRows.length > PREVIEW_CAP
+                            ? `Showing ${PREVIEW_CAP} of ${allFailingRows.length.toLocaleString()} failing rows`
+                            : `${allFailingRows.length.toLocaleString()} failing row${allFailingRows.length !== 1 ? "s" : ""}`}
+                        </div>
+                        <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+                          <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead>
+                              <tr>
+                                {cols.map(c => (
+                                  <th key={c} style={{
+                                    padding: "4px 10px", textAlign: "left", fontSize: 11, fontWeight: 600,
+                                    color: "var(--text-3)", borderBottom: "1px solid var(--border)",
+                                    whiteSpace: "nowrap", background: "var(--panel-2)",
+                                  }}>{c}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {preview.map((r, ri) => (
+                                <tr key={ri} style={{ background: ri % 2 === 0 ? "var(--panel)" : "var(--panel-2)" }}>
+                                  {cols.map(c => (
+                                    <td key={c} style={{
+                                      padding: "4px 10px", fontSize: 12, borderBottom: "1px solid var(--border)",
+                                      whiteSpace: "nowrap", color: "var(--text-2)",
+                                    }}>
+                                      {r[c] === null || r[c] === undefined
+                                        ? <span style={{ color: "var(--text-4)" }}>null</span>
+                                        : String(r[c])}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Collect export rows for a card ────────────────────────────────────────────
 function collectValidationExportRows(card) {
+  // Function/set-scoped cards: aggregate failing_rows from per-source steps
+  if (card.trigger === "function" && card.sources) {
+    const allRows = [];
+    for (const src of card.sources) {
+      for (const step of (src.steps || [])) {
+        if (step.failing_rows && step.failing_rows.length > 0) {
+          allRows.push(...step.failing_rows);
+        }
+      }
+    }
+    return allRows;
+  }
   const steps = card.steps || [];
   const allRows = [];
   for (const step of steps) {
@@ -454,10 +600,12 @@ function ResultCard({ card, selected, onToggleSelect }) {
           {expanded ? "▾" : "▸"}
         </button>
 
-        {/* Source name */}
+        {/* Source/function/set name */}
         <div style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
-            {card.source_name}
+            {card.trigger === "function"
+              ? (card.function_name || card.set_name)
+              : card.source_name}
           </span>
         </div>
 
@@ -509,9 +657,11 @@ function ResultCard({ card, selected, onToggleSelect }) {
           padding: "14px 18px",
           background: "var(--panel-2)",
         }}>
-          {card.card_type === "validation"
-            ? <ValidationExpand card={card} />
-            : <TransformExpand card={card} />
+          {card.trigger === "function" && card.sources
+            ? <SourcesExpand sources={card.sources} />
+            : card.card_type === "validation"
+              ? <ValidationExpand card={card} />
+              : <TransformExpand card={card} />
           }
         </div>
       )}

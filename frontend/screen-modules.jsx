@@ -157,12 +157,13 @@ function FunctionDrawer({ functionId, onClose, flash }) {
 // SetsTab — create and list function sets
 // ---------------------------------------------------------------------------
 
-function SetsTab({ flash, allFunctions }) {
+function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
   const { Icon, Btn, KindTag } = window.__UI__;
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingSetId, setEditingSetId] = useState(null); // null = create mode
+  const [runningSets, setRunningSets] = useState({}); // set_id -> bool
 
   // Editor state
   const [setName, setSetName] = useState("");
@@ -257,6 +258,51 @@ function SetsTab({ flash, allFunctions }) {
   const filteredFns = allFunctions.filter(fn =>
     fn.function_name.toLowerCase().includes(fnFilter.toLowerCase())
   );
+
+  function handleRunSet(e, s) {
+    e.stopPropagation();
+    setRunningSets(prev => ({ ...prev, [s.set_id]: true }));
+    fetch(`/pipelines/run-set?set_id=${s.set_id}`, { method: "POST" })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        setRunningSets(prev => ({ ...prev, [s.set_id]: false }));
+        if (!ok) {
+          flash && flash(data?.detail || "Run failed", "error");
+          return;
+        }
+        // Aggregate summary across all sources and steps
+        let rowsPassed = 0, rowsFailed = 0;
+        for (const src of (data.sources || [])) {
+          for (const step of (src.steps || [])) {
+            rowsPassed += step.rows_passed || 0;
+            rowsFailed += step.rows_failed || 0;
+          }
+        }
+        const total = rowsPassed + rowsFailed;
+        const passRate = total > 0 ? rowsPassed / total : null;
+        const card = {
+          run_id: crypto.randomUUID(),
+          card_type: "validation",
+          trigger: "function",
+          source_id: null,
+          source_name: null,
+          function_id: null,
+          function_name: null,
+          set_id: data.set_id,
+          set_name: data.set_name,
+          run_at: new Date().toISOString(),
+          summary: { rows_passed: rowsPassed, rows_failed: rowsFailed, pass_rate: passRate },
+          sources: data.sources || [],
+          steps: [],
+        };
+        addResultCard && addResultCard(card);
+        onNavigate && onNavigate("results", {});
+      })
+      .catch(() => {
+        setRunningSets(prev => ({ ...prev, [s.set_id]: false }));
+        flash && flash("Run failed", "error");
+      });
+  }
 
   // ---- Editor view ----
   if (editorOpen) {
@@ -477,8 +523,22 @@ function SetsTab({ flash, allFunctions }) {
                   {s.set_description}
                 </div>
               )}
-              <div style={{ fontSize: 12, color: "var(--text-4)" }}>
-                {s.member_count} function{s.member_count !== 1 ? "s" : ""}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                <div style={{ fontSize: 12, color: "var(--text-4)" }}>
+                  {s.member_count} function{s.member_count !== 1 ? "s" : ""}
+                </div>
+                <button
+                  onClick={e => handleRunSet(e, s)}
+                  disabled={!!runningSets[s.set_id]}
+                  style={{
+                    padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                    background: runningSets[s.set_id] ? "var(--panel-3)" : "var(--run, var(--accent))",
+                    color: runningSets[s.set_id] ? "var(--text-3)" : "var(--accent-ink, #fff)",
+                    border: "none", borderRadius: "var(--radius)", cursor: runningSets[s.set_id] ? "default" : "pointer",
+                  }}
+                >
+                  {runningSets[s.set_id] ? "Running…" : "Run"}
+                </button>
               </div>
             </div>
           ))}
@@ -493,7 +553,7 @@ function SetsTab({ flash, allFunctions }) {
 // ScreenModules
 // ---------------------------------------------------------------------------
 
-function ScreenModules({ flash }) {
+function ScreenModules({ flash, addResultCard, onNavigate }) {
   const { KindTag, Icon, Btn } = window.__UI__;
   const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
@@ -502,6 +562,7 @@ function ScreenModules({ flash }) {
   const [scanLog, setScanLog] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [selectedFunction, setSelectedFunction] = useState(null);
+  const [runningFns, setRunningFns] = useState({}); // function_id -> bool
 
   function loadFunctions() {
     return fetch("/functions")
@@ -526,6 +587,47 @@ function ScreenModules({ flash }) {
         return loadFunctions();
       })
       .catch(() => setScanning(false));
+  }
+
+  function handleRunFn(e, fn) {
+    e.stopPropagation();
+    setRunningFns(prev => ({ ...prev, [fn.function_id]: true }));
+    fetch(`/validations/run?function_id=${fn.function_id}`, { method: "POST" })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        setRunningFns(prev => ({ ...prev, [fn.function_id]: false }));
+        if (!ok) {
+          flash && flash(data?.detail || "Run failed", "error");
+          return;
+        }
+        // Aggregate summary across all sources
+        let rowsPassed = 0, rowsFailed = 0;
+        for (const src of (data.sources || [])) {
+          rowsPassed += src.rows_passed || 0;
+          rowsFailed += src.rows_failed || 0;
+        }
+        const total = rowsPassed + rowsFailed;
+        const passRate = total > 0 ? rowsPassed / total : null;
+        const card = {
+          run_id: crypto.randomUUID(),
+          card_type: "validation",
+          trigger: "function",
+          source_id: null,
+          source_name: null,
+          function_id: data.function_id,
+          function_name: data.function_name,
+          run_at: new Date().toISOString(),
+          summary: { rows_passed: rowsPassed, rows_failed: rowsFailed, pass_rate: passRate },
+          sources: data.sources || [],
+          steps: [],
+        };
+        addResultCard && addResultCard(card);
+        onNavigate && onNavigate("results", {});
+      })
+      .catch(() => {
+        setRunningFns(prev => ({ ...prev, [fn.function_id]: false }));
+        flash && flash("Run failed", "error");
+      });
   }
 
   // Group functions by module_path for display
@@ -557,7 +659,7 @@ function ScreenModules({ flash }) {
             </button>
           ))}
         </div>
-        <SetsTab flash={flash} allFunctions={functions} />
+        <SetsTab flash={flash} allFunctions={functions} addResultCard={addResultCard} onNavigate={onNavigate} />
       </div>
     );
   }
@@ -725,6 +827,22 @@ function ScreenModules({ flash }) {
                     {fn.function_name}{fn.function_signature}
                   </div>
                 </div>
+                {fn.is_active && (
+                  <button
+                    onClick={e => handleRunFn(e, fn)}
+                    disabled={!!runningFns[fn.function_id]}
+                    style={{
+                      padding: "4px 12px", fontSize: 11, fontWeight: 600,
+                      background: runningFns[fn.function_id] ? "var(--panel-3)" : "var(--run, var(--accent))",
+                      color: runningFns[fn.function_id] ? "var(--text-3)" : "var(--accent-ink, #fff)",
+                      border: "none", borderRadius: "var(--radius)",
+                      cursor: runningFns[fn.function_id] ? "default" : "pointer",
+                      flexShrink: 0, alignSelf: "center",
+                    }}
+                  >
+                    {runningFns[fn.function_id] ? "Running…" : "Run"}
+                  </button>
+                )}
               </div>
             ))}
           </div>
