@@ -27,9 +27,16 @@ Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an
 - Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
-- **Three-layer minimum:** every slice must touch all three integration layers — **Data Layer** (workflow/schema/DuckDB), **Business Layer** (API/routes), and **UI Layer** (frontend). A slice missing any of these three is a horizontal slice, not a vertical one — challenge it and expand it before presenting. Tests count as part of whichever layer they exercise, not as a separate layer.
+
+- **Three-layer minimum — non-negotiable:** every slice MUST touch all three integration layers — **Data Layer** (workflow/schema/DuckDB), **Business Layer** (API/routes), and **UI Layer** (frontend). A slice missing any layer is a horizontal slice and must be rejected. Do not present it to the user. Instead, expand it to cover the missing layer before presenting. Tests count as part of whichever layer they exercise, not as a separate layer.
+
+  **How to expand a thin slice:** if a proposed slice only touches one or two layers, look at what the missing layer would minimally need to contribute. For a backend-only slice, ask: what is the thinnest UI that makes this backend change observable? For a frontend-only slice, ask: does this UI change require a new API contract or schema field? Add that to the slice. A walking skeleton (stub endpoint + wired UI) counts — it does not need to be production-quality, just end-to-end.
+
+  **Vertical over parallel — always:** a set of sequential vertical slices is always preferable to a set of parallel horizontal slices. Do not trade verticality for parallelism. Parallelism is a secondary optimisation only considered after every slice is already vertical.
+
 - **Context load check:** before presenting a slice, estimate whether a single agent can hold all its changes in context without making trade-offs. If a slice touches more than ~4 files across layers, consider splitting it into a thinner slice that still hits all three layers (e.g. a walking skeleton first, then enrich with detail in a follow-on slice).
-- **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution.
+
+- **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution. Remember: sequential vertical slices are always preferred over parallel horizontal ones — only mark slices parallel when they are both vertical AND have no file overlap.
 </vertical-slice-rules>
 
 ### 4. Quiz the user
