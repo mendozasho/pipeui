@@ -86,7 +86,7 @@ function App() {
 
       <main style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         {screen === "data"     && <ScreenData flash={flash} addResultCard={addResultCard} onNavigate={handleNavigate} />}
-        {screen === "modules"  && <ScreenModules flash={flash} />}
+        {screen === "modules"  && <ScreenModules flash={flash} addResultCard={addResultCard} onNavigate={handleNavigate} />}
         {screen === "builder"  && <ScreenBuilder flash={flash} onNavigate={handleNavigate} />}
         {screen === "results"  && (
           <ScreenResults
