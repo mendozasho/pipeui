@@ -106,6 +106,26 @@ The worker process uses `sys.executable` — the same Python interpreter running
 
 ---
 
+## source group
+
+A source in `source_registry` whose `pattern` field is non-null acts as a group anchor — it represents a named report that accepts multiple ingested files matching that pattern over time. The group name shown in the UI is a human-readable rendering of the `pattern` regex (e.g. `sales_jan_\d+` → `"sales_jan_*"`) — the raw regex is never shown directly. No separate group table; `source_id` from `source_registry` is the group identity (one source, many ingestion files).
+
+**Column mismatch warning:** when a file being ingested has columns that don't match the group's established `column_registry` schema (new columns, removed columns, or type mismatches), the user sees a confirmation popup before ingestion proceeds. The user's confirmation is stored (a `schema_override_confirmed` flag or equivalent) so the warning is not repeated for the same mismatch on subsequent ingests.
+
+**Future (not in current scope):** auto-infer files on disk matching the pattern and offer bulk-ingest with a confirmation list (user removes files they don't want before committing).
+
+---
+
+## built-in step
+
+A pipeline step backed by a DuckDB operation assembled from user configuration, not a Python callable. Stored in a `source_builtin_map` table separate from `source_function_map` (see pipeline step). `builtin_type` is an extensible VARCHAR enum — current values: `join`, `pivot`; future: `filter`, `sql`. `builtin_config` is a JSON blob whose shape is validated per `builtin_type` at the workflow layer. Built-ins can appear inside function sets (via `function_set_map` extended with a nullable `builtin_step_id` — a step is either a function or a built-in, never both). The tab on the Functions screen that exposes draggable built-ins is labelled **Built-ins** and positioned between the Functions tab and the Sets tab.
+
+**Join config shape:** `{ right_source_id, join_type: inner|left|right|full, on: [{left_col, right_col}], keep_columns: "all" | [col_id, ...] }`
+
+**Pivot config shape:** `{ index_columns: [col_id], pivot_column: col_id, value_columns: [{col_id, aggregations: [sum|avg|count|min|max, ...]}] }` — multiple aggregation methods per value column, columns dragged into aggregation slots in the UI.
+
+---
+
 ## pipeline
 
 The combination of a source + an ordered list of attached functions/sets with their column bindings. Not stored as a single entity — derived at query time from `source_function_map` + `alias_map` + `function_set_map`. A pipeline is per-source; the same function set can appear in many pipelines (one per source it's attached to).
