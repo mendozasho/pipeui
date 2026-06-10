@@ -166,92 +166,6 @@ function IngestModal({ source, onConfirm, onCancel }) {
   );
 }
 
-function SchemaMismatchModal({ schemaDiff, onConfirm, onCancel }) {
-  const { Btn } = window.__UI__;
-  const { added = [], removed = [], type_changes = [] } = schemaDiff;
-
-  return (
-    <div
-      onClick={e => e.stopPropagation()}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 350,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: "var(--panel)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)", padding: 24, width: 440,
-          boxShadow: "0 16px 48px rgba(0,0,0,.6)",
-        }}
-      >
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>Schema mismatch detected</div>
-        <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 16 }}>
-          The file columns differ from the registered schema. Proceed anyway?
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-          {added.length > 0 && (
-            <div style={{
-              background: "var(--panel-2)", border: "1px solid var(--border)",
-              borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13,
-            }}>
-              <div style={{ fontWeight: 600, color: "var(--text-2)", marginBottom: 6 }}>
-                Added ({added.length})
-              </div>
-              <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)", lineHeight: 1.7 }}>
-                {added.join(", ")}
-              </div>
-            </div>
-          )}
-
-          {removed.length > 0 && (
-            <div style={{
-              background: "var(--panel-2)", border: "1px solid var(--border)",
-              borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13,
-            }}>
-              <div style={{ fontWeight: 600, color: "var(--text-2)", marginBottom: 6 }}>
-                Removed ({removed.length})
-              </div>
-              <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)", lineHeight: 1.7 }}>
-                {removed.join(", ")}
-              </div>
-            </div>
-          )}
-
-          {type_changes.length > 0 && (
-            <div style={{
-              background: "var(--panel-2)", border: "1px solid var(--border)",
-              borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13,
-            }}>
-              <div style={{ fontWeight: 600, color: "var(--text-2)", marginBottom: 6 }}>
-                Type changes ({type_changes.length})
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {type_changes.map(tc => (
-                  <div key={tc.column} style={{
-                    fontFamily: "'Geist Mono', monospace", fontSize: 12,
-                    color: "var(--text-3)", display: "flex", gap: 8,
-                  }}>
-                    <span>{tc.column}</span>
-                    <span style={{ color: "var(--text-4)" }}>{tc.from} → {tc.to}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
-          <Btn variant="primary" onClick={onConfirm}>Ingest anyway</Btn>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const COLUMN_TYPES = ["INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "VARCHAR", "DATE", "TIMESTAMP"];
 
 function MigrationConfirmModal({ uncastable, sharedSources, onConfirm, onCancel }) {
@@ -462,8 +376,6 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [skipReport, setSkipReport] = useState(null);
   const [previewData, setPreviewData] = useState(null); // { columns, rows } | null
   const [nullifiedRows, setNullifiedRows] = useState([]); // [{pk, column}] after migration
-  const [pendingSchemaDiff, setPendingSchemaDiff] = useState(null); // { schemaDiff, file }
-
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -506,57 +418,18 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     })();
   }, [sourceId]);
 
-  async function _doIngest(file, confirmSchemaDiff) {
-    const fd = new FormData();
-    fd.append("file", file);
-    if (confirmSchemaDiff) fd.append("confirm_schema_diff", "true");
-    const res = await fetch(`/sources/${sourceId}/ingest`, { method: "POST", body: fd });
-    return res.json();
-  }
-
   async function handleIngest({ file }) {
     setIngesting(true);
     setShowIngest(false);
+    const fd = new FormData();
+    fd.append("file", file);
     try {
-      const data = await _doIngest(file, false);
-
-      if (data.requires_confirmation) {
-        // Pause and show schema diff popup — store the file for the confirmed re-call
-        setPendingSchemaDiff({ schemaDiff: data.schema_diff, file });
-        return;
-      }
-
+      const res = await fetch(`/sources/${sourceId}/ingest`, { method: "POST", body: fd });
+      const data = await res.json();
       if (data.ok) {
         flash(`Ingested ${data.rows_ingested} row${data.rows_ingested !== 1 ? "s" : ""}.`, "ok");
         if (data.rows_skipped?.length) setSkipReport(data.rows_skipped);
-        try {
-          const dres = await fetch(`/sources/${sourceId}`);
-          if (dres.ok) {
-            const src = await dres.json();
-            setDetail(src);
-            await loadRows(src);
-          }
-        } catch { /* ignore */ }
-        onIngested();
-      } else {
-        flash(data.errors?.join("; ") || "Ingestion failed.", "error");
-      }
-    } catch {
-      flash("Network error during ingestion.", "error");
-    } finally {
-      setIngesting(false);
-    }
-  }
-
-  async function handleConfirmSchemaDiff() {
-    const { file } = pendingSchemaDiff;
-    setPendingSchemaDiff(null);
-    setIngesting(true);
-    try {
-      const data = await _doIngest(file, true);
-      if (data.ok) {
-        flash(`Ingested ${data.rows_ingested} row${data.rows_ingested !== 1 ? "s" : ""}.`, "ok");
-        if (data.rows_skipped?.length) setSkipReport(data.rows_skipped);
+        // Refresh detail then rows after a successful ingest
         try {
           const dres = await fetch(`/sources/${sourceId}`);
           if (dres.ok) {
@@ -713,14 +586,6 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
           onCancel={() => setShowIngest(false)}
         />
       )}
-
-      {pendingSchemaDiff && (
-        <SchemaMismatchModal
-          schemaDiff={pendingSchemaDiff.schemaDiff}
-          onConfirm={handleConfirmSchemaDiff}
-          onCancel={() => { setPendingSchemaDiff(null); setIngesting(false); }}
-        />
-      )}
     </>
   );
 }
@@ -856,25 +721,6 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
     }
   }
 
-  // Group sources by pattern for display. Sources with pattern=null appear ungrouped after.
-  function groupSources(sourceList) {
-    const grouped = {}; // pattern -> [source, ...]
-    const ungrouped = [];
-    for (const s of sourceList) {
-      if (s.pattern) {
-        if (!grouped[s.pattern]) grouped[s.pattern] = [];
-        grouped[s.pattern].push(s);
-      } else {
-        ungrouped.push(s);
-      }
-    }
-    return { grouped, ungrouped };
-  }
-
-  function patternLabel(pattern) {
-    return pattern.replace(/\\d\+/g, "*");
-  }
-
   const columns = [
     {
       key: "source_name", label: "Source",
@@ -908,10 +754,6 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
           {v ? new Date(v).toLocaleDateString() : "—"}
         </span>
       ),
-    },
-    {
-      key: "ingestion_method", label: "Method",
-      render: v => <span style={{ fontSize: 12, color: "var(--text-3)" }}>{v}</span>,
     },
     {
       key: "status", label: "Status",
@@ -958,48 +800,39 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
         <DropZone onFiles={files => setPendingFile(files[0])} />
 
         {(() => {
-          const { grouped, ungrouped } = groupSources(sources);
-          const groupEntries = Object.entries(grouped);
-
-          // Helper: render a DataTable section with an optional group header
-          function renderGroup(label, count, groupSources) {
-            return (
-              <div key={label} style={{
-                background: "var(--panel)", border: "1px solid var(--border)",
-                borderRadius: "var(--radius-lg)", overflow: "hidden",
-              }}>
-                {label && (
-                  <div style={{
-                    padding: "8px 16px",
-                    background: "var(--panel-2)",
-                    borderBottom: "1px solid var(--border)",
-                    display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 600, color: "var(--text-2)" }}>
-                      {label}
-                    </span>
-                    <span style={{ fontSize: 11, color: "var(--text-4)" }}>
-                      {count} source{count !== 1 ? "s" : ""}
-                    </span>
-                  </div>
-                )}
-                <DataTable
-                  columns={columns}
-                  rows={groupSources.map(s => ({ ...s, id: s.source_id }))}
-                  onRowClick={row => setSelectedSource(row)}
-                  selectedId={selectedSource?.source_id}
-                />
-              </div>
-            );
+          // Partition sources into flat (no pattern) and grouped (by pattern_label).
+          // If pattern_label is absent, derive it client-side from `pattern` by
+          // replacing digit sequences with *, e.g. "sales_2024" → "sales_*".
+          const grouped = {}, flat = [];
+          for (const s of sources) {
+            const label = s.pattern_label
+              || (s.pattern ? s.pattern.replace(/\d+/g, "*") : null);
+            if (label) {
+              (grouped[label] ??= []).push({ ...s, _pattern_label: label });
+            } else {
+              flat.push(s);
+            }
           }
+          const groups = Object.entries(grouped).map(([label, rows]) => ({
+            key: label,
+            label,
+            rows: rows.map(s => ({ ...s, id: s.source_id })),
+            rowCount: rows.reduce((n, s) => n + (s.date_ingested ? (s.row_count || 0) : 0), 0),
+          }));
 
           return (
-            <>
-              {groupEntries.map(([pattern, gs]) =>
-                renderGroup(patternLabel(pattern), gs.length, gs)
-              )}
-              {ungrouped.length > 0 && renderGroup(null, ungrouped.length, ungrouped)}
-            </>
+            <div style={{
+              background: "var(--panel)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)", overflow: "hidden",
+            }}>
+              <DataTable
+                columns={columns}
+                rows={flat.map(s => ({ ...s, id: s.source_id }))}
+                groups={groups.length > 0 ? groups : undefined}
+                onRowClick={row => setSelectedSource(row)}
+                selectedId={selectedSource?.source_id}
+              />
+            </div>
           );
         })()}
       </div>
