@@ -189,7 +189,7 @@ function FunctionDrawer({ functionId, onClose, flash, onRun, running }) {
 // ---------------------------------------------------------------------------
 
 function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
-  const { Icon, Btn, Spinner, KindTag } = window.__UI__;
+  const { Icon, Btn, Spinner, KindTag, LoadingState, InlineError } = window.__UI__;
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -198,6 +198,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
 
   // Editor state
   const [setName, setSetName] = useState("");
+  const [nameError, setNameError] = useState(null);
   const [setDesc, setSetDesc] = useState("");
   const [members, setMembers] = useState([]); // [{function_id, function_name, function_type, is_active}]
   const [fnFilter, setFnFilter] = useState("");
@@ -257,7 +258,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
   }
 
   function handleSave() {
-    if (!setName.trim()) { flash && flash("Set name is required.", "error"); return; }
+    if (!setName.trim()) { setNameError("Set name is required."); return; }
     setSaving(true);
     const isEdit = editingSetId !== null;
     const url = isEdit ? `/function-sets/${editingSetId}` : "/function-sets";
@@ -374,15 +375,16 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
         <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <input
             value={setName}
-            onChange={e => setSetName(e.target.value)}
+            onChange={e => { setSetName(e.target.value); setNameError(null); }}
             placeholder="Set name (required)"
             style={{
               width: "100%", boxSizing: "border-box",
               padding: "8px 12px", borderRadius: "var(--radius)",
               border: "1px solid var(--border)", background: "var(--panel-2)",
-              color: "var(--text)", fontSize: 14, marginBottom: 8,
+              color: "var(--text)", fontSize: 14, marginBottom: nameError ? 4 : 8,
             }}
           />
+          {nameError && <InlineError style={{ marginBottom: 8 }}>{nameError}</InlineError>}
           <input
             value={setDesc}
             onChange={e => setSetDesc(e.target.value)}
@@ -523,6 +525,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+        {setsLoading && <LoadingState />}
         {!setsLoading && sets.length === 0 && (
           <div style={{ color: "var(--text-3)", fontSize: 13 }}>
             No sets yet. Click "New Set" to create one.
@@ -578,7 +581,7 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
 // ---------------------------------------------------------------------------
 
 function ScreenModules({ flash, addResultCard, onNavigate }) {
-  const { KindTag, Icon, Btn } = window.__UI__;
+  const { KindTag, Icon, Btn, LoadingState } = window.__UI__;
   const [activeTab, setActiveTab] = useState("functions");
   const [functions, setFunctions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -789,9 +792,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
 
       {/* Function list */}
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
-        {loading && (
-          <div style={{ color: "var(--text-3)", fontSize: 13 }}>Loading functions…</div>
-        )}
+        {loading && <LoadingState />}
         {!loading && functions.length === 0 && (
           <div style={{ color: "var(--text-3)", fontSize: 13 }}>
             No functions registered yet. Add a directory in Settings → functions_paths and press Rescan.

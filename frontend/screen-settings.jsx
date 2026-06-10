@@ -29,7 +29,7 @@ function SectionHeader({ title }) {
 }
 
 function FolderPickerModal({ initialPath, onSelect, onClose }) {
-  const { Btn } = window.__UI__;
+  const { Btn, LoadingState, InlineError } = window.__UI__;
   const [current, setCurrent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -89,11 +89,11 @@ function FolderPickerModal({ initialPath, onSelect, onClose }) {
 
         {/* Directory listing */}
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-          {loading && (
-            <div style={{ padding: "20px 16px", color: "var(--text-3)", fontSize: 13 }}>Loading…</div>
-          )}
+          {loading && <div style={{ padding: "20px 16px" }}><LoadingState /></div>}
           {error && (
-            <div style={{ padding: "20px 16px", color: "var(--danger, #e55)", fontSize: 13 }}>{error}</div>
+            <div style={{ padding: "8px 16px" }}>
+              <InlineError>{error}</InlineError>
+            </div>
           )}
           {!loading && !error && current?.entries.length === 0 && (
             <div style={{ padding: "20px 16px", color: "var(--text-4)", fontSize: 13 }}>No subdirectories</div>
@@ -131,7 +131,7 @@ function FolderPickerModal({ initialPath, onSelect, onClose }) {
 }
 
 function ScreenSettings({ flash }) {
-  const { Btn } = window.__UI__;
+  const { Btn, Spinner, LoadingState, InlineError } = window.__UI__;
 
   const [loaded, setLoaded] = useState(false);
   const [accent, setAccent] = useState("#7c6cf5");
@@ -204,20 +204,16 @@ function ScreenSettings({ flash }) {
           flash("Settings saved", "ok");
         }
       } else {
-        flash("Failed to save settings", "err");
+        flash("Failed to save settings", "error");
       }
     } catch {
-      flash("Failed to save settings", "err");
+      flash("Failed to save settings", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  if (!loaded) return (
-    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-3)" }}>
-      Loading…
-    </div>
-  );
+  if (!loaded) return <LoadingState />;
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: "var(--sp-6)" }}>
@@ -356,7 +352,7 @@ function ScreenSettings({ flash }) {
         </div>
 
         <Btn variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
+          {saving ? <><Spinner size={12} /> Saving…</> : "Save"}
         </Btn>
 
       </div>
