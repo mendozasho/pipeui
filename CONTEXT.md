@@ -211,6 +211,30 @@ All three toggle on header click, using the same `›` / `∨` indicator pattern
 
 On the Functions screen, functions are grouped by their `module_path` file. Each group renders a file header (filename, full path, function count) followed by its function cards. Groups are expanded by default and can be collapsed by clicking the header — only the header remains visible when collapsed. All groups share independent collapsed state.
 
+## Settings nav placement
+
+The Settings nav item is pinned to the bottom of the left sidebar via `marginTop: "auto"` on its nav button. All other nav items (Data, Functions, Builder, Results) flow from the top. No divider separates Settings from the rest — the visual gap from `marginTop: "auto"` is sufficient.
+
+## Builder palette click-to-drawer
+
+The Builder RightPalette function and set cards are draggable onto the pipeline canvas. Clicking a card (without dragging) opens a read-only detail drawer:
+- **Function card** — opens the same `FunctionDrawer` used on the Functions screen (fetches `GET /functions/{id}`).
+- **Set card** — opens a `SetDetailDrawer`: set name, description, ordered member functions with type badges and active/inactive status. Fetches `GET /function-sets/{set_id}`. Read-only — no edit/delete/run controls.
+
+Drag affordance is preserved alongside click.
+
+## source_scalar_map
+
+A table that persists scalar parameter overrides per source. Shape: `source_scalar_map (scalar_map_id UUID4, source_id FK, param_id FK, value VARCHAR)`. One row per (source × param) pair; upserted when the user sets or changes a value. `value` is stored as VARCHAR and cast to the param's declared `param_type` at run time. If no row exists for a given (source, param) pair, the Python default for that parameter is used. Brings the v2 scalar store forward into v1.
+
+## pipeline step editability
+
+All pipeline steps on the Builder canvas are editable after attach. Each `StepCard` has an edit icon that re-opens the parameter mapping modal (`PendingStepCard`) pre-populated with the step's current column bindings and scalar values. Saving an edit calls `PATCH /pipelines/{source_id}/steps/{source_function_map_id}` extended to accept updated `bindings` and `scalar_values`. The scalar values are written to `source_scalar_map`; column bindings update `alias_map`.
+
+## scalar param visibility in attach modal
+
+Scalar parameters (`int`, `float`, `bool`) are included in the dry-run response (`GET /pipelines/{source_id}/steps?dry_run=true`) via a path separate from `_SUGGEST_TYPES`, which governs column-binding suggestions only and is not modified. The attach modal renders a free-text input for each scalar param with a type hint label (e.g. `int`) and a note that the entered value must match the expected type. If left blank, the Python default is used.
+
 ## five-screen app layout
 
 The application has five nav items (post-Phase E2):
