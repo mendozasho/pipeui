@@ -4,6 +4,7 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
+const { timeAgo } = window.__UI__;
 
 // ── Filename helpers ──────────────────────────────────────────────────────────
 function sanitiseFilename(str) {
@@ -536,7 +537,8 @@ function ResultCard({ card, selected, onToggleSelect }) {
   const [showExportPicker, setShowExportPicker] = useState(false);
   const [stagingRowsCache, setStagingRowsCache] = useState(null);
 
-  const ts = card.run_at ? new Date(card.run_at).toLocaleString() : "";
+  const ts = card.run_at ? timeAgo(card.run_at) : "";
+  const tsAbsolute = card.run_at ? new Date(card.run_at).toISOString() : "";
   const filenameStem = exportFilename(card.source_name, card.card_type, "");
 
   function handleExport(format) {
@@ -613,7 +615,10 @@ function ResultCard({ card, selected, onToggleSelect }) {
         <TypeTag cardType={card.card_type} />
 
         {/* Timestamp */}
-        <span style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", flexShrink: 0 }}>
+        <span
+          title={tsAbsolute}
+          style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", flexShrink: 0, cursor: "default" }}
+        >
           {ts}
         </span>
       </div>
@@ -637,16 +642,21 @@ function ResultCard({ card, selected, onToggleSelect }) {
             </button>
           </>
         ) : (
-          <button
-            onClick={e => { e.stopPropagation(); setShowExportPicker(true); }}
-            style={{
-              padding: "3px 10px", fontSize: 11, fontWeight: 600,
-              background: "var(--panel-3)", color: "var(--text-2)",
-              border: "1px solid var(--border)", borderRadius: "var(--radius)", cursor: "pointer",
-            }}
-          >
-            Export
-          </button>
+          <>
+            <button
+              onClick={e => { e.stopPropagation(); setShowExportPicker(true); }}
+              style={{
+                padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                background: "var(--panel-3)", color: "var(--text-2)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)", cursor: "pointer",
+              }}
+            >
+              Export
+            </button>
+            <span style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "monospace" }}>
+              {stem}.csv / .xlsx
+            </span>
+          </>
         )}
       </div>
 
