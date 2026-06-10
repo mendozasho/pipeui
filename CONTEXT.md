@@ -112,6 +112,10 @@ A session-only in-memory record of what changed during a rescan. Entries cover: 
 
 The detail view for a registered function, opened from the Functions screen. Shows: signature, docstring, parameters and their types, `function_class`, `function_type`, `function_return_type`, active/inactive status, and the list of sources the function is currently attached to (joined from `source_function_map` → `source_registry`). Mirrors the drawer pattern used on the Data screen for source detail.
 
+## multi-function set
+
+A **function set** that contains two or more functions. Single-function sets exist in the backend (the backend always creates a set when a user drags a single function onto the pipeline canvas) but are invisible on the frontend — they are never rendered in the Sets tab on the Functions screen, the Builder RightPalette, or any other UI surface. The frontend filters them out after fetching from `GET /function-sets`. A single function dragged onto the canvas is run directly from the Functions palette; the user does not need to see or interact with its backing set.
+
 ## function set (playlist)
 
 A user-curated named ordered list of registered functions. Created and managed on the Functions screen. Functions execute in the order the user arranges them. A set contains only `function_id` references — no source binding and no column mappings. Column→parameter mapping (alias_map) happens at attach time per source. Stored in a `function_set` table (set_id, name) + `function_set_map` table (set_map_id, set_id, function_id, position). Built in Phase D2 (after Phase D ships function registration).
@@ -136,11 +140,21 @@ A source in `source_registry` whose `pattern` field is non-null acts as a group 
 
 ## built-in step
 
-A pipeline step backed by a DuckDB operation assembled from user configuration, not a Python callable. Stored in a `source_builtin_map` table separate from `source_function_map` (see pipeline step). `builtin_type` is an extensible VARCHAR enum — current values: `join`, `pivot`; future: `filter`, `sql`. `builtin_config` is a JSON blob whose shape is validated per `builtin_type` at the workflow layer. Built-ins can appear inside function sets (via `function_set_map` extended with a nullable `builtin_step_id` — a step is either a function or a built-in, never both). The tab on the Functions screen that exposes draggable built-ins is labelled **Built-ins** and positioned between the Functions tab and the Sets tab.
+A pipeline step backed by a DuckDB operation assembled from user configuration, not a Python callable. Stored in a `source_builtin_map` table separate from `source_function_map` (see pipeline step). `builtin_type` is an extensible VARCHAR enum — current values: `join`, `pivot`, `filter`; future: `sql`. `builtin_config` is a JSON blob whose shape is validated per `builtin_type` at the workflow layer. Built-ins can appear inside function sets (via `function_set_map` extended with a nullable `builtin_step_id` — a step is either a function or a built-in, never both).
+
+Built-ins are exposed in two places in the UI:
+- **Functions screen** — a **Built-ins** tab (between Functions and Sets tabs) renders each built-in type as a card using the same layout as the Functions tab. Clicking a card opens a detail drawer with description and parameter schema.
+- **Builder screen** — the RightPalette has a **Built-ins** tab alongside Functions and Sets. Cards here are draggable onto the pipeline canvas.
 
 **Join config shape:** `{ right_source_id, join_type: inner|left|right|full, on: [{left_col, right_col}], keep_columns: "all" | [col_id, ...] }`
 
 **Pivot config shape:** `{ index_columns: [col_id], pivot_column: col_id, value_columns: [{col_id, aggregations: [sum|avg|count|min|max, ...]}] }` — multiple aggregation methods per value column, columns dragged into aggregation slots in the UI.
+
+**Filter config shape:** `{ column: col_id, operator: eq|neq|gt|gte|lt|lte|contains|not_contains|is_null|is_not_null, value: string }` — single-condition row filter in v1; multi-condition (AND/OR) deferred.
+
+## builtin_registry
+
+A catalog table seeded at DB init time with one row per supported built-in type (`join`, `pivot`, `filter`). Mirrors `function_registry` in purpose: holds the name, display name, description, and parameter schema for each built-in type. The Functions screen Built-ins tab and the Builder RightPalette Built-ins tab both fetch from `GET /builtins` backed by this table. This is distinct from `source_builtin_map`, which records which built-in steps are attached to a specific source's pipeline.
 
 ---
 
@@ -183,6 +197,43 @@ A run triggered from the Validations screen "By Function" sub-tab. Uses `POST /v
 ## result tag
 
 A small status badge on each pipeline canvas card in the Builder showing the outcome of the last run for that set: `success`, `issues` (validation failures present), or `error` (worker crash or transform failure). Tapping/clicking navigates to the Results screen.
+
+## source drawer collapsibility
+
+The source detail drawer (Data screen) has three collapsible sections. Default states:
+- **Details** (primary key, ingestion method, dates) — expanded by default.
+- **Columns** (column type rows, migration UI) — collapsed by default.
+- **Data** (row preview table) — collapsed by default.
+
+All three toggle on header click, using the same `›` / `∨` indicator pattern already in place for Columns.
+
+## module group collapsibility
+
+On the Functions screen, functions are grouped by their `module_path` file. Each group renders a file header (filename, full path, function count) followed by its function cards. Groups are expanded by default and can be collapsed by clicking the header — only the header remains visible when collapsed. All groups share independent collapsed state.
+
+## Settings nav placement
+
+The Settings nav item is pinned to the bottom of the left sidebar via `marginTop: "auto"` on its nav button. All other nav items (Data, Functions, Builder, Results) flow from the top. No divider separates Settings from the rest — the visual gap from `marginTop: "auto"` is sufficient.
+
+## Builder palette click-to-drawer
+
+The Builder RightPalette function and set cards are draggable onto the pipeline canvas. Clicking a card (without dragging) opens a read-only detail drawer:
+- **Function card** — opens the same `FunctionDrawer` used on the Functions screen (fetches `GET /functions/{id}`).
+- **Set card** — opens a `SetDetailDrawer`: set name, description, ordered member functions with type badges and active/inactive status. Fetches `GET /function-sets/{set_id}`. Read-only — no edit/delete/run controls.
+
+Drag affordance is preserved alongside click.
+
+## source_scalar_map
+
+A table that persists scalar parameter overrides per source. Shape: `source_scalar_map (scalar_map_id UUID4, source_id FK, param_id FK, value VARCHAR)`. One row per (source × param) pair; upserted when the user sets or changes a value. `value` is stored as VARCHAR and cast to the param's declared `param_type` at run time. If no row exists for a given (source, param) pair, the Python default for that parameter is used. Brings the v2 scalar store forward into v1.
+
+## pipeline step editability
+
+All pipeline steps on the Builder canvas are editable after attach. Each `StepCard` has an edit icon that re-opens the parameter mapping modal (`PendingStepCard`) pre-populated with the step's current column bindings and scalar values. Saving an edit calls `PATCH /pipelines/{source_id}/steps/{source_function_map_id}` extended to accept updated `bindings` and `scalar_values`. The scalar values are written to `source_scalar_map`; column bindings update `alias_map`.
+
+## scalar param visibility in attach modal
+
+Scalar parameters (`int`, `float`, `bool`) are included in the dry-run response (`GET /pipelines/{source_id}/steps?dry_run=true`) via a path separate from `_SUGGEST_TYPES`, which governs column-binding suggestions only and is not modified. The attach modal renders a free-text input for each scalar param with a type hint label (e.g. `int`) and a note that the entered value must match the expected type. If left blank, the Python default is used.
 
 ## five-screen app layout
 
