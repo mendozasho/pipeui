@@ -316,10 +316,10 @@ cleanup from REFACTOR_PLAN.md before Phase B adds more routes.*
 
 ---
 
-### Phase F2 — Transforms Tab within Results Screen
+### Phase F2 — Unified Results Screen with Cards *(complete)*
 
-- [ ] **Transforms tab** — Full implementation of the post-run transformed table view within the Results screen. In v1: session-only ephemeral tables (not persisted to main DB). Shows sources that have been run through transformations, ready to combine with other reports or export. Fills in the Phase E2 Results screen placeholder.
-  *Deferred to v2:* persistent staging table so results survive across sessions; cross-source join UI.
+- [x] **Unified Results screen** (#94–#97) — Replaced the F1 dropdown+run-button model with a flat card grid (most-recent-first). Every run — validation or transform, triggered from Data, Functions, or Builder — appends a result card. Cards are tagged `validation` or `transform`, show a summary on the face, and expand to reveal per-function or per-source detail. Cards are selectable for mass export; each card also has an inline Export button. Export formats: CSV and xlsx via SheetJS. Run triggers moved to Data page (per-source Run button) and Functions page (per-function and per-set Run buttons). Builder run buttons removed; result tags preserved and deep-link to Results. New backend: `run_type=all` on `POST /pipelines/{id}/run`; `GET /pipelines/{id}/staging`; `POST /pipelines/run-set?set_id={id}`. Cards are session-only (lost on refresh). `run_id` (UUID4) assigned frontend-side as card identity.
+  *Deferred to v2:* persistent staging tables; cross-source join UI.
 
 ---
 
