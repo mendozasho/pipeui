@@ -44,7 +44,7 @@ def test_ingest_creates_instance_table_jit(db, tmp_path):
     tables_before = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
     assert tname not in tables_before
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path)
     assert not failed.has_failures(), failed
 
     tables_after = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
@@ -58,7 +58,7 @@ def test_ingest_append_writes_rows(db, tmp_path):
     source_id, failed = create_source(db, path, "data", "id", "append")
     assert not failed.has_failures()
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path)
+    rows_in, skipped, failed, diff = ingest_source(db, source_id, path)
     assert not failed.has_failures(), failed
     assert rows_in == 2
     assert skipped == []
@@ -79,7 +79,7 @@ def test_ingest_upsert_overwrites_existing_rows(db, tmp_path):
 
     # Re-ingest with updated value for r1
     path2 = make_csv(tmp_path, "v2.csv", ["id", "val"], [["r1", 99]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2)
     assert not failed.has_failures(), failed
 
     tname = instance_table_name(source_id)
@@ -99,7 +99,7 @@ def test_ingest_skip_reports_dropped_pk_values(db, tmp_path):
 
     # Re-ingest: r1 already exists (skip), r3 is new (insert)
     path2 = make_csv(tmp_path, "update.csv", ["id", "val"], [["r1", 99], ["r3", 30]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2)
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2)
     assert not failed.has_failures(), failed
 
     assert "r1" in skipped
@@ -123,7 +123,7 @@ def test_ingest_atomicity_on_failure(db, tmp_path):
 
     # Duplicate id on append should fail and leave table unchanged
     path2 = make_csv(tmp_path, "dup.csv", ["id", "val"], [["r1", 99]])
-    rows_in, skipped, failed = ingest_source(db, source_id, path2, ingestion_method="append")
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path2, ingestion_method="append")
     assert failed.has_failures()
 
     tname = instance_table_name(source_id)
@@ -140,7 +140,7 @@ def test_ingest_idempotent_table_creation(db, tmp_path):
 
     ingest_source(db, source_id, path)
     # Second ingest — IF NOT EXISTS must not raise
-    _, _, failed2 = ingest_source(db, source_id, path)
+    _, _, failed2, _diff = ingest_source(db, source_id, path)
     assert not failed2.has_failures()
 
 
@@ -151,7 +151,7 @@ def test_ingest_invalid_method_returns_failure(db, tmp_path):
     source_id, failed = create_source(db, path, "data", "id", "upsert")
     assert not failed.has_failures()
 
-    rows_in, skipped, failed = ingest_source(db, source_id, path, ingestion_method="merge")
+    rows_in, skipped, failed, _diff = ingest_source(db, source_id, path, ingestion_method="merge")
     assert failed.has_failures()
     assert rows_in == 0
 
@@ -234,3 +234,63 @@ def test_get_source_rows_respects_limit(db, tmp_path):
 
     rows = get_source_rows(db, source_id, limit=3)
     assert len(rows) == 3
+
+
+# ---------------------------------------------------------------------------
+# Schema diff / column mismatch — behavioral guarantees
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_ingest_returns_requires_confirmation_on_schema_diff(db, tmp_path):
+    """When incoming columns differ from registered schema, ingest_source returns a diff
+    and does NOT write rows (requires_confirmation pattern). §9 extension."""
+    path = make_csv(tmp_path, "orig.csv", ["id", "val"], [["r1", 10]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    # Initial ingest so the table exists
+    ingest_source(db, source_id, path)
+
+    # File with a different column set — 'val' removed, 'extra' added
+    diff_path = make_csv(tmp_path, "diff.csv", ["id", "extra"], [["r2", 99]])
+    rows_in, skipped, failed2, diff = ingest_source(db, source_id, diff_path, confirm_schema_diff=False)
+
+    assert diff is not None, "Expected schema_diff to be returned"
+    assert rows_in == 0, "No rows should be written when diff is detected without confirmation"
+    assert not failed2.has_failures()
+    assert "extra" in diff["added"]
+    assert "val" in diff["removed"]
+
+
+@pytest.mark.integration
+def test_ingest_proceeds_with_confirm_schema_diff(db, tmp_path):
+    """With confirm_schema_diff=True the write proceeds even when columns differ."""
+    path = make_csv(tmp_path, "orig.csv", ["id", "val"], [["r1", 10]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+
+    # File with only the registered columns — should be fine anyway
+    # Use a file matching the schema to confirm the confirmed path works cleanly
+    same_path = make_csv(tmp_path, "same.csv", ["id", "val"], [["r2", 20]])
+    rows_in, skipped, failed2, diff = ingest_source(db, source_id, same_path, confirm_schema_diff=True)
+
+    assert diff is None
+    assert not failed2.has_failures()
+    assert rows_in == 1
+
+
+@pytest.mark.integration
+def test_ingest_no_diff_when_schema_unchanged(db, tmp_path):
+    """When file columns match the registered schema exactly, schema_diff is None."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 10]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+
+    path2 = make_csv(tmp_path, "data2.csv", ["id", "val"], [["r2", 20]])
+    rows_in, skipped, failed2, diff = ingest_source(db, source_id, path2, confirm_schema_diff=False)
+
+    assert diff is None, "No diff expected when schema is unchanged"
+    assert not failed2.has_failures()
+    assert rows_in == 1

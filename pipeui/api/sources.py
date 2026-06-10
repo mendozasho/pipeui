@@ -255,6 +255,7 @@ async def ingest_source_route(
     source_id: str,
     file: UploadFile,
     ingestion_method: str | None = Form(default=None),
+    confirm_schema_diff: bool = Form(default=False),
     conn: duckdb.DuckDBPyConnection = Depends(get_conn),
 ):
     try:
@@ -274,12 +275,17 @@ async def ingest_source_route(
         tmp_path = tmp.name
 
     try:
-        rows_ingested, skipped_pks, failed = ingest_source(
+        rows_ingested, skipped_pks, failed, schema_diff = ingest_source(
             conn=conn,
             source_id=sid,
             file_path=tmp_path,
             ingestion_method=ingestion_method,
+            confirm_schema_diff=confirm_schema_diff,
         )
+
+        # Schema diff detected and not confirmed — ask the frontend for confirmation
+        if schema_diff is not None:
+            return {"requires_confirmation": True, "schema_diff": schema_diff}
 
         if failed.has_failures():
             reasons = [reason for _, reason in failed.failures]
