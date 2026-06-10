@@ -9,7 +9,7 @@ import duckdb
 
 from pipeui.ids import content_hash_id
 from pipeui.schema.constants import IngestionMethod, DUCKDB_TO_PYTHON
-from pipeui.duckdb import infer_column_types, get_db_path
+from pipeui.db import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern
 from pipeui.workflow.staging import CreateFlowCache
 from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, SourceRegistryUpdate, ColumnRegistryEntry

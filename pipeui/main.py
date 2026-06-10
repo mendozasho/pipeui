@@ -12,7 +12,7 @@ from pipeui.api.settings import router as settings_router
 from pipeui.helpers import load_settings
 from pipeui.api.sources import router as sources_router
 from pipeui.api.validations import router as validations_router
-from pipeui.duckdb import get_connection, create_schema
+from pipeui.db import get_connection, create_schema
 
 # frontend/ is a sibling of the pipeui package, two levels up from this file
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"

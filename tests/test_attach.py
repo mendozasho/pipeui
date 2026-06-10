@@ -35,7 +35,7 @@ import pytest
 import datetime
 
 from pipeui.ids import content_hash_id
-from pipeui.duckdb import create_schema, get_connection
+from pipeui.db import create_schema, get_connection
 from pipeui.workflow.attach import AttachBinding, attach_function, suggest_bindings
 from tests.conftest import make_registered_source
 
