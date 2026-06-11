@@ -36,9 +36,9 @@ Each agent prompt must include:
 - An instruction to read the full issue body before writing any code.
 - An instruction to pull latest main and rebase before starting.
 - The commit format rule: `git commit -m "subject" -m "body"` with repeated `-m` flags — no heredoc syntax, no session URLs.
-- An instruction to check off acceptance criteria on the GitHub issue before opening a PR.
-- An instruction to open a PR with `Closes #N` in the body, then verify it is open.
-- **Critically:** the agent must push its branch and open a PR, but must NOT merge to main.
+- An instruction to check off acceptance criteria on the GitHub issue before finishing.
+- **An explicit instruction to push the feature branch ONLY — do NOT open a PR.** The integrator opens the single PR. Agents that open their own PRs create noise the reviewer should not have to close.
+- An instruction to verify the branch was pushed successfully before ending.
 
 Wait for all agents to complete before proceeding to step 3.
 
@@ -72,6 +72,12 @@ The integrator agent also uses `isolation: "worktree"`. Its job:
 6. If tests fail, diagnose and fix on the `wave/N` branch. Do not open the PR until tests pass.
 7. Push `wave/N` and open one PR: `wave/N → main`. PR title: `wave/N: <comma-separated issue titles>`. PR body: list each closed issue with `Closes #N`, plus a summary of what the wave delivers.
 8. Verify the PR is open.
+9. **Delete each feature branch from the remote** now that it is captured in `wave/N`:
+   ```bash
+   git push origin --delete <feature-branch-1>
+   git push origin --delete <feature-branch-2>
+   ```
+   Do this after confirming the PR is open. If a delete fails, note it in the report but do not block the PR.
 
 ### 5. Report back
 
@@ -83,7 +89,7 @@ Return a summary to the user:
 
 ## Rules
 
-- **Never merge to main directly.** Implementation agents open PRs from their feature branch; the integrator opens a PR from `wave/N`. Only the user merges to main.
+- **Never merge to main directly.** Implementation agents push feature branches only — no PRs. The integrator opens the single PR from `wave/N`. Only the user merges to main.
 - **Always use `isolation: "worktree"` for every agent that commits or pushes.** Read-only research agents do not need it.
 - **Session URLs must never appear in commit messages.** Strip or omit them.
 - **Sequential slices are not waves.** If the issues you were given have a dependency chain (A blocks B blocks C), they are not a wave — they are a sequential pipeline. Run them one at a time, merging each before starting the next, or ask the user how they want to proceed.
