@@ -1,6 +1,6 @@
 ---
 name: wave
-description: Orchestrate a wave of parallel implementation agents — one per issue — then merge all feature branches into a single wave/N branch and open one PR to main. Use when the user wants to kick off a batch of ready-for-agent issues as a wave.
+description: Orchestrate a wave of parallel implementation agents — one per issue — then merge all feature branches into a single release/<short-slug> branch and open one PR to main. Use when the user wants to kick off a batch of ready-for-agent issues as a wave.
 ---
 
 # Wave
@@ -57,22 +57,22 @@ If any branch is missing, surface the failure to the user before continuing.
 
 The integrator agent also uses `isolation: "worktree"`. Its job:
 
-1. Determine the next wave number: check existing `wave/N` branches and increment (`git branch -r | grep wave/`).
-2. Create `wave/N` from the latest main:
+1. Derive a short slug from the issue titles (e.g. `pr163-bug-fixes`, `results-screen-polish`). Never use positional names like `wave-1` or `wave-2`.
+2. Create `release/<short-slug>` from the latest main:
    ```bash
    git fetch origin main
-   git checkout -b wave/N origin/main
+   git checkout -b release/<short-slug> origin/main
    ```
-3. Merge each feature branch in dependency order (blockers first). For each:
+3. Merge each feature branch in dependency order (blockers first). Use the branch's actual prefix (`fix/` or `feat/`) as defined in the issue's `## Branch` section. For each:
    ```bash
-   git merge --no-ff origin/feat/<branch> -m "Merge feat/<branch> into wave/N"
+   git merge --no-ff origin/<fix-or-feat>/<branch> -m "Merge <fix-or-feat>/<branch> into release/<short-slug>"
    ```
 4. **Conflict resolution rule:** include ALL additions from ALL branches — never drop a component added by any branch. Conflicts in the same file are resolved by taking both sets of changes. If conflict intent is unclear, read the relevant issue bodies to understand what each branch intended, then apply both.
 5. Run the test suite: `pytest` (or the project's test command — check `pyproject.toml` or `Makefile`).
-6. If tests fail, diagnose and fix on the `wave/N` branch. Do not open the PR until tests pass.
-7. Push `wave/N` and open one PR: `wave/N → main`. PR title: `wave/N: <comma-separated issue titles>`. PR body: list each closed issue with `Closes #N`, plus a summary of what the wave delivers.
+6. If tests fail, diagnose and fix on the `release/<short-slug>` branch. Do not open the PR until tests pass.
+7. Push `release/<short-slug>` and open one PR: `release/<short-slug> → main`. PR title: `<short-slug>: <short description>`. PR body: list each closed issue with `Closes #N`, plus a summary of what the release delivers.
 8. Verify the PR is open.
-9. **Delete each feature branch from the remote** now that it is captured in `wave/N`:
+9. **Delete each feature branch from the remote** now that it is captured in `release/<short-slug>`:
    ```bash
    git push origin --delete <feature-branch-1>
    git push origin --delete <feature-branch-2>
@@ -82,14 +82,14 @@ The integrator agent also uses `isolation: "worktree"`. Its job:
 ### 5. Report back
 
 Return a summary to the user:
-- Which feature branches were merged into the wave branch.
+- Which feature branches were merged into the release branch.
 - Whether tests passed.
 - The PR URL.
 - Any issues that need the user's attention (failed tests, unresolved conflicts that require design decisions, etc.).
 
 ## Rules
 
-- **Never merge to main directly.** Implementation agents push feature branches only — no PRs. The integrator opens the single PR from `wave/N`. Only the user merges to main.
+- **Never merge to main directly.** Implementation agents push feature branches only — no PRs. The integrator opens the single PR from `release/<short-slug>`. Only the user merges to main.
 - **Always use `isolation: "worktree"` for every agent that commits or pushes.** Read-only research agents do not need it.
 - **Session URLs must never appear in commit messages.** Strip or omit them.
 - **Sequential slices are not waves.** If the issues you were given have a dependency chain (A blocks B blocks C), they are not a wave — they are a sequential pipeline. Run them one at a time, merging each before starting the next, or ask the user how they want to proceed.

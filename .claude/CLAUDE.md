@@ -72,7 +72,11 @@ Every unit of work follows this four-step sequence. Do not skip steps.
 4. **One branch per unit of work.** Each piece of work happens on its own branch. When the work is complete, open a pull request with `Closes #<issue-number>` in the body so the issue is auto-closed on merge.
    - **Never push directly to main** — not for code, not for docs, not for skill updates. Every push requires a branch and a PR tied to a GitHub issue.
    - **Every change needs a ticket.** If there is no issue for it, don't push it. Doc and skill changes are not exempt.
-   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
+   - **Branch and PR naming convention:**
+     - Single fix: `fix/<short-slug>` → PR title `fix(<scope>): what changed`
+     - Single feature: `feat/<short-slug>` → PR title `feat(<scope>): what was added`
+     - Wave integrator (multiple fixes/features merged): `release/<short-slug>` → PR title `<short-slug>: short description of what the release delivers`
+     - Never use generic positional names like `wave/1`, `wave/2`, or `wave/a` — these give no context when reviewing PRs.
    - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
 5. **No sensitive or personal information — ever.** Commit messages, PR bodies, issue bodies, and code comments must contain only technical content relevant to the change. This rule has no exceptions:
    - No session or chat URLs
@@ -99,10 +103,10 @@ Every unit of work follows this four-step sequence. Do not skip steps.
     - **Parallel agents** — each implementation agent works with `isolation:
       "worktree"`, pushes to its own feature branch, and opens no PR against main.
     - **Wave integrator** — after all agents complete, a single integrator agent
-      merges all feature branches into one `wave/N` branch (e.g. `wave2`), resolves
+      merges all feature branches into one `release/<short-slug>` branch, resolves
       any conflicts using the issue specs and design intent (include all additions
       from all branches; never drop a component added by any branch), runs `pytest`,
-      and opens one PR: `wave/N → main`.
+      and opens one PR: `release/<short-slug> → main`.
     - **One PR to review** — the user reviews and merges a single clean diff rather
       than resolving conflicts across multiple PRs.
     - When a slice is blocked by another, surface it explicitly and wait for user
