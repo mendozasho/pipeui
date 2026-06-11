@@ -143,6 +143,7 @@ function ScreenSettings({ flash }) {
   const [saving, setSaving] = useState(false);
   const [restartBanner, setRestartBanner] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [pathsError, setPathsError] = useState(null);
 
   useEffect(() => {
     fetch("/settings")
@@ -169,20 +170,41 @@ function ScreenSettings({ flash }) {
     applyDensity(d);
   }
 
-  function handleAddPath() {
+  const [addPathError, setAddPathError] = useState(null);
+  const [addPathChecking, setAddPathChecking] = useState(false);
+
+  async function handleAddPath() {
     const trimmed = newPathInput.trim();
-    if (trimmed && !functionsPaths.includes(trimmed)) {
-      setFunctionsPaths([...functionsPaths, trimmed]);
+    if (!trimmed) return;
+    if (functionsPaths.includes(trimmed)) { setNewPathInput(""); return; }
+    setAddPathChecking(true);
+    setAddPathError(null);
+    try {
+      const res = await fetch(`/settings/browse?path=${encodeURIComponent(trimmed)}`);
+      const data = await res.json();
+      if (data.error) {
+        setAddPathError("Path does not exist or is not a directory.");
+        setAddPathChecking(false);
+        return;
+      }
+      setFunctionsPaths(prev => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+      setPathsError(null);
+      setNewPathInput("");
+    } catch {
+      setAddPathError("Could not validate path.");
+    } finally {
+      setAddPathChecking(false);
     }
-    setNewPathInput("");
   }
 
   function handleRemovePath(path) {
     setFunctionsPaths(functionsPaths.filter(p => p !== path));
+    setPathsError(null);
   }
 
   async function handleSave() {
     setSaving(true);
+    setPathsError(null);
     const patch = {};
     if (accent !== undefined) patch.accent = accent;
     if (density !== undefined) patch.density = density;
@@ -203,6 +225,8 @@ function ScreenSettings({ flash }) {
         } else {
           flash("Settings saved", "ok");
         }
+      } else if (data.invalid_paths) {
+        setPathsError(data.invalid_paths);
       } else {
         flash("Failed to save settings", "error");
       }
@@ -320,21 +344,39 @@ function ScreenSettings({ flash }) {
             ))}
           </div>
 
+          {pathsError && (
+            <div style={{ marginBottom: "var(--sp-3)" }}>
+              <InlineError>
+                The following paths do not exist or are not directories:{" "}
+                {pathsError.map((p, i) => (
+                  <span key={p} style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                    {p}{i < pathsError.length - 1 ? ", " : ""}
+                  </span>
+                ))}
+              </InlineError>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 6 }}>
             <input
               value={newPathInput}
-              onChange={e => setNewPathInput(e.target.value)}
+              onChange={e => { setNewPathInput(e.target.value); setAddPathError(null); }}
               onKeyDown={e => e.key === "Enter" && handleAddPath()}
               placeholder="/path/to/functions"
               style={{
                 flex: 1, padding: "7px 10px",
-                background: "var(--panel-3)", border: "1px solid var(--border)",
+                background: "var(--panel-3)", border: `1px solid ${addPathError ? "var(--bad)" : "var(--border)"}`,
                 borderRadius: "var(--radius)", color: "var(--text)", fontSize: 13,
               }}
             />
             <Btn variant="secondary" onClick={() => setShowPicker(true)}>Browse…</Btn>
-            <Btn variant="secondary" onClick={handleAddPath}>Add</Btn>
+            <Btn variant="secondary" onClick={handleAddPath} disabled={addPathChecking}>
+              {addPathChecking ? "…" : "Add"}
+            </Btn>
           </div>
+          {addPathError && (
+            <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 4 }}>{addPathError}</div>
+          )}
           <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 5 }}>
             Directories the app will scan for .py function modules.
           </div>

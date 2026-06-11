@@ -765,8 +765,8 @@ class TestGetFunctionDetail:
             [uuid.uuid4(), set_id, fn_id, 0],
         )
         conn.execute(
-            "INSERT INTO source_function_map VALUES (?, ?, ?)",
-            [uuid.uuid4(), source_id, set_id],
+            "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+            [uuid.uuid4(), source_id, set_id, 0, "append"],
         )
 
         res = client.get(f"/functions/{fn_id}")
@@ -809,8 +809,8 @@ class TestGetFunctionDetail:
                 [uuid.uuid4(), set_id, fn_id, 0],
             )
             conn.execute(
-                "INSERT INTO source_function_map VALUES (?, ?, ?)",
-                [uuid.uuid4(), sid, set_id],
+                "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+                [uuid.uuid4(), sid, set_id, 0, "append"],
             )
 
         res = client.get(f"/functions/{fn_id}")

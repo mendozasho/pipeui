@@ -14,7 +14,9 @@ def cmd_init():
         CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
         created.append(str(CONFIG_PATH))
     if not DEFAULT_DB.exists():
-        DEFAULT_DB.touch()
+        import duckdb
+        conn = duckdb.connect(str(DEFAULT_DB))
+        conn.close()
         created.append(str(DEFAULT_DB))
     if created:
         print(f"Initialised: {', '.join(created)}")

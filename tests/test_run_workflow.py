@@ -531,3 +531,136 @@ def test_run_type_set_executes_only_specified_set(db, tmp_path):
     result = run_pipeline(db, source_id, "set", set_id=set_a_id)
     assert len(result["steps"]) == 1
     assert result["steps"][0]["source_function_map_id"] == str(sfm_a)
+
+
+# ---------------------------------------------------------------------------
+# Element-wise execution for column_backed (str) validation functions
+# ---------------------------------------------------------------------------
+
+def _seed_str_validation_step(db, source_id, column_id, fn_name, module_path, position=1):
+    """Seed a validation function with a str-typed param bound to column_id."""
+    fn_id = uuid.uuid4()
+    fn_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, fn_ch, "scalar", fn_name, None, "bool",
+         f"value: str", "validation", module_path, True],
+    )
+    param_id = uuid.uuid4()
+    param_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        [param_id, param_ch, "value", "str", fn_id],
+    )
+
+    set_id = uuid.uuid4()
+    set_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, set_ch, fn_name, None],
+    )
+    set_map_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+        [set_map_id, set_id, fn_id, 0],
+    )
+
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+        [sfm_id, source_id, set_id, position, "append"],
+    )
+
+    alias_id = content_hash_id("alias_map", str(param_id), str(column_id), str(source_id))
+    db.execute(
+        "INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+        [alias_id, column_id, param_id, source_id],
+    )
+    return sfm_id, set_id
+
+
+def _seed_unbound_series_validation_step(db, source_id, fn_name, module_path, position=0):
+    """Seed a validation function with an unbound pd.Series param."""
+    fn_id = uuid.uuid4()
+    fn_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
+         "data: pd.Series", "validation", module_path, True],
+    )
+    param_id = uuid.uuid4()
+    param_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        [param_id, param_ch, "data", "pd.Series", fn_id],
+    )
+
+    set_id = uuid.uuid4()
+    set_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, set_ch, fn_name, None],
+    )
+    set_map_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+        [set_map_id, set_id, fn_id, 0],
+    )
+
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+        [sfm_id, source_id, set_id, position, "append"],
+    )
+    # No alias_map row — param is intentionally unbound
+    return sfm_id, set_id
+
+
+@pytest.mark.integration
+def test_str_bool_validation_column_backed_element_wise(db, tmp_path):
+    """Guarantee: str->bool validation bound to a column runs element-wise.
+    rows_passed + rows_failed must equal total rows in the source.
+    """
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'id'",
+        [source_id],
+    ).fetchone()[0]
+
+    # str -> bool: checks if value is not 'r1'
+    fn_path = tmp_path / "is_not_r1.py"
+    fn_path.write_text("def is_not_r1(value: str) -> bool:\n    return value != 'r1'\n")
+    _seed_str_validation_step(db, source_id, col_id, "is_not_r1", str(fn_path), position=0)
+
+    result = run_pipeline(db, source_id, "validations")
+    assert result is not None
+    steps = result["steps"]
+    assert len(steps) == 1
+    step = steps[0]
+    assert step["status"] == "ok", f"step failed: {step.get('error')}"
+    # 3 rows total: r1 fails, r2 and r3 pass
+    assert step["rows_passed"] + step["rows_failed"] == 3
+    assert step["rows_passed"] == 2
+    assert step["rows_failed"] == 1
+
+
+@pytest.mark.integration
+def test_unbound_series_param_fails_with_unbound_message(db, tmp_path):
+    """Guarantee: pd.Series param with no column binding produces status='failed'
+    and error message containing 'unbound'.
+    """
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+
+    fn_path = tmp_path / "check_series.py"
+    fn_path.write_text("import pandas as pd\ndef check_series(data: pd.Series) -> pd.Series:\n    return data > 0\n")
+    _seed_unbound_series_validation_step(db, source_id, "check_series", str(fn_path), position=0)
+
+    result = run_pipeline(db, source_id, "validations")
+    assert result is not None
+    steps = result["steps"]
+    assert len(steps) == 1
+    step = steps[0]
+    assert step["status"] == "failed"
+    assert "unbound" in (step.get("error") or "").lower()

@@ -516,18 +516,24 @@ function SourcesExpand({ sources }) {
 }
 
 // ── Collect export rows for a card ────────────────────────────────────────────
+// For function-triggered cards: one row per source with pass/fail counts.
+function collectFunctionRunExportRows(card) {
+  return (card.sources || []).map(src => {
+    const passed = src.rows_passed ?? 0;
+    const failed = src.rows_failed ?? 0;
+    const total = passed + failed;
+    return {
+      source_name: src.source_name || src.source_id || "",
+      rows_passed: passed,
+      rows_failed: failed,
+      pass_rate: total > 0 ? (passed / total * 100).toFixed(1) + "%" : null,
+    };
+  });
+}
+
 function collectValidationExportRows(card) {
-  // Function/set-scoped cards: aggregate failing_rows from per-source steps
-  if (card.trigger === "function" && card.sources) {
-    const allRows = [];
-    for (const src of card.sources) {
-      for (const step of (src.steps || [])) {
-        if (step.failing_rows && step.failing_rows.length > 0) {
-          allRows.push(...step.failing_rows);
-        }
-      }
-    }
-    return allRows;
+  if (card.trigger === "function") {
+    return collectFunctionRunExportRows(card);
   }
   const steps = card.steps || [];
   const allRows = [];
@@ -537,6 +543,40 @@ function collectValidationExportRows(card) {
     }
   }
   return allRows;
+}
+
+// Returns one summary object per step: { function_name, rows_passed, rows_failed, pass_rate }
+// pass_rate is a decimal (e.g. 1.0, 0.95) — not a percentage string.
+function collectValidationSummaryRows(card) {
+  if (card.trigger === "function" && card.sources) {
+    const rows = [];
+    for (const src of card.sources) {
+      for (const step of (src.steps || [])) {
+        const passed = step.rows_passed ?? 0;
+        const failed = step.rows_failed ?? 0;
+        const total = passed + failed;
+        rows.push({
+          function_name: step.function_name || step.set_name || "",
+          rows_passed: passed,
+          rows_failed: failed,
+          pass_rate: total > 0 ? passed / total : null,
+        });
+      }
+    }
+    return rows;
+  }
+  const steps = card.steps || [];
+  return steps.map(step => {
+    const passed = step.rows_passed ?? 0;
+    const failed = step.rows_failed ?? 0;
+    const total = passed + failed;
+    return {
+      function_name: step.function_name || step.set_name || "",
+      rows_passed: passed,
+      rows_failed: failed,
+      pass_rate: total > 0 ? passed / total : null,
+    };
+  });
 }
 
 // ── Single result card ────────────────────────────────────────────────────────
@@ -552,8 +592,12 @@ function ResultCard({ card, selected, onToggleSelect }) {
   function handleExport(format) {
     setShowExportPicker(false);
     if (card.card_type === "validation") {
-      const rows = collectValidationExportRows(card);
-      EXPORTERS[format](rows, exportFilename(card.source_name, card.card_type, "").slice(0, -1));
+      const label = sanitiseFilename(card.function_name || card.set_name || card.source_name);
+      const exportRows = collectValidationExportRows(card);
+      if (exportRows.length > 0) {
+        EXPORTERS[format](exportRows, `${label}_${todayStr()}_validation`);
+      }
+      // No rows — export is disabled; button should not reach here
     } else {
       // Transform: fetch staging if not cached
       if (stagingRowsCache) {
@@ -572,6 +616,19 @@ function ResultCard({ card, selected, onToggleSelect }) {
 
   // Compute filename stems cleanly
   const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
+  const isFunctionTriggered = card.trigger === "function";
+  // Function-triggered cards always have source summary rows to export.
+  // Source-triggered validation cards only enable export when there are failing rows.
+  const hasExportRows = isFunctionTriggered
+    ? (card.sources || []).length > 0
+    : card.card_type === "validation"
+      ? collectValidationExportRows(card).length > 0
+      : true;
+  const exportDisabled = !hasExportRows;
+  const exportLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
+  const exportStem = card.card_type === "validation"
+    ? `${exportLabel}_${todayStr()}_validation`
+    : stem;
 
   return (
     <div style={{
@@ -652,18 +709,27 @@ function ResultCard({ card, selected, onToggleSelect }) {
         ) : (
           <>
             <button
-              onClick={e => { e.stopPropagation(); setShowExportPicker(true); }}
+              onClick={e => { e.stopPropagation(); if (!exportDisabled) setShowExportPicker(true); }}
+              disabled={exportDisabled}
               style={{
                 padding: "3px 10px", fontSize: 11, fontWeight: 600,
-                background: "var(--panel-3)", color: "var(--text-2)",
-                border: "1px solid var(--border)", borderRadius: "var(--radius)", cursor: "pointer",
+                background: exportDisabled ? "var(--panel-2)" : "var(--panel-3)",
+                color: exportDisabled ? "var(--text-4)" : "var(--text-2)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                cursor: exportDisabled ? "not-allowed" : "pointer",
+                opacity: exportDisabled ? 0.5 : 1,
               }}
+              title={exportDisabled ? "No data to export" : undefined}
             >
               Export
             </button>
-            <span style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "monospace" }}>
-              {stem}.csv / .xlsx
-            </span>
+            {exportDisabled ? (
+              <span style={{ fontSize: 11, color: "var(--text-4)" }}>No data to export</span>
+            ) : (
+              <span style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "monospace" }}>
+                {exportStem}.csv / .xlsx
+              </span>
+            )}
           </>
         )}
       </div>
@@ -694,11 +760,23 @@ function ExportSelectedBar({ selectedIds, cards, onClear }) {
   function handleExport() {
     const selectedCards = cards.filter(c => selectedIds.has(c.run_id));
     for (const card of selectedCards) {
-      const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
       if (card.card_type === "validation") {
-        const rows = collectValidationExportRows(card);
-        EXPORTERS[format](rows, stem);
+        const bulkLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
+        if (card.trigger === "function") {
+          const rows = collectFunctionRunExportRows(card);
+          if (rows.length > 0) EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
+          continue;
+        }
+        if ((card.steps || []).length === 0) continue;
+        const failingRows = collectValidationExportRows(card);
+        if (failingRows.length > 0) {
+          EXPORTERS[format](failingRows, `${bulkLabel}_${todayStr()}_validation`);
+        } else {
+          const summaryRows = collectValidationSummaryRows(card);
+          EXPORTERS[format](summaryRows, `${bulkLabel}_${todayStr()}_validation_summary`);
+        }
       } else {
+        const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
         fetch(`/pipelines/${card.source_id}/staging`)
           .then(r => r.json())
           .then(data => EXPORTERS[format](data.rows, stem))

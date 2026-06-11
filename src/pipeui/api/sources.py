@@ -76,7 +76,7 @@ def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 def list_sources(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
     rows = _source_rows(conn)
     for row in rows:
-        detail = get_source_detail(conn, uuid.UUID(row["source_id"]))
+        detail = get_source_detail(conn, uuid.UUID(row["source_id"]), include_functions=False)
         row["row_count"] = detail["row_count"] if detail else 0
     return rows
 
@@ -141,7 +141,7 @@ def get_source(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
-    detail = get_source_detail(conn, sid)
+    detail = get_source_detail(conn, sid, include_functions=True)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
     return detail

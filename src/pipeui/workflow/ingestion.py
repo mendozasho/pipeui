@@ -6,7 +6,9 @@ from pathlib import Path
 
 import duckdb
 
-from pipeui.schema.constants import IngestionMethod
+import re
+
+from pipeui.schema.constants import DUCKDB_TO_PYTHON, IngestionMethod
 from pipeui.sql_user_table import build_create_table_sql, instance_table_name
 from pipeui.validation.fails import FailedRegistryEntry
 
@@ -34,6 +36,16 @@ def _load_to_temp(conn: duckdb.DuckDBPyConnection, file_path: str, temp_name: st
         raise ValueError(f"Unsupported file extension: {ext!r}")
 
 
+def _py_type(raw: str) -> type:
+    """Map a raw DuckDB type string to its Python equivalent via DUCKDB_TO_PYTHON.
+
+    Strips parameterization first (e.g. VARCHAR(100) → VARCHAR).
+    Unmapped types fall back to str (same as VARCHAR).
+    """
+    base = re.split(r"[\s(]", raw.upper())[0]
+    return DUCKDB_TO_PYTHON.get(base, str)
+
+
 def _diff_schema(
     registered_columns: list[tuple[str, str]],
     incoming_columns: list[tuple[str, str]],
@@ -42,16 +54,20 @@ def _diff_schema(
 
     Returns a dict with keys 'added', 'removed', 'type_changes'.
     All lists are empty when there is no mismatch.
+    Both sides are compared as Python types via DUCKDB_TO_PYTHON so aliases
+    (e.g. INTEGER vs BIGINT, TEXT vs VARCHAR) do not produce false positives.
     """
-    registered = {name: ctype for name, ctype in registered_columns}
-    incoming = {name: ctype for name, ctype in incoming_columns}
+    registered_raw = {name: ctype for name, ctype in registered_columns}
+    incoming_raw = {name: ctype for name, ctype in incoming_columns}
+    registered_py = {name: _py_type(ctype) for name, ctype in registered_columns}
+    incoming_py = {name: _py_type(ctype) for name, ctype in incoming_columns}
 
-    added = [name for name in incoming if name not in registered]
-    removed = [name for name in registered if name not in incoming]
+    added = [name for name in incoming_raw if name not in registered_raw]
+    removed = [name for name in registered_raw if name not in incoming_raw]
     type_changes = [
-        {"column": name, "from": registered[name], "to": incoming[name]}
-        for name in incoming
-        if name in registered and incoming[name] != registered[name]
+        {"column": name, "from": registered_raw[name], "to": incoming_raw[name]}
+        for name in incoming_raw
+        if name in registered_raw and registered_py[name] != incoming_py[name]
     ]
 
     return {"added": added, "removed": removed, "type_changes": type_changes}
@@ -213,11 +229,17 @@ def get_source_rows(
 def get_source_detail(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
+    include_functions: bool = False,
 ) -> dict | None:
     """Return per-source detail including row_count and columns for GET /sources/{id}.
 
     Shaped for both the Data screen drawer and Phase E pipeline binding.
     row_count is 0 when no data has been ingested yet (instance table not created).
+
+    When include_functions=True, adds a 'functions' field with each attached function's
+    function_name, function_type, and set_name, ordered by source_function_map.position
+    then function_set_map.position. Pass include_functions=False on list endpoints to
+    avoid an N+1 query per source.
     """
     row = conn.execute(
         """
@@ -255,7 +277,7 @@ def get_source_detail(
     except Exception:
         distinct_pk_count = None
 
-    return {
+    detail: dict = {
         "source_id": str(row[0]),
         "source_name": row[1],
         "date_ingested": row[2].isoformat() if row[2] else None,
@@ -269,3 +291,23 @@ def get_source_detail(
             for c in col_rows
         ],
     }
+
+    if include_functions:
+        fn_rows = conn.execute(
+            """
+            SELECT fr.function_name, fr.function_type, fs.set_name
+            FROM source_function_map sfm
+            JOIN function_set fs ON fs.set_id = sfm.set_id
+            JOIN function_set_map fsm ON fsm.set_id = fs.set_id
+            JOIN function_registry fr ON fr.function_id = fsm.function_id
+            WHERE sfm.source_id = ?
+            ORDER BY sfm.position ASC, fsm.position ASC
+            """,
+            [source_id],
+        ).fetchall()
+        detail["functions"] = [
+            {"function_name": r[0], "function_type": r[1], "set_name": r[2]}
+            for r in fn_rows
+        ]
+
+    return detail

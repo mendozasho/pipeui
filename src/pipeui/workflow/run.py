@@ -315,24 +315,48 @@ def _execute_transform_step(
             result = call_function(fn_source, fn_name, kwarg_name, current)
             bound_col = None
         else:
-            # Pass a series / scalar-column; use first bound column if available
+            # Dispatch by param_type + alias_map binding
             params = fn["params"]
             bound_col = None
             kwarg_name = params[0]["param_name"] if params else "data"
+            bound_param = None
+
             for p in params:
-                if p["param_type"] in ("pd.Series", "str") and p["bindings"]:
+                if p["param_type"] == "pd.Series":
+                    if p["bindings"]:
+                        bound_col = p["bindings"][0]
+                        kwarg_name = p["param_name"]
+                        bound_param = p
+                    else:
+                        # pd.Series with no binding — hard fail
+                        return working, f"param '{p['param_name']}' is unbound — attach a column binding first"
+                    break
+                elif p["param_type"] in ("str", "int", "float", "bool") and p["bindings"]:
                     bound_col = p["bindings"][0]
                     kwarg_name = p["param_name"]
+                    bound_param = p
                     break
 
             if bound_col is not None and bound_col in current.columns:
-                arg = current[bound_col]
+                column_series = current[bound_col]
+                if bound_param and bound_param["param_type"] in ("str", "int", "float", "bool"):
+                    # Element-wise dispatch via .apply() wrapper.
+                    # Pandas represents NULL as float NaN in object/string columns;
+                    # convert to None so user functions receive a proper null sentinel.
+                    wrapper = (
+                        "import pandas as _pd\n"
+                        "def __wrapper__(series):\n"
+                        f"    return series.apply(lambda v: {fn_name}(**{{'{kwarg_name}': None if _pd.isna(v) else v}}))\n"
+                    )
+                    wrapped_source = wrapper + "\n" + fn_source
+                    result = call_function(wrapped_source, "__wrapper__", "series", column_series)
+                else:
+                    result = call_function(fn_source, fn_name, kwarg_name, column_series)
             else:
-                # scalar or unbound — pass the full table
+                # Unbound scalar param — pass the full working table
                 arg = current
                 bound_col = None
-
-            result = call_function(fn_source, fn_name, kwarg_name, arg)
+                result = call_function(fn_source, fn_name, kwarg_name, arg)
 
         if isinstance(result, FailedFunctionEntry):
             errors = "; ".join(reason for _, reason in result.failures) if result.failures else "worker failed"
@@ -413,18 +437,83 @@ def _execute_validation_step(
                     if p["param_type"] == "pd.DataFrame":
                         kwarg_name = p["param_name"]
                         break
-                arg = original
+                result = call_function(fn_source, fn_name, kwarg_name, original)
             else:
                 bound_col = None
                 kwarg_name = params[0]["param_name"] if params else "data"
+                bound_param = None
+                unbound_series_param = None
+
                 for p in params:
-                    if p["param_type"] in ("pd.Series", "str") and p["bindings"]:
+                    if p["param_type"] == "pd.Series":
+                        if p["bindings"]:
+                            bound_col = p["bindings"][0]
+                            kwarg_name = p["param_name"]
+                            bound_param = p
+                        else:
+                            unbound_series_param = p
+                        break
+                    elif p["param_type"] in ("str", "int", "float", "bool") and p["bindings"]:
                         bound_col = p["bindings"][0]
                         kwarg_name = p["param_name"]
+                        bound_param = p
                         break
-                arg = original[bound_col] if (bound_col and bound_col in original.columns) else original
 
-            result = call_function(fn_source, fn_name, kwarg_name, arg)
+                if unbound_series_param is not None:
+                    # pd.Series with no binding — hard fail
+                    results.append({
+                        "function_id": fn_id,
+                        "function_name": fn_name,
+                        "set_name": set_name,
+                        "set_id": set_id,
+                        "function_type": "validation",
+                        "status": "failed",
+                        "rows_passed": None,
+                        "rows_failed": None,
+                        "pass_rate": None,
+                        "failing_rows": [],
+                        "error": f"param '{unbound_series_param['param_name']}' is unbound — attach a column binding first",
+                    })
+                    continue
+
+                if bound_col is not None and bound_col not in original.columns:
+                    # Bound column exists in alias_map but is missing from the loaded
+                    # instance table — likely a stale binding after a column rename or
+                    # migration. Hard-fail with a diagnostic rather than silently passing
+                    # the full DataFrame (which would produce wrong or 0/0 results).
+                    results.append({
+                        "function_id": fn_id,
+                        "function_name": fn_name,
+                        "set_name": set_name,
+                        "set_id": set_id,
+                        "function_type": "validation",
+                        "status": "failed",
+                        "rows_passed": None,
+                        "rows_failed": None,
+                        "pass_rate": None,
+                        "failing_rows": [],
+                        "error": f"bound column '{bound_col}' not found in source data — detach and re-attach the function to refresh the binding",
+                    })
+                    continue
+
+                if bound_col is not None:
+                    column_series = original[bound_col]
+                    if bound_param and bound_param["param_type"] in ("str", "int", "float", "bool"):
+                        # Element-wise dispatch via .apply() wrapper.
+                        # Pandas represents NULL as float NaN in object/string columns;
+                        # convert to None so user functions receive a proper null sentinel.
+                        wrapper = (
+                            "import pandas as _pd\n"
+                            "def __wrapper__(series):\n"
+                            f"    return series.apply(lambda v: {fn_name}(**{{'{kwarg_name}': None if _pd.isna(v) else v}}))\n"
+                        )
+                        wrapped_source = wrapper + "\n" + fn_source
+                        result = call_function(wrapped_source, "__wrapper__", "series", column_series)
+                    else:
+                        result = call_function(fn_source, fn_name, kwarg_name, column_series)
+                else:
+                    # Unbound scalar param — pass the full original table
+                    result = call_function(fn_source, fn_name, kwarg_name, original)
 
         if isinstance(result, FailedFunctionEntry):
             error_msg = "; ".join(reason for _, reason in result.failures) if result.failures else "worker failed"
@@ -464,10 +553,15 @@ def _execute_validation_step(
             failed = 0
             failing_mask = None
 
-        # Collect failing rows (full row dicts, uncapped)
+        # Collect failing rows (full row dicts, uncapped).
+        # DuckDB's .df() converts NULL to float NaN; replace with None for JSON safety.
         if failing_mask is not None and failed > 0:
             original_reset = original.reset_index(drop=True)
-            failing_rows = original_reset[failing_mask].to_dict(orient="records")
+            raw_rows = original_reset[failing_mask].to_dict(orient="records")
+            failing_rows = [
+                {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row.items()}
+                for row in raw_rows
+            ]
         else:
             failing_rows = []
 

@@ -269,3 +269,92 @@ def test_quirky_varchar_fallback_infers_varchar(db, tmp_path):
     rows_in, skipped, failed_ing, _schema_diff = ingest_source(db, source_id, str(p))
     assert not failed_ing.has_failures(), str(failed_ing)
     assert rows_in == 3
+
+
+# ---------------------------------------------------------------------------
+# get_source_detail — include_functions
+# ---------------------------------------------------------------------------
+
+def _seed_function_on_source(db, source_id, fn_name, fn_type, position=0):
+    """Attach a minimal function set to source_id. Returns set_id."""
+    from pipeui.ids import content_hash_id as _cid
+    fn_id = uuid.uuid4()
+    fn_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, fn_ch, "scalar", fn_name, None, "bool",
+         "value: str", fn_type, "/dev/null", True],
+    )
+    param_id = uuid.uuid4()
+    param_ch = uuid.uuid4()
+    db.execute(
+        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        [param_id, param_ch, "value", "str", fn_id],
+    )
+
+    set_id = uuid.uuid4()
+    set_ch = uuid.uuid4()
+    set_name = f"set_{fn_name}"
+    db.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, set_ch, set_name, None],
+    )
+    fsm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_set_map VALUES (?, ?, ?, ?)",
+        [fsm_id, set_id, fn_id, 0],
+    )
+
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+        [sfm_id, source_id, set_id, position, "append"],
+    )
+    return set_id, set_name
+
+
+@pytest.mark.integration
+def test_get_source_detail_functions_empty_when_none_attached(db, tmp_path):
+    """get_source_detail include_functions=True returns functions==[] when none attached."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 1]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+
+    detail = get_source_detail(db, source_id, include_functions=True)
+    assert detail is not None
+    assert detail["functions"] == []
+
+
+@pytest.mark.integration
+def test_get_source_detail_functions_returns_both_in_position_order(db, tmp_path):
+    """get_source_detail include_functions=True returns both functions in position order."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 1]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+
+    _, set_name_a = _seed_function_on_source(db, source_id, "fn_alpha", "validation", position=0)
+    _, set_name_b = _seed_function_on_source(db, source_id, "fn_beta", "transform", position=1)
+
+    detail = get_source_detail(db, source_id, include_functions=True)
+    assert detail is not None
+    fns = detail["functions"]
+    assert len(fns) == 2
+    assert fns[0]["function_name"] == "fn_alpha"
+    assert fns[0]["function_type"] == "validation"
+    assert fns[0]["set_name"] == set_name_a
+    assert fns[1]["function_name"] == "fn_beta"
+    assert fns[1]["function_type"] == "transform"
+    assert fns[1]["set_name"] == set_name_b
+
+
+@pytest.mark.integration
+def test_get_source_detail_no_functions_key_when_include_false(db, tmp_path):
+    """get_source_detail include_functions=False does not include 'functions' key."""
+    path = make_csv(tmp_path, "data.csv", ["id", "val"], [["r1", 1]])
+    source_id, failed = create_source(db, path, "data", "id", "upsert")
+    assert not failed.has_failures()
+    _seed_function_on_source(db, source_id, "fn_alpha", "validation", position=0)
+
+    detail = get_source_detail(db, source_id, include_functions=False)
+    assert detail is not None
+    assert "functions" not in detail

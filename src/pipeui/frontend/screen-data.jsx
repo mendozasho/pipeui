@@ -48,7 +48,40 @@ function RegisterModal({ file, onConfirm, onCancel }) {
   const { Btn, Icon } = window.__UI__;
   const [sourceName, setSourceName] = useState(file.name.replace(/\.[^.]+$/, ""));
   const [primaryKey, setPrimaryKey] = useState("");
+  const [columns, setColumns] = useState([]);
   const [ingestionMethod, setIngestionMethod] = useState("upsert");
+
+  // Parse column headers from the uploaded file client-side
+  React.useEffect(() => {
+    if (!file) return;
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (ext === "csv" || ext === "tsv") {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const sep = ext === "tsv" ? "\t" : ",";
+          const firstLine = e.target.result.split("\n")[0] || "";
+          const cols = firstLine.split(sep).map(c => c.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+          setColumns(cols);
+          if (cols.length > 0) setPrimaryKey(cols[0]);
+        } catch { /* fall back to text input */ }
+      };
+      reader.readAsText(file);
+    } else if (ext === "xlsx" || ext === "xls") {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          const cols = (rows[0] || []).map(String).filter(Boolean);
+          setColumns(cols);
+          if (cols.length > 0) setPrimaryKey(cols[0]);
+        } catch { /* fall back to text input */ }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  }, [file]);
 
   return (
     <div style={{
@@ -72,8 +105,14 @@ function RegisterModal({ file, onConfirm, onCancel }) {
               style={inputStyle} />
           </Field>
           <Field label="Primary key column">
-            <input value={primaryKey} onChange={e => setPrimaryKey(e.target.value)}
-              placeholder="e.g. id" style={inputStyle} />
+            {columns.length > 0 ? (
+              <select value={primaryKey} onChange={e => setPrimaryKey(e.target.value)} style={inputStyle}>
+                {columns.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            ) : (
+              <input value={primaryKey} onChange={e => setPrimaryKey(e.target.value)}
+                placeholder="e.g. id" style={inputStyle} />
+            )}
           </Field>
           <Field label="Ingestion method">
             <select value={ingestionMethod} onChange={e => setIngestionMethod(e.target.value)}
@@ -382,6 +421,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
   const [columnsExpanded, setColumnsExpanded] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(true);
   const [dataExpanded, setDataExpanded] = useState(false);
+  const [functionsExpanded, setFunctionsExpanded] = useState(false);
 
   async function loadDetail() {
     if (!sourceId) return;
@@ -412,6 +452,7 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
     setColumnsExpanded(false);
     setDetailsExpanded(true);
     setDataExpanded(false);
+    setFunctionsExpanded(false);
     if (!sourceId) return;
     (async () => {
       try {
@@ -585,6 +626,53 @@ function SourceDrawer({ sourceId, onClose, flash, onIngested }) {
                 ))}
               </Section>
             )}
+
+            {/* Functions */}
+            <div>
+              <div
+                onClick={() => setFunctionsExpanded(x => !x)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", userSelect: "none", marginBottom: functionsExpanded ? 10 : 0,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>Functions</span>
+                <span style={{ fontSize: 12, color: "var(--text-3)", display: "flex", alignItems: "center", gap: 4 }}>
+                  {(source.functions?.length ?? 0)}
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{functionsExpanded ? " ∨" : " ›"}</span>
+                </span>
+              </div>
+              {functionsExpanded && (
+                (source.functions?.length ?? 0) === 0 ? (
+                  <div style={{ color: "var(--text-3)", fontSize: 12, padding: "8px 0" }}>
+                    No functions attached to this source.
+                  </div>
+                ) : (
+                  (source.functions || []).map((fn, i) => {
+                    const isValidation = fn.function_type === "validation";
+                    return (
+                      <div key={i} style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "7px 0", borderBottom: "1px solid var(--border-soft)",
+                      }}>
+                        <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {fn.function_name}
+                        </span>
+                        <span style={{
+                          display: "inline-block", padding: "2px 8px", borderRadius: 99,
+                          background: isValidation ? "var(--check-bg, rgba(59,130,246,.12))" : "var(--xform-bg, rgba(245,158,11,.12))",
+                          color: isValidation ? "var(--check, #3b82f6)" : "var(--xform, #f59e0b)",
+                          fontSize: 11, fontWeight: 600, letterSpacing: ".03em", flexShrink: 0,
+                        }}>
+                          {fn.function_type}
+                        </span>
+                        <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>{fn.set_name}</span>
+                      </div>
+                    );
+                  })
+                )
+              )}
+            </div>
 
             {/* Data preview */}
             <div>

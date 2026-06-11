@@ -102,44 +102,54 @@ class TestFunctionsPaths:
         assert "functions_paths" in data
         assert data["functions_paths"] == []
 
-    def test_patch_sets_functions_paths(self, settings_client):
+    def test_patch_sets_functions_paths(self, settings_client, tmp_path):
         # Guarantee: PATCH /settings with functions_paths persists the list
         client, mod = settings_client
         client.get("/settings")
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
 
-        res = client.patch("/settings", json={"functions_paths": ["/a/b", "/c/d"]})
+        res = client.patch("/settings", json={"functions_paths": [str(dir_a), str(dir_b)]})
         assert res.status_code == 200
         data = res.json()
         assert data["ok"] is True
-        assert data["settings"]["functions_paths"] == ["/a/b", "/c/d"]
+        assert data["settings"]["functions_paths"] == [str(dir_a), str(dir_b)]
 
-    def test_patch_functions_paths_persists_across_reads(self, settings_client):
+    def test_patch_functions_paths_persists_across_reads(self, settings_client, tmp_path):
         # Guarantee: functions_paths set via PATCH is returned on subsequent GET
         client, mod = settings_client
         client.get("/settings")
+        dir_x = tmp_path / "x"
+        dir_x.mkdir()
 
-        client.patch("/settings", json={"functions_paths": ["/x/y"]})
+        client.patch("/settings", json={"functions_paths": [str(dir_x)]})
         res = client.get("/settings")
-        assert res.json()["functions_paths"] == ["/x/y"]
+        assert res.json()["functions_paths"] == [str(dir_x)]
 
-    def test_patch_empty_functions_paths_clears_list(self, settings_client):
+    def test_patch_empty_functions_paths_clears_list(self, settings_client, tmp_path):
         # Guarantee: PATCH with an empty list overwrites an existing list
         client, mod = settings_client
         client.get("/settings")
-        client.patch("/settings", json={"functions_paths": ["/a/b"]})
+        dir_a = tmp_path / "a"
+        dir_a.mkdir()
+        client.patch("/settings", json={"functions_paths": [str(dir_a)]})
 
         res = client.patch("/settings", json={"functions_paths": []})
         assert res.json()["settings"]["functions_paths"] == []
 
-    def test_patch_omitting_functions_paths_leaves_it_unchanged(self, settings_client):
+    def test_patch_omitting_functions_paths_leaves_it_unchanged(self, settings_client, tmp_path):
         # Guarantee: omitting functions_paths from a PATCH does not clear the list
         client, mod = settings_client
         client.get("/settings")
-        client.patch("/settings", json={"functions_paths": ["/keep/me"]})
+        keep_dir = tmp_path / "keep"
+        keep_dir.mkdir()
+        client.patch("/settings", json={"functions_paths": [str(keep_dir)]})
 
         client.patch("/settings", json={"accent": "#34d399"})
         res = client.get("/settings")
-        assert res.json()["functions_paths"] == ["/keep/me"]
+        assert res.json()["functions_paths"] == [str(keep_dir)]
 
     def test_existing_config_without_functions_paths_returns_empty_list(self, settings_client, tmp_path):
         # Guarantee: config files that predate functions_paths default to []
@@ -149,3 +159,66 @@ class TestFunctionsPaths:
 
         res = client.get("/settings")
         assert res.json()["functions_paths"] == []
+
+
+class TestFunctionsPathsValidation:
+    """PATCH /settings rejects non-existent / non-directory paths before saving."""
+
+    def test_invalid_path_returns_422_with_bad_entry(self, settings_client, tmp_path):
+        # Guarantee: PATCH with a non-existent path returns 422, invalid_paths lists the bad entry
+        client, mod = settings_client
+        client.get("/settings")  # initialise config
+
+        res = client.patch("/settings", json={"functions_paths": ["sdfsd"]})
+        assert res.status_code == 422
+        data = res.json()
+        assert data["ok"] is False
+        assert "sdfsd" in data["invalid_paths"]
+
+    def test_invalid_path_leaves_settings_file_unchanged(self, settings_client, tmp_path):
+        # Guarantee: settings file is not modified when any path fails validation
+        client, mod = settings_client
+        client.get("/settings")  # creates config with defaults
+        config_path = tmp_path / "pipeui.config.json"
+        original_content = config_path.read_text()
+
+        client.patch("/settings", json={"functions_paths": ["/does/not/exist/xyz"]})
+        assert config_path.read_text() == original_content
+
+    def test_file_path_not_directory_returns_422(self, settings_client, tmp_path):
+        # Guarantee: a path that exists but is a file (not a directory) is rejected
+        client, mod = settings_client
+        client.get("/settings")
+        file_path = tmp_path / "not_a_dir.txt"
+        file_path.write_text("hello")
+
+        res = client.patch("/settings", json={"functions_paths": [str(file_path)]})
+        assert res.status_code == 422
+        data = res.json()
+        assert str(file_path) in data["invalid_paths"]
+
+    def test_valid_directory_path_returns_200_and_saves(self, settings_client, tmp_path):
+        # Guarantee: PATCH with an existing directory path succeeds and is persisted
+        client, mod = settings_client
+        client.get("/settings")
+        valid_dir = tmp_path / "myfunctions"
+        valid_dir.mkdir()
+
+        res = client.patch("/settings", json={"functions_paths": [str(valid_dir)]})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["ok"] is True
+        assert str(valid_dir) in data["settings"]["functions_paths"]
+
+        # Persisted
+        check = client.get("/settings")
+        assert str(valid_dir) in check.json()["functions_paths"]
+
+    def test_empty_functions_paths_saves_without_error(self, settings_client, tmp_path):
+        # Guarantee: empty list bypasses validation and saves successfully
+        client, mod = settings_client
+        client.get("/settings")
+
+        res = client.patch("/settings", json={"functions_paths": []})
+        assert res.status_code == 200
+        assert res.json()["ok"] is True
