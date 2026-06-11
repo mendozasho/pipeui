@@ -69,10 +69,22 @@ The integrator agent also uses `isolation: "worktree"`. Its job:
    ```
 4. **Conflict resolution rule:** include ALL additions from ALL branches — never drop a component added by any branch. Conflicts in the same file are resolved by taking both sets of changes. If conflict intent is unclear, read the relevant issue bodies to understand what each branch intended, then apply both.
 5. Run the test suite: `pytest` (or the project's test command — check `pyproject.toml` or `Makefile`).
-6. If tests fail, diagnose and fix on the `release/<short-slug>` branch. Do not open the PR until tests pass.
-7. Push `release/<short-slug>` and open one PR: `release/<short-slug> → main`. PR title: `<short-slug>: <short description>`. PR body: list each closed issue with `Closes #N`, plus a summary of what the release delivers.
-8. Verify the PR is open.
-9. **Delete each feature branch from the remote** now that it is captured in `release/<short-slug>`:
+6. If pytest fails, diagnose and fix on the `release/<short-slug>` branch before continuing.
+7. **Smoke-test the release branch end-to-end** — pytest covers Python-layer correctness, but it does not catch frontend↔backend integration failures (wrong API shape, NaN serialization, missing fields). The integrator must verify the vertical works as a running app before opening the PR:
+   a. Start a fresh server on a known port (e.g. `18888`) with a clean DB:
+      ```bash
+      rm -f pipeui.db && python -m pipeui init
+      python -m uvicorn pipeui.main:app --host 127.0.0.1 --port 18888 --no-access-log &
+      sleep 3
+      curl -s http://127.0.0.1:18888/sources  # must return []
+      ```
+   b. For each merged issue, read its acceptance criteria and derive curl-based checks that exercise the endpoint(s) it touches. Register any required test fixtures (sources, functions) via the API before running checks that depend on them.
+   c. Verify each check returns the expected HTTP status and response shape. A non-2xx response or a missing key in the response body is a failure.
+   d. Kill the server after tests: `pkill -f "uvicorn pipeui.main" || true`
+   e. If any smoke test fails, diagnose and fix on the release branch, then re-run from step 5. Do not open the PR until all smoke tests pass.
+9. Push `release/<short-slug>` and open one PR: `release/<short-slug> → main`. PR title: `<short-slug>: <short description>`. PR body: list each closed issue with `Closes #N`, plus a summary of what the release delivers.
+10. Verify the PR is open.
+11. **Delete each feature branch from the remote** now that it is captured in `release/<short-slug>`:
    ```bash
    git push origin --delete <feature-branch-1>
    git push origin --delete <feature-branch-2>
