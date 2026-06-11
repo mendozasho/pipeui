@@ -69,6 +69,10 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
 
+### Surface similar existing behaviour
+
+When a proposed change introduces a new behaviour (a new comparison, mapping, transformation, validation, or data structure), search the codebase for code that does something similar before accepting the proposal. If you find a match, raise it explicitly: "There's already an X in Y that handles this — should we extend that, or is what you're describing genuinely different?" Do not let a session produce two implementations of the same concept. The user decides whether to extend or create new; you make sure they are aware of the choice.
+
 ### Update CONTEXT.md inline
 
 When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).

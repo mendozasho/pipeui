@@ -13,9 +13,15 @@ Break a plan into independently-grabbable issues using vertical slices (tracer b
 
 Work from whatever is already in the conversation context. If the user passes a local PRD path or issue reference as an argument, read it in full. The PRD is the source of truth for design decisions — each issue should carry the relevant decisions for its slice, not just a pointer to the PRD.
 
-### 2. Explore the codebase (optional)
+### 2. Explore the codebase
 
-If you have not already explored the codebase, do so to understand the current state of the code. Issue titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+Before drafting any slice, read the files the plan will touch. For each file:
+
+- Identify **existing utilities, constants, helpers, and patterns** that implement similar behaviour. If the plan involves type comparison, find the type mapping. If it involves null handling, find where nulls are already handled. If it involves a new API response shape, find the existing response shapes.
+- Ask: **is this new behaviour, or an extension of something that already exists?** Surface this to the user before writing any issue. "There's already `DUCKDB_TO_PYTHON` in `constants.py` that maps DuckDB type aliases — should we use that, or create a new mapping?" Do not silently invent a new abstraction when an existing one covers the case.
+- Note every existing utility that an agent implementing this slice **must** use. These go into the implementation notes verbatim so the agent does not rediscover or reinvent them.
+
+This step is **mandatory** when the plan modifies existing files. It is optional only for net-new files with no adjacent code to cross-reference.
 
 ### 3. Draft vertical slices
 
@@ -131,6 +137,8 @@ Or "None - can start immediately" if no blockers.
 ## Implementation notes for the agent
 
 - Work on the branch listed above.
+- **Before writing any code, read `CLAUDE_REFERENCE.md` for the section(s) covering the files you will touch** (see the routing table in `CLAUDE.md`). Each section documents existing utilities, constants, and patterns you must use — do not reinvent them.
+- **Existing utilities to use for this slice:** [list every constant, helper, or pattern identified during codebase exploration in step 2 that this agent must reuse, with the file and symbol name. Example: "use `DUCKDB_TO_PYTHON` in `src/pipeui/schema/constants.py` for any DuckDB type comparison — do not create a new type mapping."] Remove this line if there are no relevant existing utilities.
 - **Before creating your branch, pull the latest main:** `git fetch origin main && git checkout main && git pull origin main`, then `git checkout -b <branch>`. This ensures you are building on top of all previously merged work.
 - **After creating your branch, rebase onto the latest main before writing any code:** `git fetch origin main && git rebase origin/main`. This is critical when your slice runs after parallel predecessors — other branches may have merged into main between when this issue was created and when you start work. Skipping this step causes merge conflicts that require manual resolution.
 - Use `git commit -m "subject" -m "body"` with repeated `-m` flags for multi-paragraph messages. Do NOT use heredoc (`<<'EOF'`) syntax — it does not evaluate correctly in all shell contexts and will corrupt the commit message.
