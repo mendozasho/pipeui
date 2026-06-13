@@ -2,6 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(shasum:*)",
+      "Bash(python:*)",
       "Bash(pytest:*)",
       "Bash(python -m pytest:*)",
       "Bash(git status:*)",

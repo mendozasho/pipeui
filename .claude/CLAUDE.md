@@ -1,6 +1,6 @@
 ---
 created: 2026-06-06
-updated: 2026-06-08
+updated: 2026-06-13
 purpose: >
   Project operating document — "what to build and why." Read first for every
   conversation. Design decisions and rationale live here; implementation
@@ -42,25 +42,31 @@ Move/rename/fix debt left by the implementation+reorg session is tracked in
 
 ---
 
-## Canonical workflow
+## Canonical workflow (ez-skills pipeline)
 
-Every unit of work follows this four-step sequence. Do not skip steps.
+This repo runs the **ez-skills pipeline** — portable skills under `.claude/skills/` that carry a feature from idea to merged code. Each phase reads frozen artifacts on disk (never chat history), all keyed by one `feature_slug`; read the phase's own `SKILL.md` for its contract, and `.claude/conventions.md` for the branch, commit, and file-write rules every phase follows. Do not skip phases — each one tells you which to run next.
 
-1. **`/grill-with-docs`** — align on the problem and design, resolve any ambiguities against the existing domain model, and update `CONTEXT.md` / ADRs with decisions that crystallise. This step produces agreement, not code.
+| Phase | Skill | Produces |
+| --- | --- | --- |
+| setup | **`/init-map`** | the router `.claude/CLAUDE.md` (run on adoption, or when the map goes stale) |
+| 1 | **`/grill-discovery`** | discovery ledger `.claude/discovery/<slug>.json` + sharpened terms in `.claude/CONTEXT.md` |
+| 2 | **`/to-prd`** | PRD `.claude/prds/<slug>.md` (committed to the repo, not published to GitHub) |
+| 3 | **`/to-slices`** | slice ledger `.claude/slices/<slug>.json` — vertical slices, dependency edges, file-overlap |
+| 4 | **`/to-issues`** | GitHub issue tree + ticket map `.claude/tickets/<slug>.json` |
+| 5 | **`/to-code`** | merged code on `release/<slug>`, build records, one human-review PR |
+| maint. | **`/harvest-hubs`** | folds shipped build records into `.claude/hub-registry.json`, between features |
 
-2. **`/to-prd`** — synthesise the grilling session into a PRD saved to `.claude/prds/<slug>.md`. The PRD is the source of truth for all design decisions. It is committed to the repo so future sessions can read it. It is **not** published to GitHub.
+Kick a defect back to the phase that owns it — wrong scope → `/grill-discovery`, wrong prose → `/to-prd`, wrong cut → `/to-slices`; no phase silently patches an upstream artifact (see `.claude/conventions.md`).
 
-3. **`/to-issues`** — split the PRD into vertical slices and publish them as GitHub issues. Each issue is self-contained: it carries the relevant design decisions from the PRD directly in its body so an agent can implement it from the issue alone, without re-reading the PRD.
-   - Slices that require visual design decisions before implementation can start are marked **`[Design-gated]`** (HITL) and labelled `blocked-on-design`. Their issue bodies are written with full domain context (data shapes, existing components, what screen it lives on, what decisions need to be made) so Claude Design can work from them cold. The human takes the issue to Claude Design; when the brief comes back, paste it here and I will extract the spec and update the issue body. The label then changes to `ready-for-agent` and implementation can proceed.
-   - Every non-design-gated slice must be `ready-for-agent` when published: three-layer vertical (Data + Business + UI), file-overlap checked, dependency order correct, acceptance criteria the agent can self-verify.
+**pipeui note (HITL design-gating).** A slice that needs a visual-design decision before it can be built is still gated: flag it during `/to-slices` / `/to-issues` and label the issue `blocked-on-design`, write its body with full domain context (data shapes, existing components, the screen it lives on, the decisions needed) so design can work from it cold, and only relabel it `ready-for-agent` once the brief is attached. `/to-code` never picks up a `blocked-on-design` ticket.
 
-4. **`/wave #N #M …`** — for slices with no dependency between them AND no file overlap, launch parallel implementation agents (one per issue) plus an integrator that merges all feature branches into a single `wave/N` branch and opens one PR. You, the human, merge that one PR — no merge conflicts to resolve, no per-branch reviews.
-   - Slices that are sequential (B depends on A) are NOT a wave. Run them one at a time: implement A, merge, then implement B.
-   - Design-gated issues are NOT wave candidates until their design is attached and the issue is relabelled `ready-for-agent`.
+**Superseded.** This repo's earlier homegrown workflow is retired in favor of the phases above — `/grill-with-docs` → `/grill-discovery`, `/wave` → `/to-code`. Both old skills are **muted** (`disable-model-invocation: true`): they no longer auto-trigger but stay runnable via `/<name>` if ever needed. `/improve-code-architecture` is unaffected — it overlaps no phase and remains active.
 
 ---
 
 ## Collaboration rules
+
+These cover this project's governance and design discipline. The *mechanics* of pipeline work — branch naming, commit style, atomic file-writes, kickback vs mechanical fix, the gh→MCP fallback — live in `.claude/conventions.md` (shipped with the skills); this file defers to it rather than restating it, so the two cannot drift. Where a rule here overlaps a phase's job, the phase's `SKILL.md` contract wins for that phase.
 
 1. **Confirm reasoning before code.** Lay out the logic and get explicit sign-off
    before writing a single line of code.
@@ -69,15 +75,11 @@ Every unit of work follows this four-step sequence. Do not skip steps.
    before writing rather than guessing (see Architecture → module boundaries).
 3. **design.md is the source of design intent.** Reference it; this file is its
    distilled form. Keep the two consistent.
-4. **One branch per unit of work.** Each piece of work happens on its own branch. When the work is complete, open a pull request with `Closes #<issue-number>` in the body so the issue is auto-closed on merge.
-   - **Never push directly to main** — not for code, not for docs, not for skill updates. Every push requires a branch and a PR tied to a GitHub issue.
+4. **One branch per unit of work.** Each piece of work happens on its own branch; when it's complete, open a pull request with `Closes #<issue-number>` so the issue auto-closes on merge.
+   - **Never push directly to main** — not code, not docs, not skill updates. Every push requires a branch and a PR tied to a GitHub issue.
    - **Every change needs a ticket.** If there is no issue for it, don't push it. Doc and skill changes are not exempt.
-   - **Branch and PR naming convention:**
-     - Single fix: `fix/<short-slug>` → PR title `fix(<scope>): what changed`
-     - Single feature: `feat/<short-slug>` → PR title `feat(<scope>): what was added`
-     - Wave integrator (multiple fixes/features merged): `release/<short-slug>` → PR title `<short-slug>: short description of what the release delivers`
-     - Never use generic positional names like `wave/1`, `wave/2`, or `wave/a` — these give no context when reviewing PRs.
-   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference causes corruption.
+   - **Branch naming follows `.claude/conventions.md`** — pipeline work uses the `release/<feature_slug>` accumulator and `feature/<feature_slug>-<slice_id>` slice branches (`/to-code` opens the single human-review PR). A one-off fix outside the pipeline may use `fix/<short-slug>`. Never use positional names like `wave/1` or `wave/a` — they give no context in review.
+   - **Wait for all agents to finish** before touching git. Never commit, rebase, or push while an agent is still running — branch state is shared and interference corrupts it.
 5. **No sensitive or personal information — ever.** Commit messages, PR bodies, issue bodies, and code comments must contain only technical content relevant to the change. This rule has no exceptions:
    - No session or chat URLs
    - No real names or personal identifiers
@@ -98,24 +100,13 @@ Every unit of work follows this four-step sequence. Do not skip steps.
    file must have corresponding tests.
 11. **Don't silently resolve open questions.** Items under Active Deferred Work are
     undecided; surface them rather than encoding an answer in code.
-12. **Wave workflow for batched delivery.** When multiple issues have no dependency
-    on each other, implement them as a wave:
-    - **Parallel agents** — each implementation agent works with `isolation:
-      "worktree"`, pushes to its own feature branch, and opens no PR against main.
-    - **Wave integrator** — after all agents complete, a single integrator agent
-      merges all feature branches into one `release/<short-slug>` branch, resolves
-      any conflicts using the issue specs and design intent (include all additions
-      from all branches; never drop a component added by any branch), runs `pytest`,
-      and opens one PR: `release/<short-slug> → main`.
-    - **One PR to review** — the user reviews and merges a single clean diff rather
-      than resolving conflicts across multiple PRs.
-    - When a slice is blocked by another, surface it explicitly and wait for user
-      approval before starting — do not proceed past a blocker without confirmation.
-    - **Always use `isolation: "worktree"` for every agent** (implementation or
-      integrator) that will commit or push code. Without it, parallel agents share
-      the same git working directory — a `git checkout` by one agent switches the
-      working tree under every other agent, causing commits to land on the wrong
-      branches. Read-only / research agents that make no git changes do not need it.
+12. **Batched delivery is `/to-code`.** The ez-skills pipeline's `/to-code` is the
+    execution + integration engine: it dispatches parallel coding agents — each in an
+    isolated `worktree` off the accumulator branch — against the unblocked front of the
+    issue tree, then integrates them into one human-review PR on `release/<feature_slug>`.
+    The isolation, conflict-handling, and single-PR rules live in `to-code/SKILL.md` and
+    `.claude/conventions.md`. The prior `/wave` integrator is superseded and the skill is
+    muted (kept runnable via `/wave` only as a manual fallback).
 
 ---
 
