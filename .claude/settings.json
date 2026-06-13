@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Bash(shasum:*)",
       "Bash(pytest:*)",
-      "Bash(python:*)",
       "Bash(python -m pytest:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
@@ -10,7 +10,19 @@
     ],
     "deny": [
       "Read(./.env)",
-      "Read(./.env.*)"
+      "Read(./.env.*)",
+      "Read(.env)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Read(**/*credential*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.gnupg/**)",
+      "Edit(./.env)",
+      "Edit(./.env.*)",
+      "Edit(**/.env)"
     ]
   }
 }
