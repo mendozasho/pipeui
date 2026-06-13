@@ -1,6 +1,7 @@
 ---
 name: wave
 description: Orchestrate a wave of parallel implementation agents — one per issue — then merge all feature branches into a single release/<short-slug> branch and open one PR to main. Use when the user wants to kick off a batch of ready-for-agent issues as a wave.
+disable-model-invocation: true
 ---
 
 # Wave

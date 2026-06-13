@@ -1,153 +1,105 @@
 ---
 name: to-issues
-description: Break a plan, spec, or PRD into independently-grabbable issues on the project issue tracker using tracer-bullet vertical slices. Use when user wants to convert a plan into issues, create implementation tickets, or break down work into issues.
+description: Projects the frozen slice ledger onto GitHub — one parent issue per slice, sub-issues per work unit, blocked-by edges from depends_on and shared_surfaces — and persists the ticket map (.claude/tickets/<feature_slug>.json). Use after slicing is frozen. Does NOT slice, re-scope, or write code; re-runs reconcile, never duplicate. Hands off to to-code.
 ---
 
-# To Issues
+This skill is the **projector**: it fuses the frozen slice ledger and the PRD onto a GitHub issue tree a coding agent can execute. Slices come from the slice ledger; prose context comes from the PRD. Inherit both verbatim and make no scope, slice, or design decisions. If you find yourself deriving or re-cutting a slice here, that is a `to-slices` decision leaking into Phase 4 — stop and kick back. (`grill-discovery` decides what the feature is, `to-prd` writes the prose, `to-slices` cuts the slices and decides their serialization — including file overlap — and this skill projects them.)
 
-Break a plan into independently-grabbable issues using vertical slices (tracer bullets).
+## Inputs
 
-## Process
+**Load always:**
+- `.claude/slices/<feature_slug>.json` — the frozen slice ledger. `decomposition[]` is the **only source of slices**: `slice_id`, `slice_name`, `intent`, `layers`, `scope`, `acceptance`, `depends_on`, `touched_files`, and `shared_surfaces`. The `shared_surfaces` already include file-level `modifies`/`modifies` entries (the `surface` is a file path) for any `touched_files` write-overlap `to-slices` serialized — wire them like any other surface; do not re-derive overlap here.
+- `.claude/prds/<feature_slug>.md` — the PRD. Source of **prose** for issue bodies (Problem/Solution, User Stories, Implementation Decisions, Testing Decisions). Carries no slices.
+- `.claude/CONTEXT.md` (or `.claude/CONTEXT-MAP.md`) — the glossary. Use its vocabulary in every title and body; coin nothing.
+- `.claude/tickets/<feature_slug>.json` — this skill's own ticket map, if present. Read it **first** and reconcile against it.
 
-### 1. Gather context
+**Consult on demand:**
+- `.claude/CLAUDE.md` — for two things only: the branch convention, and pointers to area docs for the modules a slice touches. Do not read the whole map.
+- `.claude/discovery/<feature_slug>.json` — only if a body needs glossary-adjacent context (`affected_components`, ADR pointers). Not a source of slices.
+- ADRs in the touched area — link from the relevant issue; do not restate.
 
-Work from whatever is already in the conversation context. If the user passes a local PRD path or issue reference as an argument, read it in full. The PRD is the source of truth for design decisions — each issue should carry the relevant decisions for its slice, not just a pointer to the PRD.
+**Stop conditions.** Ledger missing or `slice_status` ≠ `frozen` → tell the user to run/complete `to-slices`. PRD missing → tell them to run `to-prd`. Never improvise issues from chat or a half-finished pipeline.
 
-### 2. Explore the codebase
+**On entry, check for a resumable plan.** If `.claude/tickets/<feature_slug>.plan.json` exists and its `ledger_hash` matches the current frozen ledger, resume from it: if `approved`, skip drafting and go straight to write; if not, re-present it (cheap — it's loaded, not re-drafted). If the hash is stale, discard it and plan fresh.
 
-Before drafting any slice, read the files the plan will touch. For each file:
+Phase 4 does not re-validate the frozen decomposition — `to-slices` owns that, including file-overlap serialization. The only structural property it checks is acyclicity of `depends_on`, at the write step (it needs it to order edges).
 
-- Identify **existing utilities, constants, helpers, and patterns** that implement similar behaviour. If the plan involves type comparison, find the type mapping. If it involves null handling, find where nulls are already handled. If it involves a new API response shape, find the existing response shapes.
-- Ask: **is this new behaviour, or an extension of something that already exists?** Surface this to the user before writing any issue. "There's already `DUCKDB_TO_PYTHON` in `constants.py` that maps DuckDB type aliases — should we use that, or create a new mapping?" Do not silently invent a new abstraction when an existing one covers the case.
-- Note every existing utility that an agent implementing this slice **must** use. These go into the implementation notes verbatim so the agent does not rediscover or reinvent them.
+## Issue anatomy (the projection)
 
-This step is **mandatory** when the plan modifies existing files. It is optional only for net-new files with no adjacent code to cross-reference.
+One parent issue per slice; sub-issues per work unit. Every issue field has a fixed source — never write content that isn't traceable to one:
 
-### 3. Draft vertical slices
+| Issue field | Source |
+|---|---|
+| Parent title | slice `slice_name`/`intent`, in glossary vocabulary |
+| Parent body — scope/intent | slice `scope` + `intent` |
+| Parent body — context | PRD Problem/Solution summary + the Implementation Decisions relevant to this slice, plus the PRD's repo path (`.claude/prds/<feature_slug>.md`) for the rest — not the full section pasted verbatim |
+| Parent body — acceptance checklist | slice `acceptance`, verbatim |
+| Parent body — dependency summary + branch | `depends_on` + `feature/<feature_slug>-<slice_id>` (per `.claude/conventions.md`) |
+| Sub-issue title/scope | a work unit cut from slice `scope` across its `layers` |
+| Sub-issue body | the work unit's one-or-two-line scope and its owned acceptance — **nothing else**. Context lives on the parent and in the PRD (the coding agent's checkout has both); never repeat the parent's context, scope, or PRD excerpts into sub-issues — every repeated line is paid for on every read *and* on every MCP checkbox rewrite (read-modify-write of the whole body) |
+| Sub-issue acceptance | the clause(s) of slice `acceptance` it owns, framed as **testable assertions**: each clause states the observable behavior a test must assert and names the PRD test seam it traces to — the execution agent authors its red-green tests directly from this section |
+| Labels | `feature:<feature_slug>`, `layer:<data\|business_logic\|api\|ui\|docs>`, + type-fallback label if needed. **Never `slice:` labels** — slice↔issue correlation lives in the ticket map; structure on GitHub is expressed through native relationships (sub-issue parenting, blocked-by), not label encoding |
+| Blocked-by edges | `depends_on` + `creates`→`reads` and `modifies`/`modifies` from `shared_surfaces` — the latter covering both logical surfaces and file-level surfaces from `touched_files` overlap |
 
-Break the plan into **tracer bullet** issues. Each issue is a thin vertical slice that cuts through ALL integration layers end-to-end, NOT a horizontal slice of one layer.
+Rules:
+- **Sub-issue type** is `Task` (`Bug` only when the slice is itself a fix).
+- **Single-work-unit slice → no sub-issue.** When a slice's scope is one work unit, the parent alone is the ticket: it already carries the full acceptance checklist, the ticket map records an empty `sub_issues` array (the parent owns every acceptance index), and the execution agent checks criteria off on the parent. A sub-issue that near-duplicates its parent is pure token tax on every downstream read.
+- **Coverage:** the union of a slice's sub-issues must cover every clause of its `acceptance` (vacuously satisfied by the parent when a slice has no sub-issues). An unowned clause means add a sub-issue — the plan is incomplete without it.
+- **Testability is projection-checked:** if a clause cannot be framed as an assertion a test could verify (no observable behavior to assert), do not paper over it with vague wording — that clause will block its ticket in Phase 5. Kick back to `to-slices` to re-phrase the frozen acceptance now, while it is cheap.
+- **Edges:** `reads`/`reads` surfaces get no edge — they are the parallelizable front. Every `modifies`/`modifies` surface gets a serialize edge, whether the `surface` is a logical name or a file path; a shared written file is not parallelizable.
+- **Branch per slice:** record `feature/<feature_slug>-<slice_id>` on the parent (slice number as the suffix, per `.claude/conventions.md`); do not create it (the execution phase does). Slice branches carry the `feature/` prefix and PR into the accumulator (`release/<feature_slug>`); never slash-nest refs under a branch name git already holds.
+- **Out of scope → no issue.** Anything not owned by a frozen slice is not a ticket.
 
-Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an architectural decision or a design review. AFK slices can be implemented and merged without human interaction. Prefer AFK over HITL where possible.
+## Plan, then confirm (the only interaction)
 
-<vertical-slice-rules>
-- Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
-- A completed slice is demoable or verifiable on its own
-- Prefer many thin slices over few thick ones
+Build the tree in memory first — parents, sub-issues, labels, blocked-by edges, branch names. Before prompting, write it to `.claude/tickets/<feature_slug>.plan.json` (atomically, per the file-write discipline in `.claude/conventions.md`; with `approved: false` and a `ledger_hash` of the frozen ledger) so a dropped session doesn't lose the drafted bodies — the most expensive artifact, and the one the ticket map doesn't yet protect. Then present it as a dry-run preview. In harnesses where the confirmation renders as an option-box question (web/remote), present the preview as plain **chat text** before asking, and keep the question itself to a bare approve/adjust choice — a tree of any real size will not fit inside the question UI. This confirms **write architecture only**. It must not reopen scope, slices, decisions, or acceptance. If the user wants any of those changed, kick back to the phase that owns them (`to-slices` for slices/acceptance/serialization, `grill-discovery` for scope, `to-prd` for prose). On approval, flip `approved: true` in the plan file, then write.
 
-- **Three-layer minimum — non-negotiable:** every slice MUST touch all three integration layers — **Data Layer** (workflow/schema/DuckDB), **Business Layer** (API/routes), and **UI Layer** (frontend). A slice missing any layer is a horizontal slice and must be rejected. Do not present it to the user. Instead, expand it to cover the missing layer before presenting. Tests count as part of whichever layer they exercise, not as a separate layer.
+## Write + reconcile (never blind-create)
 
-  **How to expand a thin slice:** if a proposed slice only touches one or two layers, look at what the missing layer would minimally need to contribute. For a backend-only slice, ask: what is the thinnest UI that makes this backend change observable? For a frontend-only slice, ask: does this UI change require a new API contract or schema field? Add that to the slice. A walking skeleton (stub endpoint + wired UI) counts — it does not need to be production-quality, just end-to-end.
+Requires `gh` v2.94.0+; when `gh` is unavailable (remote/web environments), use the GitHub MCP equivalents per `.claude/conventions.md` — the reconcile rules are identical. For each planned item, consult the ticket map and `gh issue list`:
+- missing → create it;
+- present but content-changed → `gh issue edit`;
+- present and unchanged → skip.
 
-  **Vertical over parallel — always:** a set of sequential vertical slices is always preferable to a set of parallel horizontal slices. Do not trade verticality for parallelism. Parallelism is a secondary optimisation only considered after every slice is already vertical.
+Order: create parents first, then sub-issues with `--parent`, then wire `--blocked-by` in topological order over `depends_on` once both endpoints exist. The `--blocked-by` set is the union of `depends_on` and every `modifies`/`modifies` serialization in `shared_surfaces` (logical and file-level). If `depends_on` contains a cycle, **stop** and kick back to `to-slices` — Phase 4 cannot order a cyclic `--blocked-by` graph and the ready-front would be empty. Commands and the org-level type-fallback rule: see [gh-reference.md](./gh-reference.md).
 
-- **Context load check:** before presenting a slice, estimate whether a single agent can hold all its changes in context without making trade-offs. If a slice touches more than ~4 files across layers, consider splitting it into a thinner slice that still hits all three layers (e.g. a walking skeleton first, then enrich with detail in a follow-on slice).
+## Persist
 
-- **File-overlap check:** before marking two slices as parallel, list the files each will touch. If any file appears in both lists, those slices are NOT safe to run in parallel — add a dependency between them even if there is no logical blocker. Parallel execution on overlapping files causes merge conflicts that require manual resolution. Remember: sequential vertical slices are always preferred over parallel horizontal ones — only mark slices parallel when they are both vertical AND have no file overlap.
-</vertical-slice-rules>
+Write `.claude/tickets/<feature_slug>.json`, keyed to the same `feature_slug` so discovery ↔ PRD ↔ slices ↔ issues all correlate. Write it atomically, per the file-write discipline in `.claude/conventions.md`. This map is what makes the GitHub state a refreshable projection rather than a one-shot dump. Pin the shape — don't improvise it per run, or reconciliation read-back drifts:
 
-### 4. Handle design-gated slices
+```json
+{
+  "feature_slug": "string",
+  "last_projected_at": "ISO-8601 timestamp",
+  "tickets": {
+    "<slice_id>": {
+      "parent_issue": 101,
+      "parent_hash": "sha256 over the slice fields that determine the parent body (intent, scope, acceptance, depends_on, branch)",
+      "sub_issues": [
+        {
+          "issue": 102,
+          "owns_acceptance": [0, 2],
+          "hash": "sha256 over this work unit's title + body inputs"
+        }
+      ]
+    }
+  }
+}
+```
 
-Some slices cannot be fully spec'd without visual design decisions — modal layouts, component interactions, new UI primitives. These are **design-gated** (HITL). Flag them with `[Design-gated]` in the title and label them `blocked-on-design`.
+`owns_acceptance` holds the **indices** into the slice's `acceptance` array this sub-issue covers (indices, not clause text — stable against rewording). The union of a slice's `owns_acceptance` must equal its full acceptance index set; that union *is* the coverage check, now verifiable on every reconciliation. An empty `sub_issues` array means the parent owns every index (single-work-unit slice). The per-item `hash` is the create/edit/skip discriminator; edges and labels reconcile separately via `gh issue list` read-back.
 
-**What makes a slice design-gated:** it introduces a new multi-step modal, a new interactive primitive (toggle, segmented control, drag behaviour), or a new screen layout — anything where the "correct" spec depends on visual composition that prose alone cannot resolve.
+Then commit and push the map to `release/<feature_slug>`, per the commit conventions in `.claude/conventions.md`. Once committed, delete the now-superseded `.plan.json`.
 
-**The issue body is the handoff to Claude Design.** The human takes the issue to Claude Design; Claude Design makes all visual and UX decisions (layout, component anatomy, interaction model, transitions). I do not make design decisions — my job is to write the issue with enough domain context that Claude Design can work from it cold.
+## Guardrails
+- **No code, no slicing, no re-scoping, no overlap analysis** — `to-slices` owns serialization including file overlap; the ticket map and the GitHub issues are the only artifacts this skill writes.
+- **Single source of truth** — the frozen slice ledger wins; reconcile GitHub toward it, never the reverse.
+- **Idempotent** — re-runs reconcile against the ticket map + `gh issue list`; they never duplicate. A re-frozen ledger (e.g. after a Phase-5 feedback-loop re-cut in `to-slices`) reconciles cleanly: new serialize edges become new `--blocked-by` edges, changed bodies get `gh issue edit`, unchanged items skip.
+- **Kick back, don't patch** — broken decomposition → `to-slices`; wrong scope or prose → `grill-discovery`/`to-prd`.
+- **Do not publish.**
 
-The issue body must include:
+## Exit & handoff
 
-- **`## Context for the Design agent`** — everything Claude Design needs:
-  - Which screen file and component this lives in, and what triggers it
-  - The domain model — data shapes, field names, semantics — using canonical names from `CONTEXT.md`
-  - The existing patterns the new UI must fit (modal chrome, drag payload format, component names from `ui.jsx`)
-  - **What to produce** — a numbered list of specific decisions Claude Design must resolve (layout, component breakdown, interaction behaviour, transitions)
-  - **Out of scope** — anything explicitly deferred
+Done when every slice has a parent issue, every parent's sub-issues cover that slice's `acceptance` (or the parent owns it all, for a single-work-unit slice), all `depends_on` and serialization edges (logical and file-level) are wired as `--blocked-by`, and the ticket map is committed to the release branch.
 
-- **Acceptance criteria** — checkboxes an implementing agent can verify. Start with `Design assets / spec attached to this issue.`
-
-**Label and blocker:** publish with the `blocked-on-design` label — NOT `ready-for-agent`. Set `## Blocked by` to `- Claude Design pass (this issue)` plus any implementation prerequisites.
-
-When the human brings back the Claude Design brief, I extract the spec decisions and update the issue body directly. The label then changes to `ready-for-agent`. Do not start implementation until that happens.
-
-### 5. Quiz the user
-
-Present the proposed breakdown as a numbered list. For each slice, show:
-
-- **Title**: short descriptive name
-- **Type**: HITL / AFK
-- **Layers touched**: always list all three — `Data Layer | Business Layer | UI Layer` — plus `tests`. Call out explicitly what each layer contributes. If a layer has nothing to contribute for this slice, that is a red flag — challenge the slice design.
-- **Blocked by**: which other slices (if any) must complete first
-- **User stories covered**: which user stories this addresses (if the source material has them)
-
-Ask the user:
-
-- Does the granularity feel right? (too coarse / too fine)
-- Are the dependency relationships correct?
-- Should any slices be merged or split further?
-- Are the correct slices marked as HITL and AFK?
-
-Iterate until the user approves the breakdown.
-
-### 6. Publish the issues to the issue tracker
-
-For each approved slice, publish a new issue to the issue tracker. Use the issue body template below.
-
-- **AFK slices** — label `ready-for-agent`.
-- **Design-gated slices** — label `blocked-on-design`. Do NOT add `ready-for-agent` until Claude Design has delivered the spec and the issue body has been updated.
-
-Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
-
-**After publishing, identify which slices can be implemented in parallel and which are blocked.** Two conditions must BOTH be true for slices to run in parallel:
-1. No blocker relationship between them (one does not depend on the other's output)
-2. No file overlap — they do not modify any of the same files
-
-If either condition fails, the slices must run sequentially. Present a concise execution plan:
-
-- Truly parallel slices (no blocker AND no file overlap): launch as parallel agents immediately (one Agent call per issue in a single message).
-- Sequential or blocked slices: surface them explicitly and **wait for user approval** before starting each one. Do not start a blocked slice until all its blockers are merged and the user has confirmed the next step.
-
-**Each issue must be self-contained.** The issue body carries the design decisions relevant to that slice directly — not a pointer to a separate PRD issue. The reviewer should be able to understand what was decided and why by reading the issue alone.
-
-<issue-template>
-## Branch
-
-`feat/<short-slug>` — the branch the implementing agent creates and pushes to.
-
-## What to build
-
-A concise description of this vertical slice. Describe the end-to-end behavior, not layer-by-layer implementation.
-
-Avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it here and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
-
-## Design decisions for this slice
-
-The relevant design choices from the PRD that apply to this slice — schema decisions, API contracts, classification rules, UI behaviour, transaction boundaries, etc. Carry enough context that a reviewer reading only this issue can understand what was decided and why, without needing to look elsewhere.
-
-## Acceptance criteria
-
-- [ ] Criterion 1
-- [ ] Criterion 2
-- [ ] Criterion 3
-
-## Blocked by
-
-- A reference to the blocking ticket (if any)
-
-Or "None - can start immediately" if no blockers.
-
-## Implementation notes for the agent
-
-- Work on the branch listed above.
-- **Before writing any code, read `CLAUDE_REFERENCE.md` for the section(s) covering the files you will touch** (see the routing table in `CLAUDE.md`). Each section documents existing utilities, constants, and patterns you must use — do not reinvent them.
-- **Existing utilities to use for this slice:** [list every constant, helper, or pattern identified during codebase exploration in step 2 that this agent must reuse, with the file and symbol name. Example: "use `DUCKDB_TO_PYTHON` in `src/pipeui/schema/constants.py` for any DuckDB type comparison — do not create a new type mapping."] Remove this line if there are no relevant existing utilities.
-- **Before creating your branch, pull the latest main:** `git fetch origin main && git checkout main && git pull origin main`, then `git checkout -b <branch>`. This ensures you are building on top of all previously merged work.
-- **After creating your branch, rebase onto the latest main before writing any code:** `git fetch origin main && git rebase origin/main`. This is critical when your slice runs after parallel predecessors — other branches may have merged into main between when this issue was created and when you start work. Skipping this step causes merge conflicts that require manual resolution.
-- Use `git commit -m "subject" -m "body"` with repeated `-m` flags for multi-paragraph messages. Do NOT use heredoc (`<<'EOF'`) syntax — it does not evaluate correctly in all shell contexts and will corrupt the commit message.
-- **Before opening a PR, go through every acceptance criterion in this issue one by one and verify each is met.** For each criterion: state what you built that satisfies it, and confirm it works (run the relevant test, or describe the observable behaviour). Do not open the PR until every criterion is checked off. If a criterion cannot be met, surface it explicitly rather than skipping it.
-- **Check off each acceptance criterion on the GitHub issue as you confirm it.** Use the `mcp__github__issue_write` tool with `method: "update"` to update the issue body, replacing `- [ ]` with `- [x]` for each criterion you have verified.
-- **If you were launched by the `/wave` skill: push your branch and stop. Do NOT open a PR.** The wave integrator opens the single PR after all agents finish. Opening your own PR creates noise the reviewer has to close.
-- **If you were launched directly (single issue, not a wave):** when all acceptance criteria are met and tests pass, open a pull request with `Closes #<this-issue-number>` in the PR body. The PR body must include a **`## How to verify`** section — a checkbox list (`- [ ]`) with one item per acceptance criterion from the issue, in the same order. Each item is a concrete action the reviewer takes in the running app (`uv run pipeui start`) that proves that criterion is met ("Navigate to X, do Y, confirm Z").
-- **After opening the PR, verify it is actually open.** Use `mcp__github__list_pull_requests` with `state: "open"` and confirm your PR appears in the list. A force-push or history rewrite can silently auto-close a PR — if your PR is missing or closed, re-open it before ending your turn. Do not end your turn without confirming the PR is visible and open.
-
-</issue-template>
-
-Do NOT create a separate parent PRD issue on GitHub.
+Report the resulting tree and call out the **ready-to-start front**: the parents with no open `blocked-by`, workable in parallel. Then hand off to execution (`to-code`): a coding agent picks an unblocked parent, checks out `feature/<feature_slug>-<slice_id>` off the accumulator tip, implements its sub-issues, and the integrator closes each sub-issue when its acceptance checklist passes. A slice is done when all its sub-issues are closed AND their union satisfies the slice's `acceptance` (for a no-sub-issue slice, the build ledger's `integrated` status is the completion signal — there is nothing to close, and the parent stays open by doctrine). **Parent issues are never closed by the pipeline** — they stay open until the user merges the final accumulator→`main` PR, whose `Closes #<parent>` lines close them on merge.
