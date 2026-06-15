@@ -52,6 +52,16 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
 # which handles user data column-type changes (§7). Each entry: (table, column, ddl).
 _REGISTRY_SCHEMA_MIGRATIONS: list[tuple[str, str, str]] = [
     ("function_registry", "is_active", "BOOLEAN DEFAULT TRUE"),
+    # runner-execution: columns added to the DDL by slices 2 and 4b. Existing DBs
+    # need them backfilled or get_pipeline/_fetch_steps/attach 500 (see #254).
+    # NOT NULL is omitted: DuckDB rejects ADD COLUMN with constraints. DEFAULT 0
+    # backfills existing rows; inserts always supply position, so no NULL arises.
+    ("alias_map", "position", "INTEGER DEFAULT 0"),
+    ("source_function_map", "append_name", "VARCHAR"),
+    # #258: param default capture — existing DBs need these or the executor can't
+    # fall back to Python defaults and the frontend can't flag required params.
+    ("parameter", "has_default", "BOOLEAN DEFAULT FALSE"),
+    ("parameter", "default_value", "VARCHAR"),
 ]
 
 

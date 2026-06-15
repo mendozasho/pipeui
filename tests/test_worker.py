@@ -233,6 +233,36 @@ def test_scalar_happy_path_round_trips():
 
 
 @pytest.mark.integration
+def test_call_function_passes_extra_scalar_kwargs():
+    """#258: scalar params are passed by keyword alongside the bound arg, so a
+    function like is_above_threshold(value, threshold) actually receives threshold."""
+    src = "def above(value: int, threshold: int) -> bool:\n    return value > threshold\n"
+    result = call_function(
+        src, "above", "value", 10, extra_kwargs={"threshold": 5},
+        timeout=10.0, cpu_seconds=10, memory_bytes=_RUNTIME_MEM,
+    )
+    assert result is True, f"expected True (10 > 5), got {result!r}"
+
+
+@pytest.mark.integration
+def test_call_function_tolerates_subscripted_generic_annotation():
+    """#268: a function with a runtime-unevaluable annotation (pd.Series[bool]) and no
+    `from __future__ import annotations` must still run — the worker must not evaluate
+    annotations, else 'type Series is not subscriptable' crashes the whole module exec."""
+    src = (
+        "import pandas as pd\n"
+        "def chk(col: pd.Series) -> pd.Series[bool]:\n"
+        "    return col > 0\n"
+    )
+    result = call_function(
+        src, "chk", "col", pd.Series([1, -2, 3]),
+        timeout=10.0, cpu_seconds=10, memory_bytes=_RUNTIME_MEM,
+    )
+    assert isinstance(result, pd.Series), result
+    assert list(result) == [True, False, True]
+
+
+@pytest.mark.integration
 def test_series_happy_path_round_trips():
     """pd.Series in, pd.Series out — Arrow IPC transport end-to-end."""
     s = pd.Series([1, 2, 3])
@@ -254,3 +284,25 @@ def test_dataframe_happy_path_round_trips():
     )
     assert isinstance(result, pd.DataFrame)
     assert list(result["a"]) == [2, 4, 6]
+
+
+def test_clean_worker_stderr_strips_setrlimit_noise():
+    """#270: the macOS setrlimit warning must be stripped so the real error surfaces."""
+    from pipeui.workflow.worker import _clean_worker_stderr
+    stderr = (
+        "[worker] setrlimit failed: current limit exceeds maximum limit\n"
+        "Traceback (most recent call last):\n"
+        '  File "<user_fn>", line 22, in within_range\n'
+        "TypeError: Invalid comparison between dtype=str and float\n"
+    )
+    cleaned = _clean_worker_stderr(stderr)
+    assert "setrlimit" not in cleaned
+    assert "Traceback" in cleaned
+    assert "Invalid comparison between dtype=str and float" in cleaned
+
+
+def test_clean_worker_stderr_without_noise_unchanged():
+    """#270: a failure with no setrlimit line is preserved verbatim (stripped of edges)."""
+    from pipeui.workflow.worker import _clean_worker_stderr
+    s = 'Traceback (most recent call last):\n  ...\nValueError: boom'
+    assert _clean_worker_stderr(s) == s

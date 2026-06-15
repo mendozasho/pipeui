@@ -92,8 +92,85 @@ def test_staging_returns_rows_after_transform_run(client, db, tmp_path):
 
 
 @pytest.mark.integration
+def test_staging_export_scrubs_nan_and_inf_to_null(client, db, tmp_path):
+    """#262: real source data contains nulls -> NaN in the staging dataframe. The
+    transformed-report export must render NaN/None/inf as JSON null, not 500. The
+    slice-5 tests used null-free data, so this crash ('nan not JSON compliant') had
+    no coverage."""
+    source_id = _register_and_ingest(db, tmp_path)
+    df = pd.DataFrame({
+        "id": [1, 2, 3],
+        "monthly_spend": [10.5, float("nan"), 30.0],   # NaN (a real null)
+        "ratio": [1.0, 2.0, float("inf")],             # inf
+        "name": ["a", None, "c"],                       # object-column null
+    })
+    ts = int(time.time())
+    _write_staging_table(db, source_id, df, ts)
+
+    resp = client.get(f"/pipelines/{source_id}/staging")
+    assert resp.status_code == 200, resp.text   # was 500: nan not JSON compliant
+    data = resp.json()
+    assert set(data["columns"]) == {"id", "monthly_spend", "ratio", "name"}
+    by_id = {r["id"]: r for r in data["rows"]}
+    assert by_id[2]["monthly_spend"] is None     # NaN -> null
+    assert by_id[2]["name"] is None              # None -> null
+    assert by_id[3]["ratio"] is None             # inf -> null
+    assert by_id[1]["monthly_spend"] == 10.5     # real values preserved
+
+
+@pytest.mark.integration
 def test_staging_returns_404_for_unknown_source(client, db):
     """Guarantee 3: GET /staging returns 404 for an unknown source_id."""
     unknown_id = str(uuid.uuid4())
     resp = client.get(f"/pipelines/{unknown_id}/staging")
     assert resp.status_code == 404, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/5 — #243: transformed report export (slice #2) and the
+# #193 mixed validation/transform staging-export fix (slice #4).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_transformed_export_returns_table_after_transforms(client, db, tmp_path):
+    """#243 (slice #2): exporting a source's transformed report -> its transformed data table.
+
+    After a transform has written a staging table, GET /export/transformed returns the
+    transformed data (columns + rows), the transformed-report contract.
+    """
+    source_id = _register_and_ingest(db, tmp_path)
+
+    df = pd.DataFrame({"id": [1, 2, 3], "val": [10, 20, 30], "doubled": [20, 40, 60]})
+    ts = int(time.time())
+    _write_staging_table(db, source_id, df, ts)
+
+    resp = client.get(f"/pipelines/{source_id}/export/transformed")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert set(data["columns"]) == {"id", "val", "doubled"}
+    assert len(data["rows"]) == 3
+    doubled_vals = sorted(r["doubled"] for r in data["rows"])
+    assert doubled_vals == [20, 40, 60]
+
+
+@pytest.mark.integration
+def test_transformed_export_404_for_unknown_source(client, db):
+    """#243 (slice #2): GET /export/transformed returns 404 for an unknown source_id."""
+    resp = client.get(f"/pipelines/{uuid.uuid4()}/export/transformed")
+    assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.integration
+def test_transformed_export_does_not_fail_for_validation_only_mixed_set(client, db, tmp_path):
+    """#243 (slice #4 / #193): the staging-export path no longer fails for a mixed set.
+
+    A validation-only (no transform) run writes no staging table. Exporting the
+    transformed report must return an empty payload (200), NOT raise/500 — this is the
+    #193 staging-export-failure symptom for a mixed validation/transform set.
+    """
+    source_id = _register_and_ingest(db, tmp_path)
+
+    # No transform has run -> no staging table exists.
+    resp = client.get(f"/pipelines/{source_id}/export/transformed")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"columns": [], "rows": []}

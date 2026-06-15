@@ -248,6 +248,24 @@ rather than rejecting the change or forcing a re-upload. The `column_registry`
 (source of truth) and the materialized table stay in sync. *Steps and the reason
 in-place `ALTER` is not used → CLAUDE_REFERENCE.md §7.*
 
+### 7. Edits preserve persisted values (partial-update discipline)
+Every edit path on the project **preserves the values it is not changing** — an
+edit that touches one field must round-trip all the others unchanged. This has two
+load-bearing halves and **both** must hold for every editable surface:
+- **Edit-load returns persisted form.** The metadata an edit screen reads back
+  must return each value in its **persisted form and order** (e.g. column bindings
+  ordered by `alias_map.position`, scalar values from `source_scalar_map`), not a
+  re-derived or re-sorted view. If the load reorders or defaults a value, the user's
+  saved choice is silently lost the moment they re-open and save.
+- **Edit-save round-trips.** Saving an edit without touching a field must persist
+  that field unchanged — no resetting to add-order, alphabetical, or a default.
+
+This is the same discipline already applied to scalar-value and binding restore
+(#191). Any new edit endpoint or edit modal must satisfy both halves; a guarantee
+here needs a round-trip test (open → save-untouched → value unchanged). *Canonical
+breach: column order on edit — `suggest_bindings` loaded `current_bindings` by
+`column_name` not `am.position`, fixed in #260; the round-trip test guards it.*
+
 ---
 
 ## Active Deferred Work

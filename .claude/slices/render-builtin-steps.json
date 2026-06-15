@@ -1,0 +1,33 @@
+{
+  "feature_slug": "render-builtin-steps",
+  "slice_status": "frozen",
+  "source_prd_hash": "7da67f3400f8686b3505a7df76d0c207f123492619166d7f22cf376385c412d5",
+  "decomposition": [
+    {
+      "slice_id": 1,
+      "slice_name": "Render and manage placed built-in steps on the Builder canvas",
+      "intent": "A placed built-in step (today only the join built-in) renders as a distinct, position-ordered card on the Builder canvas, appears immediately after the join modal saves, and can be removed and edited — the full #209 capability delivered end to end through backend and frontend together.",
+      "layers": ["business_logic", "api", "ui"],
+      "scope": "Backend: extend get_pipeline in workflow/attach.py to emit built-in steps via get_builtin_steps, tag every step with a step_type discriminator ('function' | 'builtin'), and order the unified list by position; the /pipelines route passes the shape through unchanged. Frontend: in screen-builder.jsx, dispatch the canvas by step_type — render a distinct built-in StepCard variant (reusing the PaletteBuiltinCard accent + 'built-in' tag) with a config summary derived from builtin_config; key/remove/edit built-in steps by step_id via the built-in routes; and wire JoinModal for an edit branch that pre-fills from builtin_config and PATCHes on save. Immediate appearance after create and edit reuses the existing loadPipeline() re-fetch. Built-in CRUD endpoints (DELETE/PATCH /sources/{id}/attach-builtin/{step_id}) already shipped in #117; no new schema or migration.",
+      "size": "L",
+      "acceptance": [
+        "GET /pipelines/{source_id} returns each placed built-in step in steps[] with step_type='builtin', carrying its builtin_type and builtin_config, positioned by position among the function steps.",
+        "Function steps in the same response carry step_type='function' and still include their full nested functions[] payload (no regression).",
+        "A placed built-in step renders on the canvas as a card visually distinct from function-step cards (the 'built-in' tag + accent), showing a config summary (e.g. 'Join · <right source> · inner · N keys').",
+        "After the join modal saves a join step, the new built-in card appears on the canvas without a manual reload.",
+        "The built-in card's remove control calls DELETE /sources/{source_id}/attach-builtin/{step_id} and the card is removed from the canvas.",
+        "The built-in card's edit control opens the join modal pre-filled from the step's builtin_config; submitting in edit mode calls PATCH /sources/{source_id}/attach-builtin/{step_id}."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        "src/pipeui/workflow/attach.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_api_pipelines.py",
+        "tests/test_attach.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        ".claude/runs/render-builtin-steps/1.md"
+      ],
+      "shared_surfaces": []
+    }
+  ]
+}

@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PipeUI — Results Empty State · Design Brief</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10; --panel: #141416; --panel-2: #1a1a1d; --panel-3: #202024;
+    --border: rgba(255,255,255,0.08); --border-soft: rgba(255,255,255,0.04); --hover: rgba(255,255,255,0.06);
+    --text: #f0f0f2; --text-2: #a0a0aa; --text-3: #6a6a74; --text-4: #3a3a42;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24; --run: #60a5fa;
+    --accent: #7c6cf5; --accent-soft: rgba(124,108,245,0.12); --accent-line: rgba(124,108,245,0.4); --accent-ink: #fff;
+    --check: #60a5fa; --check-bg: rgba(96,165,250,0.1); --xform: #fbbf24; --xform-bg: rgba(251,191,36,0.1);
+    --radius: 6px; --radius-lg: 10px;
+    font-family: 'Geist', system-ui, sans-serif;
+    font-size: 14px;
+  }
+
+  body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; line-height: 1.5; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  body::before {
+    content: ""; position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: .5;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState } = React;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PRIMITIVES — lifted verbatim from ui.jsx so the empty state renders with the
+   REAL Icon + Btn components and the REAL `results` / `builder` glyphs.
+   ────────────────────────────────────────────────────────────────────────── */
+const ICONS = {
+  results:  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="14" height="14" rx="1.5"/><path d="M7 13V10M10 13V7M13 13v-2"/></svg>,
+  builder:  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 6h12M4 10h8M4 14h5"/><circle cx="15" cy="13" r="3"/><path d="m17.5 15.5 1.5 1.5"/></svg>,
+  check:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 10 4.5 4.5L16 6"/></svg>,
+  warn:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 3 2 17h16L10 3z"/><path d="M10 8v4M10 14v.5"/></svg>,
+  data:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><ellipse cx="10" cy="5" rx="7" ry="2.5"/><path d="M3 5v5c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5V5"/><path d="M3 10v5c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5v-5"/></svg>,
+};
+function Icon({ name, size = 16, style }) {
+  const svg = ICONS[name]; if (!svg) return null;
+  return <span style={{ display: "inline-flex", alignItems: "center", width: size, height: size, flexShrink: 0, ...style }}>{React.cloneElement(svg, { width: size, height: size })}</span>;
+}
+function Btn({ children, variant = "default", size = "md", icon, onClick, disabled, style }) {
+  const base = { display: "inline-flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid", borderRadius: "var(--radius)", fontWeight: 500, transition: "opacity .15s", opacity: disabled ? 0.45 : 1, whiteSpace: "nowrap" };
+  const sizes = { sm: { padding: "3px 10px", fontSize: 12 }, md: { padding: "6px 14px", fontSize: 13 }, lg: { padding: "9px 18px", fontSize: 14 } };
+  const variants = { default: { background: "var(--panel-3)", borderColor: "var(--border)", color: "var(--text-2)" }, primary: { background: "var(--accent)", borderColor: "transparent", color: "var(--accent-ink)" }, ghost: { background: "transparent", borderColor: "transparent", color: "var(--text-2)" } };
+  return <button type="button" style={{ ...base, ...sizes[size], ...variants[variant], ...style }} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} size={14} />}{children}</button>;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   THE EMPTY STATE — AFTER (proposed) and BEFORE (current single line).
+   Both are dropped into a faithful mock of the Results card-grid area.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* The proposed component, exactly as it should ship in screen-results.jsx */
+function ResultsEmptyState({ onNavigate }) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      height: "100%", textAlign: "center", padding: 24, gap: 18,
+    }}>
+      {/* Icon tile */}
+      <div style={{
+        width: 64, height: 64, borderRadius: "var(--radius-lg)",
+        background: "var(--panel-2)", border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "var(--text-3)",
+      }}>
+        <Icon name="results" size={28} />
+      </div>
+
+      {/* Heading + sub-copy */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-2)" }}>
+          No results yet
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-3)", maxWidth: 340, lineHeight: 1.6, textWrap: "balance" }}>
+          Run a pipeline from the Builder screen to see validation and transform results here.
+        </div>
+      </div>
+
+      {/* Optional CTA — see Spec · 5. Shown here so the brief renders the full intent. */}
+      {onNavigate && (
+        <Btn variant="default" size="sm" icon="builder" onClick={() => onNavigate("builder")} style={{ marginTop: 2 }}>
+          Go to Builder
+        </Btn>
+      )}
+    </div>
+  );
+}
+
+/* Current behaviour — the bare muted line being replaced */
+function BeforeEmpty() {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "center",
+      height: "100%", color: "var(--text-4)", fontSize: 14, textAlign: "center",
+    }}>
+      Run a pipeline from the Builder screen to see results here.
+    </div>
+  );
+}
+
+/* Mock of the Results screen shell so the empty state sits in its true context:
+   header bar (Results + sub-line) + the scroll/padding card-grid region. */
+function ScreenShell({ label, children, subline }) {
+  return (
+    <div style={{ position: "relative", width: 480, flexShrink: 0, height: 420, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <span className="mono" style={{ position: "absolute", top: 10, right: 12, fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)", zIndex: 2 }}>{label}</span>
+      {/* header (unchanged) */}
+      <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 16 }}>Results</div>
+        <div style={{ color: "var(--text-3)", fontSize: 12 }}>{subline}</div>
+      </div>
+      {/* card-grid region (padding: 24) — where the empty state lives */}
+      <div style={{ flex: 1, overflow: "auto", padding: 24 }}>{children}</div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DOC CHROME (house style — shared across the pipeui briefs)
+   ────────────────────────────────────────────────────────────────────────── */
+function Eyebrow({ children, color = "var(--accent)" }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color }}>{children}</div>;
+}
+function SubHead({ children }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{children}</div>;
+}
+function Card({ children, style }) {
+  return <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 24, display: "flex", flexDirection: "column", gap: 20, ...style }}>{children}</div>;
+}
+function Block({ children, style }) {
+  return <div style={{ display: "flex", flexDirection: "column", gap: 12, ...style }}>{children}</div>;
+}
+function Section({ id, children }) {
+  return <section id={id} style={{ display: "flex", flexDirection: "column", gap: 20, scrollMarginTop: 24 }}>{children}</section>;
+}
+function SectionHead({ kicker, title, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Eyebrow>{kicker}</Eyebrow>
+      <h2 style={{ fontSize: 23, fontWeight: 600, letterSpacing: "-.01em" }}>{title}</h2>
+      {children && <p style={{ fontSize: 14, color: "var(--text-2)", maxWidth: 740, lineHeight: 1.6 }}>{children}</p>}
+    </div>
+  );
+}
+function M({ children }) { return <span className="mono" style={{ color: "var(--text)" }}>{children}</span>; }
+
+function Diff({ rows, file = "screen-results.jsx" }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "#0a0a0c" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 12px", borderBottom: "1px solid var(--border-soft)", background: "var(--panel-2)" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 99, background: "var(--text-4)" }} />
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-3)" }}>{file}</span>
+      </div>
+      {rows.map(([sign, ln], i) => {
+        const bg = sign === "-" ? "rgba(248,113,113,.06)" : sign === "+" ? "rgba(52,211,153,.06)" : "transparent";
+        const mk = sign === "-" ? "var(--bad)" : sign === "+" ? "var(--good)" : "var(--text-4)";
+        return (
+          <div key={i} className="mono" style={{ display: "flex", fontSize: 12, lineHeight: 1.6, background: bg }}>
+            <span style={{ width: 22, textAlign: "center", color: mk, flexShrink: 0, userSelect: "none", opacity: .8 }}>{sign === " " ? "" : sign}</span>
+            <span style={{ color: ln.trimStart().startsWith("//") || ln.trimStart().startsWith("{/*") ? "var(--text-4)" : "var(--text-2)", whiteSpace: "pre-wrap", paddingRight: 12 }}>{ln}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function PropsTable({ head, rows }) {
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead><tr>{head.map(h => <th key={h} style={{ padding: "7px 12px", textAlign: "left", color: "var(--text-3)", fontWeight: 500, fontSize: 10.5, letterSpacing: ".06em", textTransform: "uppercase", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i} style={{ borderBottom: "1px solid var(--border-soft)" }}>
+            {r.map((cell, j) => <td key={j} className={j < 2 ? "mono" : ""} style={{ padding: "8px 12px", fontSize: j < 2 ? 12.5 : 13, color: j === 0 ? "var(--accent)" : j === 1 ? "var(--text-3)" : "var(--text-2)", whiteSpace: j === r.length - 1 ? "normal" : "nowrap", verticalAlign: "top" }}>{cell}</td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+function TokenChip({ t, note }) {
+  return (
+    <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", fontSize: 11, color: "var(--text-2)" }}>
+      <span style={{ width: 10, height: 10, borderRadius: 3, background: `var(${t})`, border: "1px solid rgba(255,255,255,.14)" }} />{t}{note && <span style={{ color: "var(--text-4)" }}>· {note}</span>}
+    </span>
+  );
+}
+function Note({ n, children }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 99, background: "var(--accent-soft)", border: "1px solid var(--accent-line)", color: "var(--accent)", fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>{n}</span>
+      <span style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>{children}</span>
+    </div>
+  );
+}
+/* a single measured spacing rule rendered as a chip */
+function SpaceChip({ label, v }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 10px", borderRadius: 99, background: "var(--panel-2)", border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)" }}>
+      <span style={{ color: "var(--text-3)" }}>{label}</span>
+      <span className="mono" style={{ color: "var(--accent)" }}>{v}</span>
+    </span>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PAGE
+   ────────────────────────────────────────────────────────────────────────── */
+function App() {
+  const [nav, setNav] = useState(false); // toggles the optional CTA in the live preview
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "56px 28px 120px" }}>
+
+      {/* Masthead */}
+      <header style={{ display: "flex", flexDirection: "column", gap: 18, marginBottom: 40 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="3" width="8" height="8" rx="2" fill="var(--accent)" />
+            <rect x="13" y="3" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="3" y="13" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="13" y="13" width="8" height="8" rx="2" fill="var(--accent)" />
+          </svg>
+          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: ".02em" }}>pipeui</span>
+          <span style={{ width: 1, height: 14, background: "var(--border)" }} />
+          <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>screen-results.jsx · ScreenResults</span>
+          <span className="mono" style={{ fontSize: 11, color: "var(--accent)", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: 99, padding: "2px 9px" }}>feat/results-empty-state</span>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Eyebrow>Design Brief · Issue #121</Eyebrow>
+          <h1 style={{ fontSize: 34, fontWeight: 600, letterSpacing: "-.02em", lineHeight: 1.12 }}>Results screen — empty state</h1>
+          <p style={{ fontSize: 15, color: "var(--text-2)", maxWidth: 720, lineHeight: 1.6 }}>
+            The written spec that unblocks <M>#121</M>. It replaces the current single muted line with a centred icon + heading + sub-copy treatment, names the exact <M>ICONS</M> glyph, copy, spacing and tokens, and leaves an optional CTA call. Everything below is <strong style={{ color: "var(--text)", fontWeight: 600 }}>rendered live</strong> with the real <M>ui.jsx</M> <M>Icon</M> and <M>Btn</M> — Claude Code implements directly from it.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
+          {[["Icon — reuse results glyph", "var(--accent)"], ["Heading + sub-copy", "var(--accent)"], ["Centred layout", "var(--accent)"], ["No new tokens", "var(--good)"], ["No new icons", "var(--good)"]].map(([t, c]) => (
+            <span key={t} className="mono" style={{ fontSize: 11.5, padding: "4px 11px", borderRadius: 99, background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text-2)", display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{t}
+            </span>
+          ))}
+        </div>
+      </header>
+
+      {/* Constraints banner */}
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: "var(--radius)", marginBottom: 44 }}>
+        <Icon name="check" size={15} style={{ color: "var(--accent)", marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6 }}>
+          <strong style={{ color: "var(--text)", fontWeight: 600 }}>Constraints.</strong> Inline styles only · no new colours — every value below is an existing token · no new external dependencies · the empty state renders only when <M>resultCards.length === 0</M> · no change to <M>ICONS</M> in <M>ui.jsx</M> (the <M>results</M> glyph already exists) · the header bar and its sub-line are untouched.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 60 }}>
+
+        {/* ── BEFORE / AFTER ── */}
+        <Section id="overview">
+          <SectionHead kicker="The change at a glance" title="Before → after">
+            Same trigger (<M>resultCards.length === 0</M>), same region (the <M>padding: 24</M> card-grid below the header). The bare muted sentence becomes a composed, centred empty state: an icon tile, a heading, and a one-line explanation. Both panels below are the real Results shell at reduced width.
+          </SectionHead>
+
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap", justifyContent: "center", padding: "8px 0", alignItems: "center" }}>
+            <ScreenShell label="before · current" subline="Run a pipeline to see results here">
+              <BeforeEmpty />
+            </ScreenShell>
+            <div style={{ display: "flex", alignItems: "center", color: "var(--text-4)" }}>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </div>
+            <ScreenShell label="after · proposed" subline="Run a pipeline to see results here">
+              <ResultsEmptyState onNavigate={nav ? () => {} : null} />
+            </ScreenShell>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text-3)", cursor: "pointer" }}>
+              <input type="checkbox" checked={nav} onChange={e => setNav(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+              Preview with the optional <span className="mono" style={{ color: "var(--text-2)" }}>Go to Builder</span> CTA (Spec · 5)
+            </label>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+            <Card style={{ padding: 20, gap: 12 }}>
+              <SubHead>What's wrong today</SubHead>
+              {[
+                "A full-height region holds a single 14px line in --text-4 — the faintest text token. It barely registers; it reads as a loading glitch, not an intentional state.",
+                "No visual anchor. Nothing tells the eye this is the Results screen, deliberately empty.",
+                "The copy stops at \"results\" without naming what kind — a first-time user doesn't yet know Results holds validation and transform runs.",
+                "No path forward. It mentions the Builder screen but offers no way to get there.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <Icon name="warn" size={13} style={{ color: "var(--bad)", marginTop: 2 }} />
+                  <span style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+                </div>
+              ))}
+            </Card>
+            <Card style={{ padding: 20, gap: 12 }}>
+              <SubHead>What the redesign does</SubHead>
+              {[
+                "Adds an icon tile (the existing results glyph) as a calm visual anchor in the dead-centre of the region.",
+                "Introduces a real heading — \"No results yet\" — in the legible --text-2, with the explanation demoted to --text-3 beneath it.",
+                "Sharpens the sub-copy to name both result kinds: validation and transform.",
+                "Leaves an optional Go to Builder CTA wired to onNavigate — ships fine without it.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <Icon name="check" size={13} style={{ color: "var(--good)", marginTop: 2 }} />
+                  <span style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+                </div>
+              ))}
+            </Card>
+          </div>
+        </Section>
+
+        {/* ── ANATOMY & LAYOUT ── */}
+        <Section id="layout">
+          <SectionHead kicker="Spec · 1" title="Anatomy & layout">
+            The empty state is a single centred column that fills the card-grid region (<M>height: 100%</M>). Three stacked elements — icon tile, heading, sub-copy — plus the optional CTA. Centred on both axes so it sits in the visual middle of whatever viewport height the screen has.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,300px) 1fr", gap: 28, alignItems: "start" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)" }}>Live · on --bg</span>
+                <div style={{ height: 300, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                  <ResultsEmptyState onNavigate={null} />
+                </div>
+              </div>
+              <Block>
+                <SubHead>Stacking order (top → bottom)</SubHead>
+                <Note n="1"><strong style={{ color: "var(--text)" }}>Icon tile</strong> — a <M>64×64</M> square, <M>--panel-2</M> fill, <M>1px --border</M>, <M>--radius-lg</M>. Centres the <M>results</M> glyph at <M>size 28</M> in <M>--text-3</M>.</Note>
+                <Note n="2"><strong style={{ color: "var(--text)" }}>Heading</strong> — “No results yet”, <M>16px / 600</M>, <M>--text-2</M>.</Note>
+                <Note n="3"><strong style={{ color: "var(--text)" }}>Sub-copy</strong> — one sentence, <M>13px</M>, <M>--text-3</M>, <M>line-height 1.6</M>, capped at <M>max-width: 340</M> with <M>text-wrap: balance</M> so it breaks into a tidy two lines.</Note>
+                <Note n="4"><strong style={{ color: "var(--text)" }}>CTA (optional)</strong> — <M>Btn variant="default" size="sm"</M> with the <M>builder</M> icon. See Spec · 5.</Note>
+                <div style={{ height: 1, background: "var(--border-soft)", margin: "4px 0" }} />
+                <SubHead>Spacing &amp; alignment</SubHead>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <SpaceChip label="outer container gap" v="18px" />
+                  <SpaceChip label="heading → sub-copy gap" v="8px" />
+                  <SpaceChip label="region padding" v="24px" />
+                  <SpaceChip label="CTA top margin" v="2px" />
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--text-3)", lineHeight: 1.6 }}>
+                  Outer wrapper: <M>flex-direction: column</M>, <M>align-items: center</M>, <M>justify-content: center</M>, <M>height: 100%</M>, <M>text-align: center</M>, <M>gap: 18</M>. Heading + sub-copy share an inner <M>column</M> with <M>gap: 8</M> so the pair tracks together against the <M>18px</M> rhythm.
+                </div>
+              </Block>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── COPY ── */}
+        <Section id="copy">
+          <SectionHead kicker="Spec · 2" title="Copy">
+            Two strings. Keep them factual and quiet — this is a calm zero-state, not a marketing moment. Heading names the state; sub-copy names the fix and the two result kinds.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <Block>
+                <SubHead>Strings</SubHead>
+                <div style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 4 }}>Heading</div>
+                    <div style={{ fontSize: 14, color: "var(--text)", fontWeight: 600 }}>No results yet</div>
+                  </div>
+                  <div style={{ height: 1, background: "var(--border-soft)" }} />
+                  <div>
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 4 }}>Sub-copy</div>
+                    <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>Run a pipeline from the Builder screen to see validation and transform results here.</div>
+                  </div>
+                </div>
+              </Block>
+              <Block>
+                <SubHead>Decisions</SubHead>
+                <Note n="1"><strong style={{ color: "var(--text)" }}>“No results yet”</strong>, not “No results”. The <em>yet</em> signals it's an empty-not-broken state and that results are expected to arrive.</Note>
+                <Note n="2">Sub-copy adds <strong style={{ color: "var(--text)" }}>“validation and transform”</strong> — the two card kinds the Results screen renders. The current line omits this; new users learn what the screen is for.</Note>
+                <Note n="3">Sentence case, single sentence, full stop. Matches the app's other empty lines (<M>“No sets yet…”</M>, <M>“No functions registered yet…”</M>).</Note>
+                <Note n="4">The header sub-line stays its own shorter string (<M>“Run a pipeline to see results here”</M>) — don't dedupe them; they live in different parts of the screen at different sizes.</Note>
+              </Block>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── ICON ── */}
+        <Section id="icon">
+          <SectionHead kicker="Spec · 3" title="Icon">
+            Reuse the existing <M>results</M> glyph from the <M>ICONS</M> map — the same mark used in the nav for this screen. No new icon is added to <M>ui.jsx</M>. Empty Results showing the Results icon is the most direct “you are here, and it's empty” signal.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,280px) 1fr", gap: 28, alignItems: "start" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)" }}>The tile · live</span>
+                <div style={{ display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 64, height: 64, borderRadius: "var(--radius-lg)", background: "var(--panel-2)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-3)" }}>
+                      <Icon name="results" size={28} />
+                    </div>
+                    <span className="mono" style={{ fontSize: 10, color: "var(--text-4)" }}>tile 64 · glyph 28</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                    <Icon name="results" size={28} style={{ color: "var(--text-3)" }} />
+                    <span className="mono" style={{ fontSize: 10, color: "var(--text-4)" }}>glyph alone</span>
+                  </div>
+                </div>
+              </div>
+              <Block>
+                <SubHead>Spec</SubHead>
+                <Note n="1"><strong style={{ color: "var(--text)" }}>Glyph:</strong> <M>&lt;Icon name="results" size=&#123;28&#125; /&gt;</M> — already in the map, no edit to <M>ui.jsx</M>.</Note>
+                <Note n="2"><strong style={{ color: "var(--text)" }}>Colour:</strong> the glyph inherits <M>--text-3</M> from the tile's <M>color</M>. Muted, not loud — it anchors without competing with the heading.</Note>
+                <Note n="3"><strong style={{ color: "var(--text)" }}>Tile:</strong> <M>64×64</M>, <M>--panel-2</M> background, <M>1px --border</M>, <M>--radius-lg</M>. The same panel/border recipe as the result cards, so the empty state feels native to the grid it replaces.</Note>
+                <Note n="4"><strong style={{ color: "var(--text)" }}>Why a tile, not a bare glyph:</strong> a 28px line icon alone on <M>--bg</M> looks lost; the bordered tile gives it a deliberate footprint and a hit-target-sized presence at centre screen.</Note>
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                  If a future variant wants a kind-specific empty state (validations-only vs transforms-only), the <M>data</M> glyph and the <M>--check</M> / <M>--xform</M> tints are the natural extensions — out of scope here.
+                </div>
+              </Block>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── TOKENS ── */}
+        <Section id="tokens">
+          <SectionHead kicker="Spec · 4" title="Tokens">
+            No new colours. The whole empty state is built from the existing surface, border and text ramp. The one substantive change from today is the text colour: the single line moves off the near-invisible <M>--text-4</M> and onto the readable <M>--text-2 / --text-3</M> pair.
+          </SectionHead>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+            <Card style={{ gap: 16 }}>
+              <SubHead>Use</SubHead>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {[
+                  ["Icon tile", ["--panel-2", "--border"]],
+                  ["Icon glyph", ["--text-3"]],
+                  ["Heading", ["--text-2"]],
+                  ["Sub-copy", ["--text-3"]],
+                  ["CTA (optional, Btn default)", ["--panel-3", "--border", "--text-2"]],
+                  ["Radii", ["--radius-lg"]],
+                ].map(([label, toks]) => (
+                  <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-3)" }}>{label}</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{toks.map(t => <TokenChip key={t} t={t} />)}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card style={{ gap: 16 }}>
+              <SubHead>The text-colour shift</SubHead>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px 14px" }}>
+                  <div style={{ fontSize: 11, color: "var(--text-4)", marginBottom: 6 }}>BEFORE — one line</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <TokenChip t="--text-4" note="14px" />
+                    <span style={{ fontSize: 12, color: "var(--text-3)" }}>nearly invisible at #3a3a42</span>
+                  </div>
+                </div>
+                <div style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px 14px" }}>
+                  <div style={{ fontSize: 11, color: "var(--text-4)", marginBottom: 6 }}>AFTER — heading + sub-copy</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                    <TokenChip t="--text-2" note="heading" />
+                    <TokenChip t="--text-3" note="sub-copy + glyph" />
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                  No token is added or removed in <M>:root</M> — this is purely choosing readable steps on the existing ramp. <M>--text-4</M> stays reserved for timestamps and the faintest meta, where it belongs.
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <Card>
+            <PropsTable
+              head={["Element", "Token", "Detail"]}
+              rows={[
+                ["Wrapper", "—", "flex column, centre/centre, height 100%, text-align center, gap 18, padding 24"],
+                ["Icon tile", "--panel-2 / --border", "64×64, --radius-lg, 1px border, color: --text-3"],
+                ["Icon glyph", "--text-3", "<Icon name=\"results\" size={28} /> — inherits tile colour"],
+                ["Heading", "--text-2", "16px / 600 · \"No results yet\""],
+                ["Sub-copy", "--text-3", "13px / line-height 1.6 / max-width 340 / text-wrap balance"],
+                ["CTA (optional)", "Btn default", "size sm, icon \"builder\", margin-top 2"],
+              ]}
+            />
+          </Card>
+        </Section>
+
+        {/* ── OPTIONAL CTA ── */}
+        <Section id="cta">
+          <SectionHead kicker="Spec · 5" title="Optional — “Go to Builder” CTA">
+            Low priority, additive, and safe to defer. If wired, it turns the empty state from descriptive to actionable. The navigation plumbing already exists — the screen just needs the <M>onNavigate</M> handler threaded down from the app shell.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,260px) 1fr", gap: 28, alignItems: "start" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)" }}>Live</span>
+                <div style={{ display: "flex", justifyContent: "center", padding: "20px 0", background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                  <Btn variant="default" size="sm" icon="builder" onClick={() => {}}>Go to Builder</Btn>
+                </div>
+              </div>
+              <Block>
+                <SubHead>Rules</SubHead>
+                <Note n="1">Render it <strong style={{ color: "var(--text)" }}>only when an <M>onNavigate</M> prop is present</strong>. Absent the handler, the empty state ships with just icon + heading + sub-copy — fully meeting the acceptance criteria.</Note>
+                <Note n="2">Use the shared <M>Btn variant="default" size="sm"</M> with <M>icon="builder"</M>. Not <M>primary</M> — a violet CTA would over-weight a passive zero-state; the quiet default reads as a gentle nudge.</Note>
+                <Note n="3">On click: <M>onNavigate("builder")</M>, matching the nav keys used elsewhere in the app shell.</Note>
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                  If <M>ScreenResults</M> doesn't already receive a nav handler, threading one in is its own tiny change — keep it out of this slice unless it's a one-liner. The component reads <M>onNavigate</M> defensively so it no-ops when undefined.
+                </div>
+              </Block>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── IMPLEMENTATION ── */}
+        <Section id="impl">
+          <SectionHead kicker="Handoff" title="Implementation">
+            One new local component, <M>ResultsEmptyState</M>, defined in <M>screen-results.jsx</M> and swapped into the existing <M>resultCards.length === 0</M> branch. <M>Icon</M> and <M>Btn</M> come from the <M>window.__UI__</M> destructure already used across the screens.
+          </SectionHead>
+
+          <Card>
+            <Block>
+              <SubHead>The swap — in ScreenResults' card-grid branch</SubHead>
+              <Diff rows={[
+                [" ", "{resultCards.length === 0 ? ("],
+                ["-", "  <div style={{"],
+                ["-", "    display: \"flex\", alignItems: \"center\", justifyContent: \"center\","],
+                ["-", "    height: \"100%\", color: \"var(--text-4)\", fontSize: 14, textAlign: \"center\","],
+                ["-", "  }}>"],
+                ["-", "    Run a pipeline from the Builder screen to see results here."],
+                ["-", "  </div>"],
+                ["+", "  <ResultsEmptyState />"],
+                [" ", ") : ("],
+                [" ", "  /* …card grid unchanged… */"],
+                [" ", ")}"],
+              ]} />
+            </Block>
+            <Block>
+              <SubHead>The component</SubHead>
+              <Diff rows={[
+                ["+", "function ResultsEmptyState({ onNavigate }) {"],
+                ["+", "  return ("],
+                ["+", "    <div style={{"],
+                ["+", "      display: \"flex\", flexDirection: \"column\","],
+                ["+", "      alignItems: \"center\", justifyContent: \"center\","],
+                ["+", "      height: \"100%\", textAlign: \"center\", padding: 24, gap: 18,"],
+                ["+", "    }}>"],
+                ["+", "      <div style={{"],
+                ["+", "        width: 64, height: 64, borderRadius: \"var(--radius-lg)\","],
+                ["+", "        background: \"var(--panel-2)\", border: \"1px solid var(--border)\","],
+                ["+", "        display: \"flex\", alignItems: \"center\", justifyContent: \"center\","],
+                ["+", "        color: \"var(--text-3)\","],
+                ["+", "      }}>"],
+                ["+", "        <Icon name=\"results\" size={28} />"],
+                ["+", "      </div>"],
+                ["+", "      <div style={{ display: \"flex\", flexDirection: \"column\", alignItems: \"center\", gap: 8 }}>"],
+                ["+", "        <div style={{ fontSize: 16, fontWeight: 600, color: \"var(--text-2)\" }}>"],
+                ["+", "          No results yet"],
+                ["+", "        </div>"],
+                ["+", "        <div style={{ fontSize: 13, color: \"var(--text-3)\", maxWidth: 340,"],
+                ["+", "          lineHeight: 1.6, textWrap: \"balance\" }}>"],
+                ["+", "          Run a pipeline from the Builder screen to see"],
+                ["+", "          validation and transform results here."],
+                ["+", "        </div>"],
+                ["+", "      </div>"],
+                ["+", "      {onNavigate && ("],
+                ["+", "        <Btn variant=\"default\" size=\"sm\" icon=\"builder\""],
+                ["+", "             onClick={() => onNavigate(\"builder\")} style={{ marginTop: 2 }}>"],
+                ["+", "          Go to Builder"],
+                ["+", "        </Btn>"],
+                ["+", "      )}"],
+                ["+", "    </div>"],
+                ["+", "  );"],
+                ["+", "}"],
+              ]} />
+              <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                <M>Icon</M> and <M>Btn</M> are already in scope via <M>const &#123; Icon, Btn, … &#125; = window.__UI__</M> at the top of the file's screens. If the destructure here doesn't yet pull them, add them. No import of <M>builder</M> / <M>results</M> needed — both live in the <M>ICONS</M> map inside <M>ui.jsx</M>.
+              </div>
+            </Block>
+          </Card>
+        </Section>
+
+        {/* ── ACCEPTANCE ── */}
+        <Section id="acceptance">
+          <SectionHead kicker="Handoff" title="Acceptance criteria" />
+          <Card>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {[
+                "Empty state renders a centred icon tile (results glyph), heading \"No results yet\", and the validation-and-transform sub-copy.",
+                "It shows only when resultCards.length === 0; the card grid is otherwise unchanged.",
+                "Layout matches the spec: flex column, centre/centre, height 100%, gap 18; heading→sub-copy gap 8; region padding 24.",
+                "Uses only existing CSS tokens — --panel-2, --border, --text-2, --text-3, --radius-lg. No new colours, no hardcoded hex.",
+                "Reuses the existing results glyph from ICONS — no new icon added to ui.jsx.",
+                "No new external dependencies; Icon and Btn come from window.__UI__.",
+                "Optional Go to Builder CTA is gated behind an onNavigate prop and absent by default — its omission does not fail the slice.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 11, alignItems: "flex-start", padding: "9px 0", borderBottom: i < 6 ? "1px solid var(--border-soft)" : "none" }}>
+                  <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 5, background: "var(--accent-soft)", border: "1px solid var(--accent-line)", display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>
+                    <Icon name="check" size={11} style={{ color: "var(--accent)" }} />
+                  </span>
+                  <span style={{ fontSize: 13.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 18px", background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+            <Icon name="data" size={15} style={{ color: "var(--text-3)" }} />
+            <div style={{ fontSize: 12.5, color: "var(--text-3)", lineHeight: 1.6 }}>
+              <strong style={{ color: "var(--text-2)", fontWeight: 600 }}>Sequencing.</strong> Land after <M>#119</M> (shared UI primitives) to avoid a <M>screen-results.jsx</M> merge conflict. Once this brief is pasted into the issue, remove the “Blocked on Design brief” notice and re-label <M>ready-for-agent</M>.
+            </div>
+          </div>
+        </Section>
+
+      </div>
+
+      {/* footer */}
+      <footer style={{ marginTop: 64, paddingTop: 22, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>pipeui · design brief · issue #121 · feat/results-empty-state</span>
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>screen-results.jsx · ScreenResults</span>
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

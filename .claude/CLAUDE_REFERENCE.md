@@ -512,9 +512,11 @@ Granularity high → low:
 3. `pd.series`.
 4. `pd.dataframe`.
 
-Anything above `scalar` is **`multi_select_eligible`**: a parameter can take a
-stack of eligible column arguments and the function runs once per argument
-(e.g. 3 eligible columns → 3 runs → 3 results aggregated in the summary).
+Anything above `scalar` is **`multi_select_eligible`** — i.e. `column_backed` or
+`pd.series` (`pd.dataframe` is excluded: the full table is always passed, never
+expanded). An eligible parameter can bind more than one column; the runner then
+expands it into **argument bundles** and runs the function once per bundle (see
+§12 for the positional-pairing, static-param-broadcast, and equal-length rules).
 
 **`function_type`** — derived from the return: a `boolean` / `pd.Series[bool]`
 return ⇒ `validation`; any non-boolean return ⇒ `transform`.
@@ -558,9 +560,26 @@ sources.
   `function_registry.function_signature` (§1) is the canonical captured
   `param_name: type` signature this binding follows; the `parameter` rows are the
   queryable decomposition `alias_map` joins against.
-- **Multi-select loop.** For a `multi_select_eligible` parameter with N mapped
-  eligible columns, the function runs N times (once per column); results are
-  aggregated in the summary (§16/Results — deferred).
+- **Multi-select = argument bundles.** `multi_select_eligible` is a
+  granularity-derived label (a parameter above `scalar` — `column_backed` or
+  `pd.Series`; `pd.DataFrame` excluded, see below). It marks **intent the runner
+  reads** and is **decoupled from current `alias_map` presence** — a parameter can
+  be eligible before its columns are mapped. An eligible parameter binding more
+  than one column is executed as a series of **`argument bundle`s**, not a single
+  call: the runner pairs the bound columns of every eligible parameter
+  **positionally** — bundle `i` takes each **varying param**'s `i`-th column in
+  user-placed order (the `position` on `alias_map`, §2 of ADR-0001) — and runs the
+  function once per bundle. A **`static param`** (bound to exactly one column)
+  **broadcasts** its single column into every bundle. All *varying* params must
+  bind the **same** column count **N** (the **equal-length-among-varying** rule,
+  enforced at attach in frontend and backend); N is the bundle count. Unequal
+  lengths are rejected at attach — no silent zip-shortest truncation. Validity is
+  **all-or-nothing per bundle**: a bundle with any invalid member column is skipped
+  whole. Each bundle yields one `RunResult` (results surface as the transposed
+  `results report` / `transformed report` — §16/Results, deferred). The
+  single-column path is the `N = 1` special case. A `scalar run` is the orthogonal
+  loop over **rows** (once per record, normalized to a vector); the two loops are
+  independent.
 - **`pd.DataFrame` implicit binding.** A `pd.dataframe` parameter does **not**
   get an `alias_map` row. The full source table is passed automatically — no
   column mapping UI, no `alias_map` write. The backend fetches the entire instance

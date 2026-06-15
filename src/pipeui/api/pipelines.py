@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from pipeui.db import get_conn
 from pipeui.workflow.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
+from pipeui.workflow.export import build_results_report, build_transformed_report
 from pipeui.workflow.run import get_staging_rows, run_pipeline, run_set_across_sources
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
@@ -39,11 +40,16 @@ class AttachStepIn(BaseModel):
     set_id: str | None = None
     bindings: list[BindingIn] = []
     output_mode: str = "append"
+    scalar_values: dict | None = None   # param_id -> literal value; persisted to source_scalar_map
+    output_targets: list[str] | None = None  # ordered target column_ids for a replace step (slice 4)
+    append_name: str | None = None      # optional user-provided append column name (slice 4)
 
 
 class PatchStepIn(BaseModel):
     position: int | None = None
     output_mode: str | None = None
+    bindings: dict | None = None        # param_id -> [column_id, ...], replaces all alias_map rows
+    scalar_values: dict | None = None   # param_id -> value string, upserted into source_scalar_map
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,26 @@ def attach_step(
         for b in body.bindings
     ]
 
+    # Parse scalar_values: param_id str -> literal value (str). Used for scalar
+    # params and str params in plain-string mode (Bug #186).
+    parsed_scalars: Optional[dict] = None
+    if body.scalar_values is not None:
+        try:
+            parsed_scalars = {
+                uuid.UUID(p_id): str(value)
+                for p_id, value in body.scalar_values.items()
+            }
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid scalar_values: {exc}")
+
+    # Parse ordered output-target column_ids for a replace step (slice 4).
+    parsed_targets: Optional[list] = None
+    if body.output_targets is not None:
+        try:
+            parsed_targets = [uuid.UUID(c) for c in body.output_targets]
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid output_targets: {exc}")
+
     result = attach_function(
         conn,
         sid,
@@ -167,6 +193,9 @@ def attach_step(
         function_id=fn_id,
         set_id=st_id,
         output_mode=body.output_mode,
+        scalar_values=parsed_scalars,
+        output_targets=parsed_targets,
+        append_name=body.append_name,
     )
     return result
 
@@ -229,13 +258,37 @@ def patch_pipeline_step_route(
             detail=f"Invalid source_function_map_id: {source_function_map_id!r}",
         )
 
+    # Parse bindings dict: param_id str -> [column_id str, ...]
+    parsed_bindings = None
+    if body.bindings is not None:
+        try:
+            parsed_bindings = {
+                uuid.UUID(p_id): [uuid.UUID(c) for c in col_ids]
+                for p_id, col_ids in body.bindings.items()
+            }
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid bindings: {exc}")
+
+    # Parse scalar_values dict: param_id str -> value str
+    parsed_scalars = None
+    if body.scalar_values is not None:
+        try:
+            parsed_scalars = {
+                uuid.UUID(p_id): str(value)
+                for p_id, value in body.scalar_values.items()
+            }
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid scalar_values: {exc}")
+
     try:
         ok = patch_pipeline_step(
             conn, sid, sfm_id,
             position=body.position,
             output_mode=body.output_mode,
+            bindings=parsed_bindings,
+            scalar_values=parsed_scalars,
         )
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     if not ok:
@@ -270,6 +323,60 @@ def get_staging_rows_route(
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     return get_staging_rows(conn, sid)
+
+
+@router.get("/{source_id}/export/results")
+def export_source_results_report(
+    source_id: str,
+    run_type: str = Query(default="validations"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Export the transposed results report for a source (source-tied entry point).
+
+    Runs the source's pipeline (default run_type=validations — each validation function
+    ran) and returns {"columns": [...], "rows": [...]}: one row per RunResult, keyed by
+    its normalized label, with pass/fail + metadata columns, INCLUDING runs that passed.
+
+    404 when source_id is unknown.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    result = run_pipeline(conn, sid, run_type)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    return build_results_report(result)
+
+
+@router.get("/{source_id}/export/transformed")
+def export_transformed_report(
+    source_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Export the source's transformed report (the transformed data table).
+
+    Returns {"columns": [...], "rows": [...]} — the transformed data after all assigned
+    transforms completed (the latest staging table). Returns an empty payload (not an
+    error) when no transform has run, so a mixed validation/transform set exports
+    cleanly (#193).
+
+    404 when source_id is unknown.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    row = conn.execute(
+        "SELECT source_id FROM source_registry WHERE source_id = ?", [sid]
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    return build_transformed_report(conn, sid)
 
 
 @router.post("/{source_id}/run")

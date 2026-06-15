@@ -71,14 +71,14 @@ def seed_validation_step_for_set(db, source_id, column_id, fn_name, module_path,
     )
     param_id = uuid.uuid4()
     param_ch = uuid.uuid4()
-    db.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
                [param_id, param_ch, "data", "pd.Series", fn_id])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
     sfm_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_id, source_id, set_id, 0, "append"])
     alias_id = content_hash_id("alias_map", str(param_id), str(column_id), str(source_id))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id, column_id, param_id, source_id])
     return sfm_id
 

@@ -1,0 +1,104 @@
+{
+  "feature_slug": "runner-execution",
+  "discovery_status": "frozen",
+  "stack_context": "mixed",
+  "intent": "Take a configured pipeline (sources with function steps attached via alias_map) and execute it through the runner (workflow/run.py) into the Results screen, honoring the multi-select binding model the design already specifies but the runner does not yet implement.",
+  "definition_of_done": "A user attaches a function with one or more multi_select_eligible params bound to multiple columns (order = add-order by default), runs it, and: (1) the runner — a stateful per-step executor — executes one argument bundle per positional index (static/length-1 params broadcast; equal-length enforced among varying params, frontend + backend; scalar functions normalized to vectors via scalar run), producing one RunResult per bundle; (2) validations surface on the Results screen as pass/fail counts with readable per-bundle labels (UUID5 identity underneath) and export as a transposed results report; (3) transforms apply per output_mode — append (cleaned auto-label or user-provided name) or replace (into explicit ordered target columns via the new output-target map, paired with bundles) — into the transformed report, exportable; pd.DataFrame transforms return the whole table (edge); (4) the single-column path still works (regression-locked) and #193's mixed-set card-type bug is fixed via RunResult; (5) all export labels are normalized; (6) design.md + CLAUDE_REFERENCE §12 are reconciled. Every behavioral guarantee above has a test (collaboration rule 10).",
+  "mvp_scope": "Backend + logic + a minimal, conventions-following frontend so EVERY slice is a vertical cut (data -> logic -> api -> ui) the end user can test start to finish; no backend-only slices. Includes: stateful runner executor + RunResult (validation-specialized subclass); argument-bundle loop with static-param broadcast, equal-length enforcement, user-placed order via a new alias_map.position column (add-order default; runner/get_pipeline order by position not column_name); a minimal conventions-following reorder control in the mapping modal (move-up/down or numbered order) so column order is user-changeable and testable end-to-end; multi-column binding + replace-target selection surfaced in the mapping modal following existing conventions; transform output_mode append (cleaned label / optional user name) and replace (new output-target map, ordered targets paired with bundles); Results screen pass/fail count cards with readable labels; a MINIMAL results drawer reusing an existing drawer component; two exports (transposed results report + transformed report) including passing runs with normalized labels; single-run regression lock; #193 closed via RunResult; design.md/§12 doc reconciliation. The two design-gated tickets (polished drag-reorder pane, rich results drawer) layer ON TOP of these vertical slices and never block end-to-end testability.",
+  "explicitly_out_of_scope": [
+    "Full RICH results drawer UI (design-gated, future) — MVP DOES ship a minimal drawer reusing an existing component; only the polished/rich redesign is gated and layers on top",
+    "Polished drag-reorder PANE UI for argument-bundle column order (design-gated, future) — MVP DOES ship a minimal conventions-following reorder control (e.g. move-up/down or numbered order in the existing mapping modal) plus backend add-order inference and the position column; only the polished drag pane is gated and layers on top",
+    "#160 empty-pipeline result card (separate ticket, orthogonal frontend guard)",
+    "Broadcasting params with length >1 but <N (only length-1 static params broadcast; everything else must equal N)",
+    "pd.DataFrame multi-select as column-subset execution (rejected — no mechanism; full table always passed)",
+    "v2 per-source scalar argument persistence beyond what source_scalar_map already does (project-wide deferred)",
+    "Cross-source joins / multi-version staging history in the Results layer (v2, per E2 out-of-scope)"
+  ],
+  "affected_components": [
+    "workflow/run.py (_fetch_steps: read alias_map ORDER BY position not column_name; _execute_transform_step/_execute_validation_step: argument-bundle loop + static-param broadcast; build Result objects)",
+    "NEW RunResult object (sole result-holder, identity = short UUID5(func, argument bundle, source), carries normalized vector + rich metadata; validation-specialized subclass) — no such type exists today",
+    "Runner refactored from free functions to a STATEFUL per-step executor (class) holding function + input bindings + output-target binding, producing RunResults",
+    "NEW output-target map table (transform-replace: ordered target columns per step/function, paired with bundles) — no existing table maps a function's OUTPUT to a column",
+    "workflow/attach.py (write alias_map position on attach; patch_pipeline_step rewrites positions; enforce equal-length-among-varying-params backend guard)",
+    "api/pipelines.py (POST /run + GET /staging serialize Result objects; PATCH steps for column reorder; equal-length validation surfaced)",
+    "NEW results-report export (comprehensive transforms+checks incl. passing) — current export is frontend/per-card only",
+    "frontend/screen-results.jsx (pass/fail count card + label; future drawer for full Result metadata; export the results report)",
+    "frontend/screen-builder.jsx (drag-reorder pane for argument-bundle column order — design-gated)",
+    "schema/queries.py (alias_map gets position column — breaking DDL recreate)",
+    "docs: design.md reconciliation (pd.DataFrame, multi-param model, terms) + CLAUDE_REFERENCE §12"
+  ],
+  "dependencies": [],
+  "terms_resolved": [
+    "scalar run",
+    "scalar loop",
+    "multi_select_eligible",
+    "argument bundle",
+    "static param",
+    "RunResult",
+    "results report",
+    "transformed report"
+  ],
+  "assumptions": [
+    "Feature branch release/runner-execution was cut from release/v0.0.1-beta (the repo's beta accumulator, per project memory) rather than from main, so the eventual feature PR targets v0.0.1-beta. Flag if main was intended.",
+    "Single-column transform+validation path works end-to-end today (attach -> alias_map -> run_pipeline -> staging -> Results), per codebase scoping. To be re-validated, not assumed.",
+    "RunResult must stay a focused result-holder (status, counts, normalized vector, identity metadata) and not absorb unrelated responsibilities ('be smart, no big ball of mud' — user). Design principle for the refactor.",
+    "The MVP minimal results drawer reuses an existing drawer component (function/set detail drawer family, cf. #215) — exact component to reuse is a to-slices/to-code implementation detail.",
+    "Perf: N argument bundles = N worker invocations per function (process-isolated per design.md §10). Acceptable for v1 (single trusted local user); batching/optimization deferred. Not a blocker.",
+    "Output-target map keying (likely (source_function_map_id, function_id) -> ordered (column_id, position)) and whether it reuses alias_map with a role discriminator vs a new table is a to-slices/to-code decision; discovery only fixes that the mapping must exist and be ordered."
+  ],
+  "resolved_decisions": [
+    {
+      "question": "Is multi-PARAM column binding in scope, or only single-param multi-column expansion?",
+      "resolution": "In scope. The execution model is a ZIP across all multi_select_eligible params, paired positionally by user-placed column order. Example: country bound to [USA, Japan], team bound to [Raiders, Giants] -> run 1 = (country=USA, team=Raiders), run 2 = (country=Japan, team=Giants). For column_backed/pd.Series params the i-th run receives the i-th column's Series ('Table[name]'). This generalizes design.md's single-param example (foo(bar) over 3 columns = a length-3 zip over one param). User decided this directly; user is open to a more robust/faster mechanism than a literal zip as long as user-controlled ordering is preserved."
+    },
+    {
+      "question": "What defines multi_select_eligible?",
+      "resolution": "It is a LABEL marking a parameter that may bind more than one column, derived from the param's granularity being above scalar (column_backed, pd.Series). It is intent the runner reads, NOT a claim the columns are currently in alias_map — a column may be unmapped yet should be bound, and the label still applies. Reverts to design.md line 257 ('any granularity higher than scalar is multi_select_eligible'); my earlier 'alias_map-tied' framing was the drift. pd.DataFrame eligibility remains open."
+    },
+    {
+      "question": "Canonical glossary terms for the three execution concepts, grounded in design.md vocabulary?",
+      "resolution": "Locked and projected to CONTEXT.md: (1) 'scalar run' (canonical) with 'scalar loop' as synonym — the per-RECORD loop normalizing a scalar function to a vector; (2) 'multi_select_eligible' (verbatim from design.md line 257) — the per-COLUMN eligibility label; (3) 'argument bundle' — one positionally-paired group of column args per run, all-or-nothing valid; (4) 'static param' — a multi_select_eligible param bound to one column, broadcast into every bundle. 'set'/'tuple'/'group' rejected ('set' collides with function_set). Names deliberately anchored in design.md so the PRD/runner/UI speak the project's original language."
+    },
+    {
+      "question": "Which parts of this feature are design-gated (need a visual brief) vs MVP-shippable?",
+      "resolution": "REVISED post-PRD (user, to keep slices properly vertical). DESIGN-GATED (blocked-on-design per the pipeui HITL rule) is NARROWED to just the POLISHED redesign layer: (1) the polished drag-reorder PANE ('separate pane/window'), and (2) the FULL rich results drawer. Everything needed to test the workflow end-to-end is MVP and NOT gated: backend add-order inference + alias_map position column, a MINIMAL conventions-following reorder control (move-up/down or numbered order in the existing mapping modal), multi-column binding + replace-target selection in the mapping modal (existing conventions), the Results count cards, and a MINIMAL results drawer reusing an existing component (cf. #215). Vertical-slicing rule (to-slices SKILL.md): each slice cuts data->logic->api->ui and is independently testable end-to-end; NO backend-only/horizontal slices. The two design-gated tickets DEPEND_ON the corresponding MVP vertical slice and layer on top — they never block the testable workflow. (Corrects the earlier 'backend ships alone + tie ticket converges with gated UI' framing, which was a horizontal split.)"
+    },
+    {
+      "question": "Is the runner-correctness fix and #193 in this feature, or separate?",
+      "resolution": "Single-run path re-validation is INHERENTLY in-scope: the runner becomes a stateful executor and the single-column path is the N=1 special case of the argument-bundle loop, rebuilt through the new path and regression-locked with tests. #193 (mixed-set wrong card-type tag + staging export failure) is FOLDED IN: its root cause is bare-dict results with no clean per-result type/identity, which RunResult subsumes — close #193 through this feature with a named test. #160 (empty pipeline) stays SEPARATE (orthogonal frontend guard, own fix). User agreed."
+    },
+    {
+      "question": "How does transform-replace know its target column, including the multi-varying case?",
+      "resolution": "Replace is NOT disallowed for multi-varying. A transform step in replace mode carries an explicit, user-selected, ORDERED multiselect of TARGET columns (mirroring the input column multiselect on column-backed params), paired positionally with argument bundles: bundle i's output replaces target column i. Works for single-varying (target defaults to the input varying column, user-overridable) and multi-varying alike. Target count must equal the bundle count N (another equal-length constraint). This requires a NEW mapping ('output map' / target-column map) — no existing table does this: alias_map is param-keyed INPUT bindings (attach.py target_col_map is just available source columns), source_function_map is source->set, source_scalar_map is scalar values. Likely keyed by (source_function_map_id, function_id) -> ordered (column_id, position); exact DDL is a to-slices/to-code concern. The RUNNER likely becomes STATEFUL — a class/per-step executor object holding the function, its input bindings, its output-target binding, producing RunResults, and knowing to apply NO target for append. APPEND: a cleaned auto-label (strip leading underscores etc. — clean, do not remove the label) with an OPTIONAL user-provided name override (not required). This is architecturally significant (stateful runner + new mapping) — candidate ADR at freeze."
+    },
+    {
+      "question": "Shape of the results report, and what transform-replace needs to know?",
+      "resolution": "(1) The results report is TRANSPOSED: one row per RunResult keyed by the approved label, with pass/fail/other-metadata columns — NOT result vectors appended as columns. So _apply_output_mode governs only the transformed report (the chaining data table), not the results report. RunResult may be SPECIALIZED for validations (subclass carrying pass/fail) over a shared base. Export labels must be NORMALIZED (no '__' or odd tokens) to avoid breaking file formats. (2) Transform-REPLACE must know the target column it overwrites (= the bound varying column; true even for single-varying). Transform-APPEND adds a new column with a normalized auto-label OR a user-provided name. VALIDATIONS need no target column (separate report, never overwrite), so a validation function need not know where it applies. (3) pd.DataFrame transform returns the whole table; flagged as an edge case. Two distinct exportables confirmed: 'results report' (transposed validation summary) and 'transformed report' (the transformed data table)."
+    },
+    {
+      "question": "How do N per-bundle results surface, and what holds the result data?",
+      "resolution": "The runner returns a NET-NEW 'Result' object that is the SOLE holder of result metadata (no existing Result/Outcome type in pipeui today; runner returns bare dicts at run.py:680/732/868/939 — this is a bounded refactor of the return + API serialization + frontend consumption). Carry as MUCH metadata as possible so the frontend can surface more later. Each Result corresponds to one scalar-run-normalized vector (validation -> boolean vector; transform -> value vector), one per argument bundle. Result identity = a shortened UUID5(function, argument bundle, source) mirroring the content_hash_id pattern. THREE-TIER surfacing: (1) Results screen CARD shows pass/fail COUNT + a label (per-bundle) — count is enough on the card; (2) a DRAWER the user clicks into expands the full Result metadata (full arguments, sources, the check itself, failing rows) — this rich drawer is FUTURE/likely design-gated, not MVP-critical; (3) a 'results report' EXPORT appends every normalized vector (BOTH transforms AND checks, INCLUDING runs where everything passed) into one exportable report. Existing single-column path is the N=1 special case and must keep working (#193 mixed-set card-type fragility must not regress)."
+    },
+    {
+      "question": "Result label, MVP drawer scope, canonical term names, and export scope?",
+      "resolution": "(a) LABEL: human-readable varying-column name(s) on the card with the shortened UUID5 as the stable identity behind it — accepted as the placeholder label for now. (b) DRAWER: a MINIMAL drawer for MVP that reuses an already-existing drawer component (e.g. the function/set detail drawer family, cf. issue #215) with small additions; the full rich results drawer is FUTURE / design-gated. (c) TERMS: the backend object is 'RunResult' (camelCase) — use it for anything backend dealing with results, but keep it a focused result-holder, NOT a big ball of mud (do not overload it). 'results report' = the exportable files derived from RunResults, including passing runs. EXPORT SCOPE for MVP = two reports: (1) VALIDATION results export with two entry points — from the Functions page (each source the function is attached to ran) and tied to a source (each validation function on the source ran); (2) TRANSFORMED report export — a source's fully-transformed table after all Builder-assigned transforms completed their cycle. Both projected to CONTEXT.md."
+    },
+    {
+      "question": "Is pd.DataFrame multi_select_eligible?",
+      "resolution": "NO. CLAUDE_REFERENCE §12 wins over design.md line 257. A pd.DataFrame param binds no column, gets no alias_map row, and always receives the full source table = one run, never expansion. It can still participate in a multi-select run as a BROADCAST whole-table argument when OTHER params expand (a static param whose 'value' is the entire table). Column-subset binding for DataFrames was considered and rejected (no mechanism exists). User agreed."
+    },
+    {
+      "question": "design.md reconciliation — what edits does design.md need, and when?",
+      "resolution": "Decided edits (applied as a DOC DELIVERABLE of this feature during build, NOT during grilling — grill-discovery only writes ledger/CONTEXT/ADR): (a) state multi_select_eligible is an eligibility LABEL derived from granularity, decoupled from current alias_map presence; (b) document the multi-PARAM argument-bundle positional-pairing execution model with static-param broadcast and the equal-length-among-varying-params rule (design.md today only shows the single-param case lines 257-260); (c) remove pd.DataFrame from the multi_select_eligible enumeration at line 257 (or annotate it 'not eligible — full table always passed, see §12') to kill the contradiction; (d) introduce the canonical terms scalar run, argument bundle, static param. Per collaboration rule 3 design.md and CLAUDE.md must stay consistent."
+    },
+    {
+      "question": "How is user-placed column order persisted so argument bundles align by position — position column on alias_map, or a separate ordering table?",
+      "resolution": "position INTEGER on alias_map, scoped per (parameter_id, source_id). Runner and get_pipeline read ORDER BY parameter_id, position (replacing the alphabetical cr.column_name sort at run.py:187) and pair bundles by EQUAL position across params (bundle[i] = each param's i-th column). A separate table was rejected: alias_map_id already includes source_id (attach.py:190), so rows are per-source and a position cannot leak across sources ('Table A goes off' cannot happen); a separate (source,param,position)->column table would restate the binding alias_map already holds (sync hazard) — violates the project's minimal-correct-design principle. Reuse (design.md line 99) shares the MAPPING (parameter_id + content-shared column_id), not the ROW, so positions stay per-source even if a prefill feature is later built. Drag-reorder in the UI sets position (explicit); backend infers add-order as the default so a never-reordered attach still runs. Breaking DDL recreate is safe (no prod data, per standing rule)."
+    },
+    {
+      "question": "How are argument bundles formed when multi-select params bind unequal column counts?",
+      "resolution": "Hybrid broadcast + enforce-equal. A param bound to ONE column is a 'static param' and is broadcast into every bundle. All params bound to MORE THAN one column must share a single length N (= number of bundles). If two or more distinct lengths exist among the >1 params, it is an error rejected at attach, enforced in BOTH the frontend (UX guard) and backend. Examples: 3,3,1 -> ok (broadcast the 1); 3,2 -> error. Zip-shortest / silent truncation explicitly rejected — silent column loss is the defect this feature removes."
+    }
+  ],
+  "open_risks_to_resolve": []
+}

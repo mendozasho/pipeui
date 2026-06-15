@@ -4,7 +4,7 @@
 // Transform cards expand to fetch and show staging table preview.
 // Cards have checkboxes; "Export Selected" bar appears when any are checked.
 const { useState, useEffect, useRef } = React;
-const { LoadingState, InlineError, Icon, Btn } = window.__UI__;
+const { LoadingState, InlineError, Icon, Btn, Drawer } = window.__UI__;
 
 function timeAgo(iso) {
   const s = Math.round((Date.now() - new Date(iso)) / 1000);
@@ -71,6 +71,18 @@ const EXPORTERS = {
   xlsx: exportXlsx,
 };
 
+// ── Card-type derivation (#193) ───────────────────────────────────────────────
+// The card type is driven by the RunResult's function_type, so a mixed
+// validation/transform set always renders the correct card variant per result.
+// Falls back to an explicit card_type when present (back-compat with older cards).
+function cardTypeForResult(result) {
+  if (!result) return "validation";
+  if (result.function_type === "transform" || result.function_type === "validation") {
+    return result.function_type;
+  }
+  return result.card_type || "validation";
+}
+
 // ── Type tag badge ────────────────────────────────────────────────────────────
 function TypeTag({ cardType }) {
   const isValidation = cardType === "validation";
@@ -114,11 +126,34 @@ function InlineFormatPicker({ onExport }) {
   );
 }
 
+// #258: a failed run carries its error on the card's steps (pipeline path) or on its
+// sources / nested steps (Functions/Set path). Surface it instead of a silent 0/0.
+function cardFailureError(card) {
+  const fromStep = (card.steps || []).find(s => s.status === "failed" && s.error);
+  if (fromStep) return fromStep.error;
+  for (const src of (card.sources || [])) {
+    if (src.status === "failed" && src.error) return src.error;
+    const st = (src.steps || []).find(s => s.status === "failed" && s.error);
+    if (st) return st.error;
+  }
+  return null;
+}
+
 // ── Summary line ──────────────────────────────────────────────────────────────
-function SummaryLine({ card }) {
-  if (card.card_type === "validation") {
+function SummaryLine({ card, cardType }) {
+  const resolved = cardType || cardTypeForResult(card);
+  if (resolved === "validation") {
     const { rows_passed, rows_failed, pass_rate } = card.summary;
     const total = (rows_passed ?? 0) + (rows_failed ?? 0);
+    // A failed run with no counts: show why it failed, not "0 passed / 0 failed".
+    const failure = total === 0 ? cardFailureError(card) : null;
+    if (failure) {
+      return (
+        <div style={{ fontSize: 12, color: "var(--bad)", fontWeight: 500 }}>
+          {failure}
+        </div>
+      );
+    }
     return (
       <div style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--text-2)" }}>
         <span>
@@ -142,7 +177,7 @@ function SummaryLine({ card }) {
       </div>
     );
   }
-  if (card.card_type === "transform") {
+  if (resolved === "transform") {
     const { rows_affected } = card.summary;
     return (
       <div style={{ fontSize: 12, color: "var(--text-2)" }}>
@@ -531,52 +566,69 @@ function collectFunctionRunExportRows(card) {
   });
 }
 
-function collectValidationExportRows(card) {
+// One row per validation RESULT (function run) — the "final export" lists EVERY
+// validation that ran, including passes AND crashes (#253). A crashed/failed run
+// carries null counts plus its error so it still appears as a failure; a run that
+// executed carries its pass/fail counts. The raw failing DATA records remain
+// viewable in the card's expand-detail; this export is the per-function summary.
+function collectValidationResultRows(card) {
   if (card.trigger === "function") {
+    // Function-triggered: one row per source the function ran against.
     return collectFunctionRunExportRows(card);
   }
-  const steps = card.steps || [];
-  const allRows = [];
-  for (const step of steps) {
-    if (step.failing_rows && step.failing_rows.length > 0) {
-      allRows.push(...step.failing_rows);
-    }
-  }
-  return allRows;
-}
-
-// Returns one summary object per step: { function_name, rows_passed, rows_failed, pass_rate }
-// pass_rate is a decimal (e.g. 1.0, 0.95) — not a percentage string.
-function collectValidationSummaryRows(card) {
-  if (card.trigger === "function" && card.sources) {
-    const rows = [];
-    for (const src of card.sources) {
-      for (const step of (src.steps || [])) {
-        const passed = step.rows_passed ?? 0;
-        const failed = step.rows_failed ?? 0;
-        const total = passed + failed;
-        rows.push({
-          function_name: step.function_name || step.set_name || "",
-          rows_passed: passed,
-          rows_failed: failed,
-          pass_rate: total > 0 ? passed / total : null,
-        });
-      }
-    }
-    return rows;
-  }
-  const steps = card.steps || [];
-  return steps.map(step => {
-    const passed = step.rows_passed ?? 0;
-    const failed = step.rows_failed ?? 0;
-    const total = passed + failed;
+  return (card.steps || []).map(step => {
+    const passed = step.rows_passed;
+    const failed = step.rows_failed;
+    const ran = passed !== null && passed !== undefined;
+    const total = (passed ?? 0) + (failed ?? 0);
     return {
       function_name: step.function_name || step.set_name || "",
-      rows_passed: passed,
-      rows_failed: failed,
-      pass_rate: total > 0 ? passed / total : null,
+      label: step.label ?? "",
+      // status reflects whether the function EXECUTED (ok) or crashed (failed),
+      // not row-level pass/fail — a run with failing data rows is still "ok".
+      status: step.status || (ran ? "ok" : "failed"),
+      rows_passed: ran ? passed : null,
+      rows_failed: ran ? failed : null,
+      pass_rate: ran && total > 0 ? (passed / total * 100).toFixed(1) + "%" : null,
+      error: step.error ?? null,
     };
   });
+}
+
+// ── Minimal results drawer body (slice 5 / #244) ──────────────────────────────
+// Renders the RunResult metadata inside the EXISTING ui.jsx Drawer component
+// (reuse, not a new drawer — the rich drawer is the design-gated slice 8). One
+// labelled row per metadata field; missing fields are skipped.
+function ResultMetaDrawerBody({ card }) {
+  const resolvedType = cardTypeForResult(card);
+  const fields = [
+    ["Label", card.label],
+    ["Function", card.function_name || card.set_name],
+    ["Type", card.function_type || resolvedType],
+    ["Status", card.status],
+    ["Result ID", card.result_id],
+  ];
+  const summary = card.summary || {};
+  if (summary.rows_passed !== undefined && summary.rows_passed !== null) {
+    fields.push(["Passed", summary.rows_passed]);
+  }
+  if (summary.rows_failed !== undefined && summary.rows_failed !== null) {
+    fields.push(["Failed", summary.rows_failed]);
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {fields
+        .filter(([, v]) => v !== undefined && v !== null && v !== "")
+        .map(([label, value]) => (
+          <div key={label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, letterSpacing: ".03em" }}>
+              {label}
+            </span>
+            <span style={{ fontSize: 13, color: "var(--text)" }}>{String(value)}</span>
+          </div>
+        ))}
+    </div>
+  );
 }
 
 // ── Single result card ────────────────────────────────────────────────────────
@@ -584,16 +636,20 @@ function ResultCard({ card, selected, onToggleSelect }) {
   const [expanded, setExpanded] = useState(false);
   const [showExportPicker, setShowExportPicker] = useState(false);
   const [stagingRowsCache, setStagingRowsCache] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const ts = card.run_at ? timeAgo(card.run_at) : "";
   const tsAbsolute = card.run_at ? new Date(card.run_at).toISOString() : "";
-  const filenameStem = exportFilename(card.source_name, card.card_type, "");
+  // Card type is driven by the RunResult function_type (#193): a mixed set renders
+  // the correct variant per result, not a single set-wide tag.
+  const resolvedCardType = cardTypeForResult(card);
+  const filenameStem = exportFilename(card.source_name, resolvedCardType, "");
 
   function handleExport(format) {
     setShowExportPicker(false);
-    if (card.card_type === "validation") {
+    if (resolvedCardType === "validation") {
       const label = sanitiseFilename(card.function_name || card.set_name || card.source_name);
-      const exportRows = collectValidationExportRows(card);
+      const exportRows = collectValidationResultRows(card);
       if (exportRows.length > 0) {
         EXPORTERS[format](exportRows, `${label}_${todayStr()}_validation`);
       }
@@ -601,13 +657,13 @@ function ResultCard({ card, selected, onToggleSelect }) {
     } else {
       // Transform: fetch staging if not cached
       if (stagingRowsCache) {
-        EXPORTERS[format](stagingRowsCache, exportFilename(card.source_name, card.card_type, "").slice(0, -1));
+        EXPORTERS[format](stagingRowsCache, exportFilename(card.source_name, resolvedCardType, "").slice(0, -1));
       } else {
         fetch(`/pipelines/${card.source_id}/staging`)
           .then(r => r.json())
           .then(data => {
             setStagingRowsCache(data.rows);
-            EXPORTERS[format](data.rows, exportFilename(card.source_name, card.card_type, "").slice(0, -1));
+            EXPORTERS[format](data.rows, exportFilename(card.source_name, resolvedCardType, "").slice(0, -1));
           })
           .catch(() => alert("Failed to fetch staging data for export."));
       }
@@ -615,18 +671,19 @@ function ResultCard({ card, selected, onToggleSelect }) {
   }
 
   // Compute filename stems cleanly
-  const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
+  const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${resolvedCardType}`;
   const isFunctionTriggered = card.trigger === "function";
   // Function-triggered cards always have source summary rows to export.
-  // Source-triggered validation cards only enable export when there are failing rows.
+  // Source-triggered validation cards export once any validation ran (#253): the
+  // export lists every result, so it is enabled whenever the card has steps.
   const hasExportRows = isFunctionTriggered
     ? (card.sources || []).length > 0
-    : card.card_type === "validation"
-      ? collectValidationExportRows(card).length > 0
+    : resolvedCardType === "validation"
+      ? collectValidationResultRows(card).length > 0
       : true;
   const exportDisabled = !hasExportRows;
   const exportLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
-  const exportStem = card.card_type === "validation"
+  const exportStem = resolvedCardType === "validation"
     ? `${exportLabel}_${todayStr()}_validation`
     : stem;
 
@@ -667,17 +724,25 @@ function ResultCard({ card, selected, onToggleSelect }) {
           {expanded ? "▾" : "▸"}
         </button>
 
-        {/* Source/function/set name */}
+        {/* Source/function/set name + normalized RunResult label */}
         <div style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
             {card.trigger === "function"
               ? (card.function_name || card.set_name)
               : card.source_name}
           </span>
+          {card.label && (
+            <span style={{
+              fontWeight: 500, fontSize: 12, color: "var(--text-3)",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block",
+            }}>
+              {card.label}
+            </span>
+          )}
         </div>
 
-        {/* Type tag */}
-        <TypeTag cardType={card.card_type} />
+        {/* Type tag — driven by RunResult function_type (#193) */}
+        <TypeTag cardType={resolvedCardType} />
 
         {/* Timestamp */}
         <span
@@ -690,7 +755,7 @@ function ResultCard({ card, selected, onToggleSelect }) {
 
       {/* Summary line */}
       <div style={{ padding: "0 18px 0 56px" }}>
-        <SummaryLine card={card} />
+        <SummaryLine card={card} cardType={resolvedCardType} />
       </div>
 
       {/* Inline export button row */}
@@ -730,6 +795,19 @@ function ResultCard({ card, selected, onToggleSelect }) {
                 {exportStem}.csv / .xlsx
               </span>
             )}
+            {/* Minimal results drawer trigger (slice 5 / #244) */}
+            <button
+              onClick={e => { e.stopPropagation(); setDrawerOpen(true); }}
+              style={{
+                padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                background: "var(--panel-3)", color: "var(--text-2)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                cursor: "pointer", marginLeft: "auto",
+              }}
+              title="View run details"
+            >
+              Details
+            </button>
           </>
         )}
       </div>
@@ -743,12 +821,22 @@ function ResultCard({ card, selected, onToggleSelect }) {
         }}>
           {card.trigger === "function" && card.sources
             ? <SourcesExpand sources={card.sources} />
-            : card.card_type === "validation"
+            : resolvedCardType === "validation"
               ? <ValidationExpand card={card} />
               : <TransformExpand card={card} />
           }
         </div>
       )}
+
+      {/* Minimal results drawer — reuses the existing ui.jsx Drawer (slice 5 / #244).
+          The rich drawer is the design-gated slice 8; this shows RunResult metadata only. */}
+      <Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title={card.label || card.function_name || card.source_name || "Run detail"}
+      >
+        <ResultMetaDrawerBody card={card} />
+      </Drawer>
     </div>
   );
 }
@@ -762,19 +850,10 @@ function ExportSelectedBar({ selectedIds, cards, onClear }) {
     for (const card of selectedCards) {
       if (card.card_type === "validation") {
         const bulkLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
-        if (card.trigger === "function") {
-          const rows = collectFunctionRunExportRows(card);
-          if (rows.length > 0) EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
-          continue;
-        }
-        if ((card.steps || []).length === 0) continue;
-        const failingRows = collectValidationExportRows(card);
-        if (failingRows.length > 0) {
-          EXPORTERS[format](failingRows, `${bulkLabel}_${todayStr()}_validation`);
-        } else {
-          const summaryRows = collectValidationSummaryRows(card);
-          EXPORTERS[format](summaryRows, `${bulkLabel}_${todayStr()}_validation_summary`);
-        }
+        // Same per-result summary as the single-card export (#253): every validation
+        // listed, passes and crashes alike.
+        const rows = collectValidationResultRows(card);
+        if (rows.length > 0) EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
       } else {
         const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
         fetch(`/pipelines/${card.source_id}/staging`)
@@ -943,3 +1022,8 @@ function ScreenResults({ flash, resultCards, resultsContext, onNavigate }) {
 }
 
 window.__ScreenResults__ = ScreenResults;
+
+// Named exports for the dev-time vitest harness only. In the browser the file is
+// loaded as a Babel "module", so these export statements are valid there too; the
+// app consumes the screen via the window.__ScreenResults__ global above.
+export { ScreenResults, ResultCard, SummaryLine, TypeTag, cardTypeForResult, collectValidationResultRows };

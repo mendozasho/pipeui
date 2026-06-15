@@ -70,17 +70,17 @@ def seed_validation_fn_and_attach(db, source_id, column_id, fn_name, module_path
     )
     param_id = uuid.uuid4()
     param_ch = uuid.uuid4()
-    db.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
                [param_id, param_ch, "data", "pd.Series", fn_id])
     set_id = uuid.uuid4()
     set_ch = uuid.uuid4()
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, set_ch, fn_name, None])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
     sfm_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_id, source_id, set_id, position, "append"])
     alias_id = content_hash_id("alias_map", str(param_id), str(column_id), str(source_id))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id, column_id, param_id, source_id])
     return fn_id, set_id, sfm_id
 
@@ -148,11 +148,11 @@ def test_cross_source_run_returns_all_attached_sources(client, db, tmp_path):
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set2_id, set2_ch, "pos_check_s2", None])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set2_id, fn_id, 0])
     sfm2_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm2_id, src2_id, set2_id, 0, "append"])
     param_id = db.execute("SELECT param_id FROM parameter WHERE function_id = ?", [fn_id]).fetchone()[0]
     alias_id2 = content_hash_id("alias_map", str(param_id), str(col2_id), str(src2_id))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id2, col2_id, param_id, src2_id])
 
     r = client.post(f"/validations/run?function_id={fn_id}")
@@ -194,16 +194,16 @@ def test_worker_crash_on_one_source_does_not_block_others(client, db, tmp_path):
     )
     param_id_bad = uuid.uuid4()
     param_ch_bad = uuid.uuid4()
-    db.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
                [param_id_bad, param_ch_bad, "data", "pd.Series", bad_fn_id])
     set_bad_id = uuid.uuid4()
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_bad_id, uuid.uuid4(), "always_pass_bad", None])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_bad_id, bad_fn_id, 0])
     sfm_bad_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_bad_id, src_bad, set_bad_id, 0, "append"])
     alias_id_bad = content_hash_id("alias_map", str(param_id_bad), str(col_bad), str(src_bad))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id_bad, col_bad, param_id_bad, src_bad])
 
     # Run good function across good source (should succeed)
@@ -255,3 +255,135 @@ def test_failing_rows_populated_correctly(client, db, tmp_path):
     failing = src_entry["failing_rows"][0]
     assert failing["id"] == "r2"
     assert int(failing["val"]) == -5
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/1 — acceptance #2: the validations run endpoint
+# serializes RunResult(s) with a readable label and the UUID5 identity.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_validations_endpoint_serializes_label_and_identity(client, db, tmp_path):
+    """Acceptance #2: each per-source result carries a readable label and a UUID5 result_id."""
+    source_id, _ = register_and_ingest(db, tmp_path, name="rrsrc")
+    col_id = get_column_id(db, source_id)
+    module_path = write_fn(tmp_path, "pos_rr", "data", "return data > 0")
+    fn_id, _, _ = seed_validation_fn_and_attach(db, source_id, col_id, "pos_rr", module_path)
+
+    r = client.post(f"/validations/run?function_id={fn_id}")
+    assert r.status_code == 200
+    src_entry = r.json()["sources"][0]
+    import re as _re
+    assert _re.fullmatch(r"[0-9a-f]+", src_entry["result_id"])  # UUID5 identity
+    assert src_entry["label"]                                   # readable, normalized
+    assert not src_entry["label"].startswith("_")
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/5 — #242: transposed results report export.
+# Two entry points (Functions-page cross-source + source-tied validations);
+# one row per RunResult incl. passing runs; normalized labels.
+# ---------------------------------------------------------------------------
+
+def _pipelines_client(db):
+    """A TestClient mounting BOTH the validations and pipelines routers.
+
+    The source-tied results export lives under /pipelines/{source_id}/export/results,
+    so the source-tied test needs the pipelines router too.
+    """
+    from pipeui.api.pipelines import router as pipelines_router
+    app = FastAPI()
+    app.include_router(router)
+    app.include_router(pipelines_router)
+    app.dependency_overrides[get_conn] = lambda: db
+    return TestClient(app)
+
+
+@pytest.mark.integration
+def test_functions_page_results_export_is_transposed_and_includes_passing(db, tmp_path):
+    """#242 (slice #0/#1): the Functions-page export -> a transposed results report.
+
+    One row per RunResult (each attached source ran), including runs that fully
+    passed, each row keyed by its normalized label with pass/fail metadata.
+    """
+    client = _pipelines_client(db)
+    # All rows pass (val > 0) so the run is a fully-passing run that MUST still export.
+    src1_id, _ = register_and_ingest(db, tmp_path, name="rep_src1")
+    src2_id, _ = register_and_ingest(db, tmp_path, name="rep_src2")
+    col1_id = get_column_id(db, src1_id)
+    col2_id = get_column_id(db, src2_id)
+
+    module_path = write_fn(tmp_path, "all_pass", "data", "return data > 0")
+    fn_id, _, _ = seed_validation_fn_and_attach(db, src1_id, col1_id, "all_pass", module_path)
+    # Attach the same function to src2 via a second set.
+    set2_id = uuid.uuid4()
+    db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set2_id, uuid.uuid4(), "all_pass_s2", None])
+    db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set2_id, fn_id, 0])
+    sfm2_id = uuid.uuid4()
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+               [sfm2_id, src2_id, set2_id, 0, "append"])
+    param_id = db.execute("SELECT param_id FROM parameter WHERE function_id = ?", [fn_id]).fetchone()[0]
+    alias_id2 = content_hash_id("alias_map", str(param_id), str(col2_id), str(src2_id))
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+               [alias_id2, col2_id, param_id, src2_id])
+
+    r = client.get(f"/validations/{fn_id}/export/results")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    rows = body["rows"]
+    # Two attached sources -> two RunResult rows, even though every row passed.
+    assert len(rows) == 2
+    for row in rows:
+        # Transposed shape: per-RunResult row with pass/fail + metadata columns.
+        assert "label" in row and "status" in row
+        assert "rows_passed" in row and "rows_failed" in row
+        assert row["rows_failed"] == 0           # fully-passing run, still present
+        assert row["status"] == "ok"
+
+
+@pytest.mark.integration
+def test_source_tied_results_export_one_row_per_validation_function(db, tmp_path):
+    """#242 (slice #0/#1): source-tied entry point -> one row per validation function.
+
+    Exporting a source's validation results yields a transposed report with a row
+    per validation RunResult that ran against that source.
+    """
+    client = _pipelines_client(db)
+    source_id, _ = register_and_ingest(db, tmp_path, name="srctied")
+    col_id = get_column_id(db, source_id)
+    module_path = write_fn(tmp_path, "pos_st", "data", "return data > 0")
+    seed_validation_fn_and_attach(db, source_id, col_id, "pos_st", module_path)
+
+    r = client.get(f"/pipelines/{source_id}/export/results?run_type=validations")
+    assert r.status_code == 200, r.text
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["function_name"] == "pos_st"
+    assert rows[0]["status"] == "ok"
+
+
+@pytest.mark.integration
+def test_results_export_labels_are_normalized(db, tmp_path):
+    """#242 (slice #3): every results-report row label is normalized (no leading _, no odd tokens)."""
+    client = _pipelines_client(db)
+    source_id, _ = register_and_ingest(db, tmp_path, name="normsrc")
+    col_id = get_column_id(db, source_id)
+    module_path = write_fn(tmp_path, "norm_chk", "data", "return data > 0")
+    seed_validation_fn_and_attach(db, source_id, col_id, "norm_chk", module_path)
+
+    r = client.get(f"/pipelines/{source_id}/export/results?run_type=validations")
+    assert r.status_code == 200, r.text
+    import re as _re
+    for row in r.json()["rows"]:
+        label = row["label"]
+        assert label, "label must be non-empty"
+        assert not label.startswith("_"), f"label has leading underscore: {label!r}"
+        # No odd tokens: only alphanumerics and interior single underscores survive.
+        assert _re.fullmatch(r"[0-9A-Za-z]+(?:_[0-9A-Za-z]+)*", label), f"odd token in label: {label!r}"
+
+
+def test_results_export_unknown_function_returns_404(db):
+    """#242: exporting results for an unknown function_id returns 404."""
+    client = _pipelines_client(db)
+    r = client.get(f"/validations/{uuid.uuid4()}/export/results")
+    assert r.status_code == 404

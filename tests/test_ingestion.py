@@ -288,7 +288,7 @@ def _seed_function_on_source(db, source_id, fn_name, fn_type, position=0):
     param_id = uuid.uuid4()
     param_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
         [param_id, param_ch, "value", "str", fn_id],
     )
 
@@ -307,7 +307,7 @@ def _seed_function_on_source(db, source_id, fn_name, fn_type, position=0):
 
     sfm_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
         [sfm_id, source_id, set_id, position, "append"],
     )
     return set_id, set_name

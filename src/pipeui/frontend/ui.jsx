@@ -1,5 +1,5 @@
 // Shared UI primitives — Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable
-const { useState, useRef } = React;
+const { useState, useRef, useEffect } = React;
 
 // ── Icons (inline SVG, single source of truth) ───────────────────────────────
 const ICONS = {
@@ -20,6 +20,9 @@ const ICONS = {
   trash:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 6h12l-1 11H5L4 6zM8 6V4h4v2M2 6h16"/></svg>,
   results:  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="14" height="14" rx="1.5"/><path d="M7 13V10M10 13V7M13 13v-2"/></svg>,
   group:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="16" height="3" rx="1"/><rect x="4" y="10" width="12" height="2.5" rx="1" opacity=".6"/><rect x="6" y="14.5" width="8" height="2" rx="1" opacity=".35"/></svg>,
+  join:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="10" r="5"/><circle cx="12" cy="10" r="5"/></svg>,
+  search:   <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="9" cy="9" r="5.5"/><path d="m13 13 4 4"/></svg>,
+  back:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11 5 6 10l5 5M6 10h9"/></svg>,
 };
 
 function Icon({ name, size = 16, style }) {
@@ -447,4 +450,92 @@ function OrderBadge({ n, dragging, ...dragProps }) {
   );
 }
 
-window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge };
+// ── Modal ─────────────────────────────────────────────────────────────────────
+// Centred dialog chrome on a scrim. Closes on ✕, scrim-click, and Esc. Shared
+// primitive consolidating the inline modal chrome used across the app.
+// Props: open, onClose, title, icon, caption, width, footer, children, headerExtra.
+function Modal({ open, onClose, title, icon, caption, width = 460, footer, children, headerExtra }) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e) { if (e.key === "Escape" && onClose) onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div data-testid="modal-scrim" onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 200,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+    }}>
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+        width, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100% - 24px)",
+        background: "var(--panel)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)", boxShadow: "0 16px 48px rgba(0,0,0,.6)",
+        display: "flex", flexDirection: "column", overflow: "hidden",
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "16px 20px", borderBottom: "1px solid var(--border)", flexShrink: 0,
+        }}>
+          {icon && <span style={{ color: "var(--accent)", display: "inline-flex", flexShrink: 0 }}><Icon name={icon} size={18} /></span>}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{title}</div>
+            {caption && <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>{caption}</div>}
+          </div>
+          {headerExtra}
+          <button aria-label="Close" onClick={onClose} style={{
+            background: "none", border: "none", cursor: "pointer", color: "var(--text-3)",
+            display: "inline-flex", padding: 4, borderRadius: "var(--radius)", flexShrink: 0,
+          }}>
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>{children}</div>
+        {footer && (
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+            padding: "14px 20px", borderTop: "1px solid var(--border)", flexShrink: 0,
+          }}>
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Switch ────────────────────────────────────────────────────────────────────
+// Token-native two-state toggle. Props: checked, onChange, disabled, size ("sm"|"md").
+function Switch({ checked, onChange, disabled, size = "md" }) {
+  const dims = size === "sm" ? { w: 30, h: 17, knob: 13 } : { w: 36, h: 20, knob: 16 };
+  function toggle() { if (!disabled && onChange) onChange(!checked); }
+  return (
+    <span role="switch" aria-checked={checked} tabIndex={disabled ? -1 : 0}
+      onClick={toggle}
+      onKeyDown={e => { if ((e.key === " " || e.key === "Enter") && !disabled) { e.preventDefault(); toggle(); } }}
+      style={{
+        position: "relative", display: "inline-flex", flexShrink: 0,
+        width: dims.w, height: dims.h, borderRadius: 99,
+        background: checked ? "var(--accent)" : "var(--panel-3)",
+        border: "1px solid " + (checked ? "transparent" : "var(--border)"),
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+        transition: "background .15s, border-color .15s",
+      }}>
+      <span style={{
+        position: "absolute", top: 1, left: checked ? dims.w - dims.knob - 3 : 2,
+        width: dims.knob, height: dims.knob, borderRadius: "50%",
+        background: checked ? "var(--accent-ink, #fff)" : "var(--text-3)",
+        transition: "left .15s, background .15s",
+      }} />
+    </span>
+  );
+}
+
+window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch };
+
+// Named exports for the dev-time vitest harness only. In the browser the file is
+// loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
+// these are valid there too; the app itself consumes primitives via window.__UI__.
+export { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch };

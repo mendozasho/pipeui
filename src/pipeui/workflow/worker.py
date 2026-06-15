@@ -13,6 +13,7 @@ Design constraints (CLAUDE_REFERENCE.md §10, CLAUDE.md Principle 5):
 from __future__ import annotations
 
 import io
+import json
 import os
 import struct
 import subprocess
@@ -103,6 +104,8 @@ def _unpack_argument(raw: bytes) -> Any:
 _WORKER_SCRIPT = textwrap.dedent(
     """\
     import io, os, struct, sys
+    import json as _json
+    import __future__ as _future
     import resource
     import pandas as pd
     import pyarrow as pa
@@ -161,22 +164,29 @@ _WORKER_SCRIPT = textwrap.dedent(
     # deserialise:
     #   [4-byte fn_source_len][fn_source bytes]
     #   [4-byte kwname_len][kwname bytes]
+    #   [4-byte extra_len][extra_kwargs JSON bytes]   (#258: scalar params, broadcast)
     #   [remaining bytes = Arrow IPC arg]
     off = 0
     fn_len  = struct.unpack(">I", raw_in[off:off+4])[0]; off += 4
     fn_src  = raw_in[off:off+fn_len].decode(); off += fn_len
     kw_len  = struct.unpack(">I", raw_in[off:off+4])[0]; off += 4
     kw_name = raw_in[off:off+kw_len].decode(); off += kw_len
+    extra_len = struct.unpack(">I", raw_in[off:off+4])[0]; off += 4
+    extra_kwargs = _json.loads(raw_in[off:off+extra_len].decode()) if extra_len else {}; off += extra_len
     arg_raw = raw_in[off:]
 
     # execute user function
     fn_name = os.environ["_PIPEUI_FN"]
     mod = type(sys)("_user_fn")
-    exec(compile(fn_src, "<user_fn>", "exec"), mod.__dict__)
+    # #268: compile with future-annotations so the user's type annotations are NOT
+    # evaluated at def time — a file with `-> pd.Series[bool]` (no future import) would
+    # otherwise crash the whole module exec with 'type Series is not subscriptable'.
+    _flags = _future.annotations.compiler_flag
+    exec(compile(fn_src, "<user_fn>", "exec", flags=_flags, dont_inherit=True), mod.__dict__)
     fn = mod.__dict__[fn_name]
 
     arg    = _unpack(arg_raw)
-    result = fn(**{kw_name: arg})
+    result = fn(**{kw_name: arg}, **extra_kwargs)
 
     # write result back on stdout
     out = _pack(result)
@@ -192,12 +202,25 @@ _WORKER_SCRIPT = textwrap.dedent(
 # ---------------------------------------------------------------------------
 
 
+def _clean_worker_stderr(text: str) -> str:
+    """#270: drop the macOS `[worker] setrlimit failed` warning line(s).
+
+    On non-Linux, `setrlimit(RLIMIT_AS)` fails harmlessly (Principle 5), printing a
+    warning to stderr. Since a failed worker's error is `"worker crashed: " + stderr`,
+    that line otherwise prefixes EVERY failure and buries the real traceback. Stripping
+    it leaves the actual error as what the user sees; the limitation itself is unchanged.
+    """
+    lines = [ln for ln in text.splitlines() if "[worker] setrlimit failed" not in ln]
+    return "\n".join(lines).strip()
+
+
 def call_function(
     fn_source: str,
     fn_name: str,
     kwarg_name: str,
     arg: Any,
     *,
+    extra_kwargs: dict | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     cpu_seconds: int = DEFAULT_CPU_SECONDS,
     memory_bytes: int = DEFAULT_MEMORY_BYTES,
@@ -221,13 +244,17 @@ def call_function(
 
     fn_src_bytes = fn_source.encode()
     kw_bytes = kwarg_name.encode()
+    # #258: scalar params passed by keyword (JSON), broadcast into every call.
+    extra_bytes = json.dumps(extra_kwargs or {}).encode()
 
-    # payload: [4-byte fn_len][fn_source][4-byte kw_len][kw_name][Arrow IPC arg]
+    # payload: [fn_len][fn_source][kw_len][kw_name][extra_len][extra_json][Arrow IPC arg]
     payload = (
         struct.pack(">I", len(fn_src_bytes))
         + fn_src_bytes
         + struct.pack(">I", len(kw_bytes))
         + kw_bytes
+        + struct.pack(">I", len(extra_bytes))
+        + extra_bytes
         + arg_bytes
     )
     # stdin envelope: [4-byte total_len][payload]
@@ -257,7 +284,8 @@ def call_function(
 
     if proc.returncode != 0:
         fail = FailedFunctionEntry()
-        err_msg = stderr.decode(errors="replace").strip() or f"exit code {proc.returncode}"
+        # #270: strip the harmless macOS setrlimit warning so the real error surfaces.
+        err_msg = _clean_worker_stderr(stderr.decode(errors="replace")) or f"exit code {proc.returncode}"
         fail.add(fn_name, f"worker crashed: {err_msg}")
         return fail
 

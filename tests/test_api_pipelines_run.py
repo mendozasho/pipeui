@@ -86,17 +86,17 @@ def seed_transform_step(db, source_id, column_id, fn_name, module_path, position
     )
     param_id = uuid.uuid4()
     param_ch = uuid.uuid4()
-    db.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
                [param_id, param_ch, "data", "pd.Series", fn_id])
     set_id = uuid.uuid4()
     set_ch = uuid.uuid4()
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, set_ch, fn_name, None])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
     sfm_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_id, source_id, set_id, position, output_mode])
     alias_id = content_hash_id("alias_map", str(param_id), str(column_id), str(source_id))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id, column_id, param_id, source_id])
     return sfm_id, set_id
 
@@ -111,17 +111,17 @@ def seed_validation_step(db, source_id, column_id, fn_name, module_path, positio
     )
     param_id = uuid.uuid4()
     param_ch = uuid.uuid4()
-    db.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
                [param_id, param_ch, "data", "pd.Series", fn_id])
     set_id = uuid.uuid4()
     set_ch = uuid.uuid4()
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, set_ch, fn_name, None])
     db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
     sfm_id = uuid.uuid4()
-    db.execute("INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_id, source_id, set_id, position, "append"])
     alias_id = content_hash_id("alias_map", str(param_id), str(column_id), str(source_id))
-    db.execute("INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id, column_id, param_id, source_id])
     return sfm_id, set_id
 
@@ -478,3 +478,122 @@ def test_failing_rows_empty_on_worker_crash(client, db, tmp_path):
     step = r.json()["steps"][0]
     assert step["status"] == "failed"
     assert step["failing_rows"] == []
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/1 — acceptance #2: POST /run serializes RunResult(s)
+# with a readable label and the UUID5 identity.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_run_validations_serializes_runresult_identity_and_label(client, db, tmp_path):
+    """Acceptance #2: each validation result carries a UUID5 result_id and a readable label."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_path = write_fn(tmp_path, "rr_gt5", "data", "return data > 5")
+    seed_validation_step(db, source_id, col_id, "rr_gt5", fn_path, position=0)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    step = r.json()["steps"][0]
+    import re as _re
+    assert _re.fullmatch(r"[0-9a-f]+", step["result_id"])  # UUID5 hex identity
+    assert step["label"] == "val"                          # readable, normalized
+    assert step["function_type"] == "validation"
+
+
+@pytest.mark.integration
+def test_run_transforms_serializes_runresult_identity_and_label(client, db, tmp_path):
+    """Acceptance #2: a transform run result carries a UUID5 result_id and a readable label."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_path = write_fn(tmp_path, "rr_double", "data", "return data * 2")
+    seed_transform_step(db, source_id, col_id, "rr_double", fn_path)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=transforms")
+    assert r.status_code == 200
+    step = r.json()["steps"][0]
+    import re as _re
+    assert _re.fullmatch(r"[0-9a-f]+", step["result_id"])
+    assert step["label"] == "val"
+    assert step["function_type"] == "transform"
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/3 — acceptance #4: POST /run returns per-bundle RunResults
+# (one per argument bundle). The Results screen renders one card per RunResult
+# (slice 1), so N RunResults -> N labeled cards.
+# NEW alias_map fixtures use explicit-column INSERTs (slice-2 5th column position).
+# ---------------------------------------------------------------------------
+
+def register_and_ingest_multicol(db, tmp_path, name="multi", cols=("a", "b", "c")):
+    header = ["id", *cols]
+    rows = [["r1", *[10] * len(cols)], ["r2", *[20] * len(cols)], ["r3", *[30] * len(cols)]]
+    path = make_csv(tmp_path, f"{name}.csv", header, rows)
+    source_id, failed = create_source(db, path, name, "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+    return source_id
+
+
+def seed_multicol_validation_step(db, source_id, column_ids, fn_name, module_path, position=0):
+    fn_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, uuid.uuid4(), "pd.series", fn_name, None, "pd.Series[bool]",
+         "data: pd.Series", "validation", module_path, True],
+    )
+    param_id = uuid.uuid4()
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
+               [param_id, uuid.uuid4(), "data", "pd.Series", fn_id])
+    set_id = uuid.uuid4()
+    db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, uuid.uuid4(), fn_name, None])
+    db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
+    sfm_id = uuid.uuid4()
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+               [sfm_id, source_id, set_id, position, "append"])
+    for pos, col_id in enumerate(column_ids):
+        alias_id = content_hash_id("alias_map", str(param_id), str(col_id), str(source_id))
+        db.execute(
+            "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id, position) VALUES (?, ?, ?, ?, ?)",
+            [alias_id, col_id, param_id, source_id, pos],
+        )
+    return sfm_id, set_id
+
+
+@pytest.mark.integration
+def test_run_returns_one_runresult_per_bundle(client, db, tmp_path):
+    """Acceptance #4: a validation bound to N columns -> N per-bundle RunResults over POST /run."""
+    source_id = register_and_ingest_multicol(db, tmp_path, cols=("a", "b", "c"))
+    col_ids = [
+        db.execute(
+            "SELECT cr.column_id FROM column_registry cr "
+            "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+            "WHERE scm.source_id = ? AND cr.column_name = ?",
+            [source_id, c],
+        ).fetchone()[0]
+        for c in ("a", "b", "c")
+    ]
+    fn_path = write_fn(tmp_path, "gt15_api", "data", "return data > 15")
+    seed_multicol_validation_step(db, source_id, col_ids, "gt15_api", fn_path)
+
+    r = client.post(f"/pipelines/{source_id}/run?run_type=validations")
+    assert r.status_code == 200
+    steps = r.json()["steps"]
+    assert len(steps) == 3
+    labels = sorted(s["label"] for s in steps)
+    assert labels == ["a", "b", "c"]
+    # Distinct per-bundle identity.
+    assert len({s["result_id"] for s in steps}) == 3

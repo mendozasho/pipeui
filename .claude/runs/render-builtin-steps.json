@@ -1,0 +1,19 @@
+{
+  "feature_slug": "render-builtin-steps",
+  "ledger_hash": "f19e702193c1a823b340e2c527dd161a7eb910219885d36b279a7b30f99a03ba",
+  "accumulator_branch": "feat/render-builtin-steps",
+  "current_round": 1,
+  "slices": {
+    "1": {
+      "status": "integrated",
+      "branch": "feat/render-builtin-steps",
+      "workspace": "main checkout (collapsed accumulator+slice, single-slice feature)",
+      "pr": 213,
+      "integrated_at": "2026-06-14T09:07:50Z",
+      "note": "Built on feat/render-builtin-steps (collapsed accumulator+slice). Integrator re-verified: 74 pytest + 43 vitest green; lone test_worker setrlimit failure is pre-existing/macOS-env (CI Linux). Tests promoted (stable behavior). PR #213 -> release/v0.0.1-beta open for human review."
+    }
+  },
+  "integration_order": [
+    "1"
+  ]
+}

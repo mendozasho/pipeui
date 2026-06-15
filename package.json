@@ -1,0 +1,17 @@
+{
+  "name": "pipeui-frontend-tests",
+  "private": true,
+  "type": "module",
+  "description": "Dev-time component test harness for the no-build-step frontend. Not shipped; the app runs from CDN React + Babel standalone.",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.1.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "feature_slug": "runner-execution",
+  "last_projected_at": "2026-06-15T01:55:19.064807+00:00",
+  "tickets": {
+    "1": {
+      "parent_issue": 218,
+      "parent_hash": "ad2e68196869b03957b6c5e8c8da56ade440b808e00bb9686a0424f37fcde56a",
+      "sub_issues": [
+        {
+          "issue": 226,
+          "owns_acceptance": [
+            5
+          ],
+          "hash": "f79e6dd7b52afd288a563b34f705644a9c3a31671733154f5547dbf26e541bee"
+        },
+        {
+          "issue": 227,
+          "owns_acceptance": [
+            0,
+            1
+          ],
+          "hash": "4d57646f65ff2ff44679a11b6732e6372dfd06c339622c16499578c687cb52a2"
+        },
+        {
+          "issue": 228,
+          "owns_acceptance": [
+            2
+          ],
+          "hash": "da90633ef055279fe1f5a85d3120d8a3344d7be1706f3b05ee7ce3ac07d67503"
+        },
+        {
+          "issue": 229,
+          "owns_acceptance": [
+            3,
+            4
+          ],
+          "hash": "1e08d2103376d5ec9d4d7557ef0d27ef8a07ea019f3e42142996f692d8c06051"
+        }
+      ]
+    },
+    "2": {
+      "parent_issue": 219,
+      "parent_hash": "974c48da4614e34de679629d9ab4391528e934ce20daf09f63217857fb865deb",
+      "sub_issues": [
+        {
+          "issue": 230,
+          "owns_acceptance": [
+            0
+          ],
+          "hash": "d2d6f31f20e3eaec205a9c8450391b39edc703a2d4adeaa6db80c4ea562358c6"
+        },
+        {
+          "issue": 231,
+          "owns_acceptance": [
+            1,
+            2
+          ],
+          "hash": "211d481deeea0fac20816ac7db2e62982ab273f9c93861fa62238d4427ce9d54"
+        },
+        {
+          "issue": 232,
+          "owns_acceptance": [
+            3
+          ],
+          "hash": "d7a24a4bd8638e590eba59519a3a43abe248a1152aea4e366c2965abbcd40f32"
+        },
+        {
+          "issue": 233,
+          "owns_acceptance": [
+            4
+          ],
+          "hash": "acd2a8bae82e482badc247ce2cd35a9d70288de098acfda0b2048d5b4584c8ea"
+        }
+      ]
+    },
+    "3": {
+      "parent_issue": 220,
+      "parent_hash": "4f33455e8783e7543648d924a1452a41d4df03f33cfc54aca0b198501e55fa83",
+      "sub_issues": [
+        {
+          "issue": 234,
+          "owns_acceptance": [
+            0,
+            1
+          ],
+          "hash": "6f683ea64f5b1828cc0eac2fd009f608bc583892ba08fd28b299ede030c6e303"
+        },
+        {
+          "issue": 235,
+          "owns_acceptance": [
+            2,
+            3
+          ],
+          "hash": "b931c05eea7c832297d61ebf1f517314115aa3b78fa51ef405cba0dbf919df90"
+        },
+        {
+          "issue": 236,
+          "owns_acceptance": [
+            4
+          ],
+          "hash": "d33a1ed728e275ae1dbc2943f3573f611937a04e226d52decf40ee2b7cfd91c5"
+        },
+        {
+          "issue": 237,
+          "owns_acceptance": [
+            5
+          ],
+          "hash": "257ad00b5a6dd0e0fc1b0d8068295b206d851ef2fc2e8bc9f77521ddb32268f6"
+        }
+      ]
+    },
+    "4": {
+      "parent_issue": 221,
+      "parent_hash": "375dbee9530cc3ef98be16369904a9e637144ad6b68ea7ec350514fa48e6bae2",
+      "sub_issues": [
+        {
+          "issue": 238,
+          "owns_acceptance": [
+            2
+          ],
+          "hash": "01a7c7a0f497d20718983d34ac0db97a6177b1ca3b435f61d0c3f2c0faf24afb"
+        },
+        {
+          "issue": 239,
+          "owns_acceptance": [
+            0
+          ],
+          "hash": "40829e10333e134fc5338139ee918c5341d6da57ec11dcb78a08ba5837b9b5ff"
+        },
+        {
+          "issue": 240,
+          "owns_acceptance": [
+            1,
+            3,
+            4
+          ],
+          "hash": "2a894a08cbfa7c0173df1ad786d8e107c9cd978730af050757c92f3b28a56730"
+        },
+        {
+          "issue": 241,
+          "owns_acceptance": [
+            5
+          ],
+          "hash": "d4f0d2d04b8f6004c0b010b0d1fbcf3ed6f0af12314eaaaa5780008e12dd0416"
+        }
+      ]
+    },
+    "5": {
+      "parent_issue": 222,
+      "parent_hash": "8445e969ef7327c7218c5274cdad4973afdfbf0d32acb438cd4187707904de0c",
+      "sub_issues": [
+        {
+          "issue": 242,
+          "owns_acceptance": [
+            0,
+            1,
+            3
+          ],
+          "hash": "043a04b6a1a058495818be11177a77ece2b7d877e939e212f4f08384a7ad7c3c"
+        },
+        {
+          "issue": 243,
+          "owns_acceptance": [
+            2,
+            4
+          ],
+          "hash": "20afdf2333574ebddf888e58cc825cb6b48a469b25522acfee10a2629be04882"
+        },
+        {
+          "issue": 244,
+          "owns_acceptance": [
+            5
+          ],
+          "hash": "464b7d349d1be6cdb498256575f3dd26456bf62b3cc9bb881d94680c1ce997cf"
+        }
+      ]
+    },
+    "6": {
+      "parent_issue": 223,
+      "parent_hash": "70a2ef103f9e780f5bbf18cffc88f9961eb958cdc8b1284bdd6a11116df53126",
+      "sub_issues": []
+    },
+    "7": {
+      "parent_issue": 224,
+      "parent_hash": "e6f004f8526550c04eecc8d55748868c6f435a4da3dba7b9832a945a1c536880",
+      "sub_issues": []
+    },
+    "8": {
+      "parent_issue": 225,
+      "parent_hash": "b2725d3d23048ae0bb9d27c2b64d9d287813114d32718454d5560902ec146977",
+      "sub_issues": []
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "hub_threshold": 3,
+  "harvested_records": [
+    "join-source-picker-modal/152",
+    "render-builtin-steps/1"
+  ],
+  "files": {
+    "src/pipeui/frontend/screen-builder.jsx": {
+      "slice_count": 2,
+      "layers": ["business_logic", "api", "ui"],
+      "features": ["join-source-picker-modal", "render-builtin-steps"],
+      "missing": false
+    },
+    "src/pipeui/frontend/screen-builder.test.jsx": {
+      "slice_count": 2,
+      "layers": ["business_logic", "api", "ui"],
+      "features": ["join-source-picker-modal", "render-builtin-steps"],
+      "missing": false
+    },
+    "src/pipeui/frontend/ui.jsx": {
+      "slice_count": 1,
+      "layers": ["ui"],
+      "features": ["join-source-picker-modal"],
+      "missing": false
+    },
+    "src/pipeui/frontend/ui.test.jsx": {
+      "slice_count": 1,
+      "layers": ["ui"],
+      "features": ["join-source-picker-modal"],
+      "missing": false
+    },
+    "src/pipeui/frontend/test-setup.js": {
+      "slice_count": 1,
+      "layers": ["ui"],
+      "features": ["join-source-picker-modal"],
+      "missing": false
+    },
+    "src/pipeui/workflow/attach.py": {
+      "slice_count": 1,
+      "layers": ["business_logic", "api", "ui"],
+      "features": ["render-builtin-steps"],
+      "missing": false
+    },
+    "tests/test_attach.py": {
+      "slice_count": 1,
+      "layers": ["business_logic", "api", "ui"],
+      "features": ["render-builtin-steps"],
+      "missing": false
+    },
+    "tests/test_api_pipelines.py": {
+      "slice_count": 1,
+      "layers": ["business_logic", "api", "ui"],
+      "features": ["render-builtin-steps"],
+      "missing": false
+    }
+  }
+}

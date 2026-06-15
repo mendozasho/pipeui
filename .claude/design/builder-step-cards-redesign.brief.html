@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PipeUI — Builder Step Cards Redesign · Design Brief</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10; --panel: #141416; --panel-2: #1a1a1d; --panel-3: #202024;
+    --border: rgba(255,255,255,0.08); --border-soft: rgba(255,255,255,0.04); --hover: rgba(255,255,255,0.06);
+    --text: #f0f0f2; --text-2: #a0a0aa; --text-3: #6a6a74; --text-4: #3a3a42;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24; --run: #60a5fa;
+    --accent: #7c6cf5; --accent-soft: rgba(124,108,245,0.12); --accent-line: rgba(124,108,245,0.4); --accent-ink: #fff;
+    --check: #60a5fa; --check-bg: rgba(96,165,250,0.1); --xform: #fbbf24; --xform-bg: rgba(251,191,36,0.1);
+    --radius: 6px; --radius-lg: 10px;
+    font-family: 'Geist', system-ui, sans-serif;
+    font-size: 14px;
+  }
+
+  body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; line-height: 1.5; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  body::before {
+    content: ""; position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: .5;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useRef } = React;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PRIMITIVES — lifted verbatim from ui.jsx so the before/after renders the
+   REAL components. drag/check/close/warn/chevron/trash all exist in ICONS.
+   ────────────────────────────────────────────────────────────────────────── */
+const ICONS = {
+  close:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m5 5 10 10M15 5 5 15"/></svg>,
+  check:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 10 4.5 4.5L16 6"/></svg>,
+  warn:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 3 2 17h16L10 3z"/><path d="M10 8v4M10 14v.5"/></svg>,
+  drag:     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7.5" cy="6" r="1"/><circle cx="12.5" cy="6" r="1"/><circle cx="7.5" cy="10" r="1"/><circle cx="12.5" cy="10" r="1"/><circle cx="7.5" cy="14" r="1"/><circle cx="12.5" cy="14" r="1"/></svg>,
+};
+function Icon({ name, size = 16, style }) {
+  const svg = ICONS[name]; if (!svg) return null;
+  return <span style={{ display: "inline-flex", alignItems: "center", width: size, height: size, flexShrink: 0, ...style }}>{React.cloneElement(svg, { width: size, height: size })}</span>;
+}
+
+/* ── KindTag / type badge as used on the StepCard (TYPE_BADGE_COLORS) ── */
+const TYPE_BADGE_COLORS = {
+  Validation: { bg: "#e8f4fd", color: "#2980b9" },
+  Transform:  { bg: "#eafaf1", color: "#27ae60" },
+  Mixed:      { bg: "#fef9e7", color: "#d68910" },
+};
+function TypeBadge({ type }) {
+  const s = TYPE_BADGE_COLORS[type] || { bg: "var(--panel-3)", color: "var(--text-3)" };
+  return <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 99, flexShrink: 0, background: s.bg, color: s.color }}>{type}</span>;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   THE TWO PROPOSED PRIMITIVES — rendered live, exactly as specced for ui.jsx
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* OrderBadge — doubles as the drag handle. Number is the 1-based visual order. */
+function OrderBadge({ n, dragging }) {
+  const [hover, setHover] = useState(false);
+  const bg = dragging ? "var(--accent-soft)" : hover ? "var(--hover)" : "var(--panel-3)";
+  const border = dragging || hover ? "var(--accent-line)" : "var(--border)";
+  const ink = dragging ? "var(--accent)" : "var(--text-2)";
+  return (
+    <span
+      title="Drag to reorder"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: 26, height: 26, flexShrink: 0, cursor: "grab",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)", background: bg, border: "1px solid " + border,
+        color: ink, transition: "background .12s, border-color .12s, color .12s",
+      }}
+    >
+      {hover && !dragging
+        ? <Icon name="drag" size={16} style={{ color: "var(--text-3)" }} />
+        : <span className="mono" style={{ fontSize: 12, fontWeight: 600, lineHeight: 1 }}>{n}</span>}
+    </span>
+  );
+}
+
+/* Checkbox — the ui.jsx primitive that replaces raw <input type="checkbox">. */
+function Checkbox({ checked, onChange, disabled }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      role="checkbox"
+      aria-checked={checked}
+      onClick={() => !disabled && onChange && onChange(!checked)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: 17, height: 17, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--radius)",
+        background: checked ? "var(--accent)" : "var(--panel-2)",
+        border: "1px solid " + (checked ? "transparent" : hover && !disabled ? "var(--accent-line)" : "var(--border)"),
+        color: "var(--accent-ink)",
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+        transition: "background .12s, border-color .12s",
+      }}
+    >
+      {checked && <Icon name="check" size={12} />}
+    </span>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DOC CHROME — same kit as the Function-Drawer brief
+   ────────────────────────────────────────────────────────────────────────── */
+function Eyebrow({ children, color = "var(--accent)" }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color }}>{children}</div>;
+}
+function SubHead({ children }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{children}</div>;
+}
+function Card({ children, style }) {
+  return <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 24, display: "flex", flexDirection: "column", gap: 20, ...style }}>{children}</div>;
+}
+function Block({ children, style }) {
+  return <div style={{ display: "flex", flexDirection: "column", gap: 12, ...style }}>{children}</div>;
+}
+function Section({ id, children }) {
+  return <section id={id} style={{ display: "flex", flexDirection: "column", gap: 20, scrollMarginTop: 24 }}>{children}</section>;
+}
+function SectionHead({ kicker, title, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Eyebrow>{kicker}</Eyebrow>
+      <h2 style={{ fontSize: 23, fontWeight: 600, letterSpacing: "-.01em" }}>{title}</h2>
+      {children && <p style={{ fontSize: 14, color: "var(--text-2)", maxWidth: 740, lineHeight: 1.6 }}>{children}</p>}
+    </div>
+  );
+}
+function M({ children }) { return <span className="mono" style={{ color: "var(--text)" }}>{children}</span>; }
+
+function Diff({ rows, file = "screen-builder.jsx" }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "#0a0a0c" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 12px", borderBottom: "1px solid var(--border-soft)", background: "var(--panel-2)" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 99, background: "var(--text-4)" }} />
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-3)" }}>{file}</span>
+      </div>
+      {rows.map(([sign, ln], i) => {
+        const bg = sign === "-" ? "rgba(248,113,113,.06)" : sign === "+" ? "rgba(52,211,153,.06)" : "transparent";
+        const mk = sign === "-" ? "var(--bad)" : sign === "+" ? "var(--good)" : "var(--text-4)";
+        return (
+          <div key={i} className="mono" style={{ display: "flex", fontSize: 12, lineHeight: 1.6, background: bg }}>
+            <span style={{ width: 22, textAlign: "center", color: mk, flexShrink: 0, userSelect: "none", opacity: .8 }}>{sign === " " ? "" : sign}</span>
+            <span style={{ color: ln.trimStart().startsWith("//") ? "var(--text-4)" : "var(--text-2)", whiteSpace: "pre-wrap", paddingRight: 12 }}>{ln}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function PropsTable({ head = ["Prop", "Type", "Default", "Notes"], rows }) {
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead><tr>{head.map(h => <th key={h} style={{ padding: "7px 12px", textAlign: "left", color: "var(--text-3)", fontWeight: 500, fontSize: 10.5, letterSpacing: ".06em", textTransform: "uppercase", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i} style={{ borderBottom: "1px solid var(--border-soft)" }}>
+            {r.map((cell, j) => <td key={j} className={j < 3 ? "mono" : ""} style={{ padding: "8px 12px", fontSize: j < 3 ? 12.5 : 13, color: j === 0 ? "var(--accent)" : j === 1 ? "var(--good)" : j === 2 ? "var(--text-3)" : "var(--text-2)", whiteSpace: j === 3 ? "normal" : "nowrap", verticalAlign: "top" }}>{cell}</td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+function TokenChip({ t, note }) {
+  return (
+    <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", fontSize: 11, color: "var(--text-2)" }}>
+      <span style={{ width: 10, height: 10, borderRadius: 3, background: `var(${t})`, border: "1px solid rgba(255,255,255,.14)" }} />{t}{note && <span style={{ color: "var(--text-4)" }}>· {note}</span>}
+    </span>
+  );
+}
+function Note({ n, children }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 99, background: "var(--accent-soft)", border: "1px solid var(--accent-line)", color: "var(--accent)", fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>{n}</span>
+      <span style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>{children}</span>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   STEP-CARD MOCKS — faithful reproductions of screen-builder.jsx StepCard
+   ────────────────────────────────────────────────────────────────────────── */
+const STEPS = [
+  { id: "a", name: "Null & range checks", type: "Validation", position: 0 },
+  { id: "b", name: "Currency normaliser",  type: "Transform",  position: 1 },
+  { id: "c", name: "Dedup + flag late",    type: "Mixed",      position: 2 },
+];
+
+/* function-row line, as inside the real StepCard */
+function FnLine({ name, kind }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 4px", borderBottom: "1px solid var(--border-soft)" }}>
+      <span style={{ fontSize: 10, color: "var(--text-4)", width: 10, flexShrink: 0 }}>▸</span>
+      <span style={{ fontSize: 12, fontWeight: 500 }}>{name}</span>
+      <span className="mono" style={{ fontSize: 10, padding: "1px 5px", borderRadius: 99, background: "var(--panel-3)", color: "var(--text-3)" }}>{kind}</span>
+    </div>
+  );
+}
+
+/* BEFORE — current StepCard: whole card draggable, "#position" grey pill */
+function StepCardBefore({ step }) {
+  return (
+    <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, cursor: "grab" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, background: "var(--panel-3)", color: "var(--text-3)", borderRadius: 99, padding: "2px 7px", flexShrink: 0 }}>
+          {"#" + step.position}
+        </span>
+        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.name}</span>
+        <TypeBadge type={step.type} />
+        <span style={{ color: "var(--text-4)", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>x</span>
+      </div>
+      <FnLine name={step.name === "Currency normaliser" ? "to_usd" : "check_nulls"} kind={step.type === "Transform" ? "transform" : "validation"} />
+    </div>
+  );
+}
+
+/* AFTER — order badge = drag handle (only it is draggable), index-based number */
+function StepCardAfter({ step, n, dragging, handleProps }) {
+  return (
+    <div style={{ background: "var(--panel)", border: "1px solid " + (dragging ? "var(--accent-line)" : "var(--border)"), borderRadius: "var(--radius-lg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, opacity: dragging ? 0.4 : 1, transition: "opacity .15s, border-color .15s" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <span {...handleProps}><OrderBadge n={n} dragging={dragging} /></span>
+        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.name}</span>
+        <TypeBadge type={step.type} />
+        <span style={{ color: "var(--text-4)", fontSize: 16, lineHeight: 1, padding: "2px 4px", cursor: "pointer" }}>x</span>
+      </div>
+      <FnLine name={step.name === "Currency normaliser" ? "to_usd" : "check_nulls"} kind={step.type === "Transform" ? "transform" : "validation"} />
+    </div>
+  );
+}
+
+/* live reorderable stack — proves the order numbers recompute on drag */
+function LiveReorder() {
+  const [list, setList] = useState(STEPS);
+  const [dragIdx, setDragIdx] = useState(null);
+  const fromRef = useRef(null);
+
+  function onDragStart(i) { fromRef.current = i; setDragIdx(i); }
+  function onDragEnd() { fromRef.current = null; setDragIdx(null); }
+  function onDragOver(e, over) {
+    e.preventDefault();
+    const from = fromRef.current;
+    if (from === null || from === over) return;
+    const next = [...list];
+    const [moved] = next.splice(from, 1);
+    next.splice(over, 0, moved);
+    fromRef.current = over; setDragIdx(over);
+    setList(next);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {list.map((step, i) => (
+        <div key={step.id} onDragOver={e => onDragOver(e, i)}>
+          <StepCardAfter
+            step={step}
+            n={i + 1}
+            dragging={dragIdx === i}
+            handleProps={{
+              draggable: true,
+              onDragStart: () => onDragStart(i),
+              onDragEnd,
+              style: { display: "inline-flex" },
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* column-binding row — the PendingStepCard checkbox list, before & after */
+function ColRowBefore({ col, checked, onToggle }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11, padding: "3px 0", color: checked ? "var(--accent)" : "var(--text)", fontWeight: checked ? 600 : 400 }}>
+      <input type="checkbox" checked={checked} onChange={onToggle} style={{ cursor: "pointer" }} />
+      <span className="mono">{col.name}</span>
+      <span style={{ fontSize: 10, color: "var(--text-4)" }}>{col.type}</span>
+    </label>
+  );
+}
+function ColRowAfter({ col, checked, onToggle }) {
+  return (
+    <div onClick={() => onToggle()} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 11, padding: "4px 0", color: checked ? "var(--accent)" : "var(--text)", fontWeight: checked ? 600 : 400 }}>
+      <Checkbox checked={checked} onChange={onToggle} />
+      <span className="mono">{col.name}</span>
+      <span style={{ fontSize: 10, color: "var(--text-4)" }}>{col.type}</span>
+    </div>
+  );
+}
+const COLS = [
+  { id: 1, name: "amount", type: "float" },
+  { id: 2, name: "currency", type: "str" },
+  { id: 3, name: "txn_date", type: "date" },
+];
+function ColList({ variant }) {
+  const [sel, setSel] = useState({ 1: true, 2: true });
+  const toggle = id => setSel(p => ({ ...p, [id]: !p[id] }));
+  const Row = variant === "after" ? ColRowAfter : ColRowBefore;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "6px 10px", background: "var(--panel-2)", display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ fontSize: 10, color: "var(--text-3)", marginBottom: 4 }}>Bind column(s) to <span className="mono" style={{ color: "var(--accent)" }}>cols</span>:</div>
+      {COLS.map(c => <Row key={c.id} col={c} checked={!!sel[c.id]} onToggle={() => toggle(c.id)} />)}
+    </div>
+  );
+}
+
+/* checkbox state gallery */
+function CheckboxStates() {
+  const [a, setA] = useState(true);
+  const [b, setB] = useState(false);
+  const cell = (label, node) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+      {node}
+      <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)" }}>{label}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 30, alignItems: "flex-start" }}>
+      {cell("unchecked", <Checkbox checked={false} onChange={() => {}} />)}
+      {cell("checked", <Checkbox checked={true} onChange={() => {}} />)}
+      {cell("disabled", <Checkbox checked={false} disabled onChange={() => {}} />)}
+      {cell("disabled · checked", <Checkbox checked={true} disabled onChange={() => {}} />)}
+      <div style={{ width: 1, alignSelf: "stretch", background: "var(--border)" }} />
+      {cell("live — click", <div style={{ display: "flex", gap: 12 }}><Checkbox checked={a} onChange={setA} /><Checkbox checked={b} onChange={setB} /></div>)}
+    </div>
+  );
+}
+
+/* order-badge state gallery */
+function BadgeStates() {
+  const cell = (label, node) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+      {node}
+      <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)" }}>{label}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 30, alignItems: "flex-start" }}>
+      {cell("rest", <OrderBadge n={1} />)}
+      {cell("hover → grip (hover me)", <OrderBadge n={2} />)}
+      {cell("dragging", <OrderBadge n={3} dragging />)}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PAGE
+   ────────────────────────────────────────────────────────────────────────── */
+function App() {
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "56px 28px 120px" }}>
+
+      {/* Masthead */}
+      <header style={{ display: "flex", flexDirection: "column", gap: 18, marginBottom: 40 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="3" width="8" height="8" rx="2" fill="var(--accent)" />
+            <rect x="13" y="3" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="3" y="13" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="13" y="13" width="8" height="8" rx="2" fill="var(--accent)" />
+          </svg>
+          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: ".02em" }}>pipeui</span>
+          <span style={{ width: 1, height: 14, background: "var(--border)" }} />
+          <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>screen-builder.jsx · StepCard + PendingStepCard</span>
+          <span className="mono" style={{ fontSize: 11, color: "var(--accent)", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: 99, padding: "2px 9px" }}>feat/builder-step-cards-redesign</span>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Eyebrow>Design Brief · Issue #118</Eyebrow>
+          <h1 style={{ fontSize: 34, fontWeight: 600, letterSpacing: "-.02em", lineHeight: 1.12 }}>Builder step cards — order badge &amp; column checkboxes</h1>
+          <p style={{ fontSize: 15, color: "var(--text-2)", maxWidth: 720, lineHeight: 1.6 }}>
+            The written spec that unblocks <M>#118</M>. It defines an order-number badge that doubles as the step card's drag handle, replaces the raw HTML column checkboxes with a design-system <M>Checkbox</M> primitive, and names the two additions to <M>ui.jsx</M>. Everything below is <strong style={{ color: "var(--text)", fontWeight: 600 }}>rendered live</strong> with the real tokens — drag the cards, click the boxes. Claude Code implements directly from it.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
+          {[["Order badge", "var(--accent)"], ["= drag handle", "var(--accent)"], ["Index-based renumber", "var(--good)"], ["Checkbox primitive", "var(--accent)"], ["Raw <input> removed", "var(--bad)"], ["ui.jsx +2", "var(--good)"]].map(([t, c]) => (
+            <span key={t} className="mono" style={{ fontSize: 11.5, padding: "4px 11px", borderRadius: 99, background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text-2)", display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{t}
+            </span>
+          ))}
+        </div>
+      </header>
+
+      {/* Constraints banner */}
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: "var(--radius)", marginBottom: 44 }}>
+        <Icon name="check" size={15} style={{ color: "var(--accent)", marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6 }}>
+          <strong style={{ color: "var(--text)", fontWeight: 600 }}>Constraints.</strong> Inline styles only · no new colours — every value below is an existing token · no new external dependencies · all current step-card functionality preserved (reorder, remove, output-mode, expandable function rows, pending-step binding). Depends on <M>#117</M> (built-in steps merged first). The only <M>ui.jsx</M> change is two additive primitives: <M>OrderBadge</M> and <M>Checkbox</M>.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 60 }}>
+
+        {/* ── OVERVIEW ── */}
+        <Section id="overview">
+          <SectionHead kicker="The change at a glance" title="Before → after">
+            Two problems sit on the Builder's pipeline canvas. (1) The order indicator is a faint <M>#position</M> grey pill that prints the raw server position value, and the <em>whole card</em> is the drag surface — so dragging fights the remove button, the output dropdown and the expand carets inside it. (2) The column multi-select uses the browser's native checkbox, which ignores the dark theme entirely. The left stack below is live — <strong style={{ color: "var(--text)" }}>grab a badge and reorder</strong>.
+          </SectionHead>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22, alignItems: "start" }}>
+            <Block>
+              <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)" }}>before · current</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {STEPS.map(s => <StepCardBefore key={s.id} step={s} />)}
+              </div>
+            </Block>
+            <Block>
+              <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--accent)" }}>after · proposed — drag a badge</span>
+              <LiveReorder />
+            </Block>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+            <Card style={{ padding: 20, gap: 12 }}>
+              <SubHead>What's wrong today</SubHead>
+              {[
+                "Order is shown as a #position grey pill (--panel-3 / --text-3) — low contrast, reads as a tag not a sequence, and prints the raw server position which can be 0-based or sparse.",
+                "The entire card is cursor:grab and draggable — dragging competes with the remove ✕, the output <select>, and the expand carets inside the same card.",
+                "There is no dedicated handle, so the drag intent is ambiguous and accidental drags are easy.",
+                "Column multi-select uses raw <input type=\"checkbox\"> — native OS chrome, light-on-dark, ignores --accent and every other token.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <Icon name="warn" size={13} style={{ color: "var(--bad)", marginTop: 2 }} />
+                  <span style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+                </div>
+              ))}
+            </Card>
+            <Card style={{ padding: 20, gap: 12 }}>
+              <SubHead>What the redesign does</SubHead>
+              {[
+                "Order becomes a 26×26 rounded-square badge anchoring the card's left — the canonical numeral, and the only drag surface.",
+                "The number is the 1-based visual order (index + 1), so it always reads 1…N and renumbers instantly on every reorder.",
+                "On hover the badge reveals the existing drag 6-dot glyph — rest = identity, hover = grab affordance. Dragging tints it --accent.",
+                "Column rows use the new Checkbox primitive: --panel-2 box, --accent fill + --accent-ink check when selected. The raw <input> is deleted.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <Icon name="check" size={13} style={{ color: "var(--good)", marginTop: 2 }} />
+                  <span style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+                </div>
+              ))}
+            </Card>
+          </div>
+        </Section>
+
+        {/* ── SPEC 1 · ORDER BADGE ── */}
+        <Section id="badge">
+          <SectionHead kicker="Spec · 1" title="Order number badge">
+            A fixed <M>26×26</M> rounded-square (radius <M>--radius</M>) that sits first in the step-card header row, replacing the <M>#position</M> pill 1:1. It carries the step's place in the sequence and <em>is</em> the drag handle. Hover the middle badge below to see it swap to the grip glyph.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,300px) 1fr", gap: 28, alignItems: "start" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--text-4)" }}>States · live</span>
+                <div style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 26, backgroundImage: "radial-gradient(rgba(255,255,255,0.022) 1px, transparent 0)", backgroundSize: "16px 16px" }}>
+                  <BadgeStates />
+                </div>
+              </div>
+              <Block>
+                <SubHead>Anatomy</SubHead>
+                <Note n="1"><strong style={{ color: "var(--text)" }}>Shape & size.</strong> <M>26×26</M>, <M>borderRadius: var(--radius)</M> — a squircle, not a 99-pill, so it reads as an ordinal token distinct from the round status/type chips. <M>flex-shrink: 0</M>.</Note>
+                <Note n="2"><strong style={{ color: "var(--text)" }}>Numeral.</strong> <M>.mono</M>, <M>12px / 600</M>, no <M>#</M> prefix — just the number. Colour <M>--text-2</M> at rest.</Note>
+                <Note n="3"><strong style={{ color: "var(--text)" }}>Rest.</strong> bg <M>--panel-3</M>, <M>1px --border</M>.</Note>
+                <Note n="4"><strong style={{ color: "var(--text)" }}>Hover.</strong> bg <M>--hover</M>, border <M>--accent-line</M>; the numeral cross-fades to the <M>drag</M> 6-dot glyph (<M>--text-3</M>) — the "grab here" cue. <M>cursor: grab</M>.</Note>
+                <Note n="5"><strong style={{ color: "var(--text)" }}>Dragging.</strong> bg <M>--accent-soft</M>, border <M>--accent-line</M>, numeral <M>--accent</M>; the parent card keeps its existing <M>opacity: 0.4</M>.</Note>
+              </Block>
+            </div>
+
+            <div style={{ height: 1, background: "var(--border-soft)" }} />
+
+            <Block>
+              <SubHead>Numbering — derive from index, not server position</SubHead>
+              <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.65 }}>
+                The badge prints <M>index + 1</M> from the <M>localSteps.map((step, index) =&gt; …)</M> in <M>PipelineCanvas</M> — <strong style={{ color: "var(--text)" }}>not</strong> <M>step.position</M>. The canvas already reorders <M>localSteps</M> optimistically on <M>dragOver</M> before the server PATCH resolves, so an index-derived number renumbers the whole stack the instant a card moves — no waiting on <M>onReloadPipeline</M>, no gaps if server positions are sparse. <M>step.position</M> stays the server's source of truth for the PATCH body; it is no longer shown.
+              </div>
+              <Diff file="screen-builder.jsx · PipelineCanvas → StepCard" rows={[
+                [" ", "{localSteps.map((step, index) => ("],
+                [" ", "  <StepCard"],
+                [" ", "    key={step.source_function_map_id}"],
+                [" ", "    step={step}"],
+                ["+", "    order={index + 1}        // 1-based visual order"],
+                [" ", "    isDragging={dragIndexRef.current === index}"],
+                [" ", "    /* …existing props… */ />"],
+                [" ", "))}"],
+              ]} />
+              <Diff file="screen-builder.jsx · StepCard header" rows={[
+                ["-", "<span style={{ fontSize: 10, fontWeight: 700,"],
+                ["-", "  background: \"var(--panel-3)\", color: \"var(--text-3)\","],
+                ["-", "  borderRadius: 99, padding: \"2px 7px\", flexShrink: 0 }}>"],
+                ["-", "  {\"#\" + step.position}"],
+                ["-", "</span>"],
+                ["+", "<OrderBadge n={order} dragging={isDragging}"],
+                ["+", "  draggable onDragStart={onDragStart}"],
+                ["+", "  onDragEnd={onDragEnd} />"],
+              ]} />
+            </Block>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 2 · CHECKBOX ── */}
+        <Section id="checkbox">
+          <SectionHead kicker="Spec · 2" title="Column multi-select checkbox">
+            Replace the raw <M>&lt;input type="checkbox"&gt;</M> in <M>PendingStepCard</M>'s column-binding list with a <M>Checkbox</M> primitive that reuses the existing <M>check</M> icon and accent tokens. Same selection logic, same <M>handleColumnToggle</M> — only the control changes. Click the boxes below.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <Block>
+                <SubHead>Before — native input</SubHead>
+                <ColList variant="before" />
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>OS-rendered, light chrome, no token participation. Looks foreign on <M>--panel-2</M>.</div>
+              </Block>
+              <Block>
+                <SubHead>After — Checkbox primitive</SubHead>
+                <ColList variant="after" />
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>Selected row keeps its <M>--accent</M> / <M>600</M> text treatment; the box now matches.</div>
+              </Block>
+            </div>
+
+            <div style={{ height: 1, background: "var(--border-soft)" }} />
+
+            <Block>
+              <SubHead>States — live</SubHead>
+              <div style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 26, backgroundImage: "radial-gradient(rgba(255,255,255,0.022) 1px, transparent 0)", backgroundSize: "16px 16px" }}>
+                <CheckboxStates />
+              </div>
+              <PropsTable
+                head={["State", "Box", "Mark", "Notes"]}
+                rows={[
+                  ["unchecked", "--panel-2 · 1px --border", "—", "17×17, radius --radius. Hover border → --accent-line."],
+                  ["checked", "--accent · border transparent", "check icon --accent-ink", "Reuses ui.jsx ICONS.check at size 12."],
+                  ["disabled", "0.45 opacity · cursor not-allowed", "respects checked", "Matches Btn disabled treatment."],
+                ]}
+              />
+            </Block>
+
+            <Block>
+              <SubHead>Props</SubHead>
+              <PropsTable rows={[
+                ["checked", "bool", "—", "Controlled selected state."],
+                ["onChange", "fn(next)", "—", "Called with the next boolean on click / Space / Enter."],
+                ["disabled", "bool", "false", "Greys out, blocks interaction."],
+              ]} />
+            </Block>
+
+            <Block>
+              <SubHead>Implementation</SubHead>
+              <Diff file="screen-builder.jsx · PendingStepCard column list" rows={[
+                ["-", "<label style={{ display: \"flex\", alignItems: \"center\", gap: 5, … }}>"],
+                ["-", "  <input type=\"checkbox\" checked={selected}"],
+                ["-", "    onChange={() => handleColumnToggle(p.param_id, col.column_id)}"],
+                ["-", "    style={{ cursor: \"pointer\" }} />"],
+                ["-", "  <span style={{ fontFamily: \"…mono\" }}>{col.column_name}</span>"],
+                ["-", "  <span …>{col.column_type}</span>"],
+                ["-", "</label>"],
+                ["+", "<div onClick={() => handleColumnToggle(p.param_id, col.column_id)}"],
+                ["+", "  style={{ display: \"flex\", alignItems: \"center\", gap: 8,"],
+                ["+", "    cursor: \"pointer\", fontSize: 11,"],
+                ["+", "    color: selected ? \"var(--accent)\" : \"var(--text)\","],
+                ["+", "    fontWeight: selected ? 600 : 400 }}>"],
+                ["+", "  <Checkbox checked={selected}"],
+                ["+", "    onChange={() => handleColumnToggle(p.param_id, col.column_id)} />"],
+                ["+", "  <span className=\"mono\">{col.column_name}</span>"],
+                ["+", "  <span …>{col.column_type}</span>"],
+                ["+", "</div>"],
+              ]} />
+              <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                The wrapper becomes a <M>&lt;div&gt;</M> (not <M>&lt;label&gt;</M>) since the box is no longer a native input — the click handler on the row toggles, and <M>Checkbox</M> forwards its own click. Destructure <M>Checkbox</M> from <M>window.__UI__</M> at the top of <M>screen-builder.jsx</M> alongside the other primitives.
+              </div>
+            </Block>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 3 · LAYOUT / HANDLE INTERACTION ── */}
+        <Section id="layout">
+          <SectionHead kicker="Spec · 3" title="Drag handle &amp; card layout">
+            The badge becoming the handle is the structural change. Drag moves <em>off the card</em> and <em>onto the badge</em> — so every other control inside the card (remove, output dropdown, expand carets) becomes freely clickable without triggering a drag.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <Block>
+                <SubHead>Header row order (left → right)</SubHead>
+                <Note n="1"><strong style={{ color: "var(--text)" }}>OrderBadge</strong> — the handle. <M>draggable</M> + the three <M>onDrag*</M> handlers move here from the card root.</Note>
+                <Note n="2"><strong style={{ color: "var(--text)" }}>Set name</strong> — <M>flex: 1</M>, ellipsis. Unchanged.</Note>
+                <Note n="3"><strong style={{ color: "var(--text)" }}>Type badge</strong> (Validation / Transform / Mixed) — unchanged.</Note>
+                <Note n="4"><strong style={{ color: "var(--text)" }}>Result tag</strong> (if a run exists) — unchanged.</Note>
+                <Note n="5"><strong style={{ color: "var(--text)" }}>Remove ✕</strong> — unchanged, now reliably clickable.</Note>
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6, marginTop: 2 }}>Header gap goes <M>8 → 9</M> to give the larger badge breathing room. Everything below the header (function rows, output <M>&lt;select&gt;</M>) is untouched.</div>
+              </Block>
+              <Block>
+                <SubHead>Drag surface — move it to the handle</SubHead>
+                <Diff file="screen-builder.jsx · StepCard root" rows={[
+                  ["-", "<div"],
+                  ["-", "  draggable"],
+                  ["-", "  onDragStart={onDragStart}"],
+                  ["-", "  onDragEnd={onDragEnd}"],
+                  ["-", "  onDragOver={onDragOver}"],
+                  ["-", "  style={{ …, cursor: \"grab\" }}>"],
+                  ["+", "<div"],
+                  ["+", "  onDragOver={onDragOver}   // drop target stays on card"],
+                  ["+", "  style={{ … }}>            // no cursor:grab on root"],
+                  [" ", "  …"],
+                  [" ", "  // grab/draggable now live on <OrderBadge>"],
+                ]} />
+                <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+                  <M>onDragOver</M> (the drop-target / reorder calc) stays on the card root so a step can be dropped anywhere over a neighbour. Only <M>draggable</M> + <M>onDragStart</M> + <M>onDragEnd</M> relocate to the badge. The card root loses <M>cursor: grab</M>; the badge owns it.
+                </div>
+              </Block>
+            </div>
+
+            <div style={{ height: 1, background: "var(--border-soft)" }} />
+
+            <Block>
+              <SubHead>Pending step card — same badge, "pending" state</SubHead>
+              <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.65 }}>
+                The <M>PendingStepCard</M> shown after a dry-run keeps its <M>pending</M> pill in the leading slot — it is not yet in the ordered list, so it has no number and is <strong style={{ color: "var(--text)" }}>not</strong> draggable. Once saved and reloaded it becomes a normal <M>StepCard</M> and picks up the next <M>index + 1</M>. No change to the pending card's header beyond inheriting the new checkbox in its column list (Spec 2).
+              </div>
+            </Block>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 4 · TOKENS ── */}
+        <Section id="tokens">
+          <SectionHead kicker="Spec · 4" title="Tokens — use these, remove those">
+            No new colours. Every surface, text and accent below already exists in <M>:root</M>. The redesign also retires the raw native checkbox and the faint position pill.
+          </SectionHead>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+            <Card style={{ gap: 16 }}>
+              <SubHead>Use</SubHead>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {[
+                  ["Order badge · rest", ["--panel-3", "--border", "--text-2"]],
+                  ["Order badge · hover", ["--hover", "--accent-line", "--text-3"]],
+                  ["Order badge · dragging", ["--accent-soft", "--accent-line", "--accent"]],
+                  ["Checkbox · unchecked", ["--panel-2", "--border", "--accent-line"]],
+                  ["Checkbox · checked", ["--accent", "--accent-ink"]],
+                  ["Selected row text (unchanged)", ["--accent", "--text"]],
+                ].map(([label, toks]) => (
+                  <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-3)" }}>{label}</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{toks.map(t => <TokenChip key={t} t={t} />)}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card style={{ gap: 16 }}>
+              <SubHead>Remove</SubHead>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {[
+                  ["<input type=\"checkbox\">", "native column checkbox (PendingStepCard)", "→ <Checkbox> primitive"],
+                  ["\"#\" + step.position", "raw server position, shown to user", "→ OrderBadge n={index + 1}"],
+                  ["cursor: \"grab\" (card root)", "whole-card drag surface", "→ moves to OrderBadge only"],
+                  ["borderRadius: 99 (order pill)", "round pill — wrong shape for an ordinal", "→ borderRadius: var(--radius) squircle"],
+                ].map(([bad, where, fix]) => (
+                  <div key={bad} style={{ background: "var(--panel-2)", border: "1px solid rgba(248,113,113,.28)", borderRadius: "var(--radius)", padding: "10px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Icon name="warn" size={12} style={{ color: "var(--bad)" }} />
+                      <span className="mono" style={{ fontSize: 12, color: "var(--bad)" }}>{bad}</span>
+                    </div>
+                    <span style={{ fontSize: 11.5, color: "var(--text-3)" }}>{where}</span>
+                    <span className="mono" style={{ fontSize: 11, color: "var(--good)" }}>{fix}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </Section>
+
+        {/* ── SPEC 5 · SHARED COMPONENTS ── */}
+        <Section id="shared">
+          <SectionHead kicker="Spec · 5" title="Shared components in ui.jsx">
+            Two additive primitives join the <M>window.__UI__</M> export. Both are self-contained, use only existing tokens, and add no dependencies. <M>OrderBadge</M> is Builder-specific today but lives in <M>ui.jsx</M> so any future ordered list reuses it; <M>Checkbox</M> is general and also drops into the Results screen's selection checkbox (out of scope here, trivial follow-up).
+          </SectionHead>
+
+          <Card>
+            <Diff file="ui.jsx · new — Checkbox" rows={[
+              ["+", "function Checkbox({ checked, onChange, disabled }) {"],
+              ["+", "  const [hover, setHover] = useState(false);"],
+              ["+", "  return ("],
+              ["+", "    <span role=\"checkbox\" aria-checked={checked}"],
+              ["+", "      tabIndex={disabled ? -1 : 0}"],
+              ["+", "      onClick={() => !disabled && onChange && onChange(!checked)}"],
+              ["+", "      onKeyDown={e => { if ((e.key === \" \" || e.key === \"Enter\") && !disabled)"],
+              ["+", "        { e.preventDefault(); onChange && onChange(!checked); } }}"],
+              ["+", "      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}"],
+              ["+", "      style={{ width: 17, height: 17, flexShrink: 0, display: \"inline-flex\","],
+              ["+", "        alignItems: \"center\", justifyContent: \"center\","],
+              ["+", "        borderRadius: \"var(--radius)\","],
+              ["+", "        background: checked ? \"var(--accent)\" : \"var(--panel-2)\","],
+              ["+", "        border: \"1px solid \" + (checked ? \"transparent\""],
+              ["+", "          : hover && !disabled ? \"var(--accent-line)\" : \"var(--border)\"),"],
+              ["+", "        color: \"var(--accent-ink)\","],
+              ["+", "        cursor: disabled ? \"not-allowed\" : \"pointer\","],
+              ["+", "        opacity: disabled ? 0.45 : 1,"],
+              ["+", "        transition: \"background .12s, border-color .12s\" }}>"],
+              ["+", "      {checked && <Icon name=\"check\" size={12} />}"],
+              ["+", "    </span>"],
+              ["+", "  );"],
+              ["+", "}"],
+            ]} />
+            <Diff file="ui.jsx · new — OrderBadge" rows={[
+              ["+", "function OrderBadge({ n, dragging, ...dragProps }) {"],
+              ["+", "  const [hover, setHover] = useState(false);"],
+              ["+", "  const bg = dragging ? \"var(--accent-soft)\""],
+              ["+", "    : hover ? \"var(--hover)\" : \"var(--panel-3)\";"],
+              ["+", "  const border = dragging || hover ? \"var(--accent-line)\" : \"var(--border)\";"],
+              ["+", "  const ink = dragging ? \"var(--accent)\" : \"var(--text-2)\";"],
+              ["+", "  return ("],
+              ["+", "    <span {...dragProps} title=\"Drag to reorder\""],
+              ["+", "      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}"],
+              ["+", "      style={{ width: 26, height: 26, flexShrink: 0, cursor: \"grab\","],
+              ["+", "        display: \"inline-flex\", alignItems: \"center\", justifyContent: \"center\","],
+              ["+", "        borderRadius: \"var(--radius)\", background: bg,"],
+              ["+", "        border: \"1px solid \" + border, color: ink,"],
+              ["+", "        transition: \"background .12s, border-color .12s, color .12s\" }}>"],
+              ["+", "      {hover && !dragging"],
+              ["+", "        ? <Icon name=\"drag\" size={16} style={{ color: \"var(--text-3)\" }} />"],
+              ["+", "        : <span className=\"mono\" style={{ fontSize: 12, fontWeight: 600,"],
+              ["+", "            lineHeight: 1 }}>{n}</span>}"],
+              ["+", "    </span>"],
+              ["+", "  );"],
+              ["+", "}"],
+            ]} />
+            <Diff file="ui.jsx · export" rows={[
+              ["-", "window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer };"],
+              ["+", "window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Checkbox, OrderBadge };"],
+            ]} />
+            <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6 }}>
+              <M>OrderBadge</M> spreads <M>dragProps</M> (<M>draggable</M>, <M>onDragStart</M>, <M>onDragEnd</M>) straight onto its root span, so the StepCard passes drag wiring through without an extra wrapper. The <M>drag</M> glyph it uses already exists in <M>ICONS</M> and was previously unused.
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── ACCEPTANCE ── */}
+        <Section id="acceptance">
+          <SectionHead kicker="Handoff" title="Acceptance criteria" />
+          <Card>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {[
+                "Each step card shows a 26×26 rounded-square OrderBadge in the leading header slot, displaying the 1-based visual order (index + 1) — no \"#\", no raw step.position.",
+                "Order numbers renumber correctly and immediately when steps are reordered via drag (driven by localSteps index, before the server PATCH resolves).",
+                "The OrderBadge is the only drag handle: draggable + onDragStart/onDragEnd live on it; the card root keeps onDragOver as the drop target and drops cursor:grab.",
+                "Badge states match the spec: rest (--panel-3 / --text-2), hover (--hover / --accent-line, grip glyph), dragging (--accent-soft / --accent).",
+                "Column multi-select uses the new Checkbox primitive; raw <input type=\"checkbox\"> is removed from PendingStepCard. Selection logic (handleColumnToggle) is unchanged.",
+                "Checkbox states match the spec and use only existing tokens (--panel-2, --border, --accent-line, --accent, --accent-ink); keyboard toggle (Space / Enter) works.",
+                "Checkbox and OrderBadge are exported from ui.jsx on window.__UI__. No new external dependencies.",
+                "All existing step-card behaviour preserved: remove, output-mode select, expandable function rows, result tag, pending-step binding.",
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: i < 7 ? "1px solid var(--border-soft)" : "none" }}>
+                  <span style={{ flexShrink: 0, width: 17, height: 17, borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--panel-2)", display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 1, color: "var(--accent)" }}><Icon name="check" size={11} /></span>
+                  <span style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>{t}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </Section>
+
+        <footer style={{ marginTop: 12, paddingTop: 24, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>pipeui · design brief · issue #118</span>
+          <span style={{ width: 1, height: 12, background: "var(--border)" }} />
+          <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>feat/builder-step-cards-redesign</span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-4)" }}>Paste below the line in #118 · remove the block notice · relabel ready-for-agent</span>
+        </footer>
+
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

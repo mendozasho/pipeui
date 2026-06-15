@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PipeUI — Scalar Input UI Polish · Design Brief</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10; --panel: #141416; --panel-2: #1a1a1d; --panel-3: #202024;
+    --border: rgba(255,255,255,0.08); --border-soft: rgba(255,255,255,0.04); --hover: rgba(255,255,255,0.06);
+    --text: #f0f0f2; --text-2: #a0a0aa; --text-3: #6a6a74; --text-4: #3a3a42;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24; --run: #60a5fa;
+    --accent: #7c6cf5; --accent-soft: rgba(124,108,245,0.12); --accent-line: rgba(124,108,245,0.4); --accent-ink: #fff;
+    --check: #60a5fa; --check-bg: rgba(96,165,250,0.1); --xform: #fbbf24; --xform-bg: rgba(251,191,36,0.1);
+    --radius: 6px; --radius-lg: 10px;
+    font-family: 'Geist', system-ui, sans-serif;
+    font-size: 14px;
+  }
+
+  body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; line-height: 1.5; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  body::before {
+    content: ""; position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: .5;
+  }
+
+  /* opacity stays 1 at all times — only the transform animates, so a frozen
+     animation clock can never leave the card invisible. */
+  @keyframes scFade { from { transform: translateY(5px); } to { transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .sc-anim { animation: none !important; transition: none !important; }
+  }
+
+  input.sc-field::placeholder { color: var(--text-4); }
+  input.sc-field:focus { outline: none; border-color: var(--accent-line); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect } = React;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PRIMITIVES — lifted verbatim from ui.jsx so every mock renders the REAL
+   components with the REAL tokens. ICONS extended with info — a NEW glyph this
+   issue adds to ICONS (shared scalar hint line, Spec 4).
+   ────────────────────────────────────────────────────────────────────────── */
+const ICONS = {
+  close:   <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m5 5 10 10M15 5 5 15"/></svg>,
+  check:   <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 10 4.5 4.5L16 6"/></svg>,
+  warn:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 3 2 17h16L10 3z"/><path d="M10 8v4M10 14v.5"/></svg>,
+  chevron: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 8 3 3 3-3"/></svg>,
+  info:    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10" cy="10" r="7.25"/><path d="M10 9v4.25"/><path d="M10 6.4v.1"/></svg>,
+};
+function Icon({ name, size = 16, style }) {
+  const svg = ICONS[name]; if (!svg) return null;
+  return <span style={{ display: "inline-flex", alignItems: "center", width: size, height: size, flexShrink: 0, ...style }}>{React.cloneElement(svg, { width: size, height: size })}</span>;
+}
+function Btn({ children, variant = "default", size = "md", icon, onClick, disabled, style }) {
+  const base = { display: "inline-flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid", borderRadius: "var(--radius)", fontWeight: 500, transition: "opacity .15s", opacity: disabled ? 0.45 : 1, whiteSpace: "nowrap" };
+  const sizes = { sm: { padding: "3px 10px", fontSize: 12 }, md: { padding: "6px 14px", fontSize: 13 }, lg: { padding: "9px 18px", fontSize: 14 } };
+  const variants = { default: { background: "var(--panel-3)", borderColor: "var(--border)", color: "var(--text-2)" }, primary: { background: "var(--accent)", borderColor: "transparent", color: "var(--accent-ink)" }, ghost: { background: "transparent", borderColor: "transparent", color: "var(--text-2)" } };
+  return <button type="button" style={{ ...base, ...sizes[size], ...variants[variant], ...style }} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} size={14} />}{children}</button>;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DOC CHROME — identical kit to the Join-Source-Picker & Builder-Step-Cards briefs
+   ────────────────────────────────────────────────────────────────────────── */
+function Eyebrow({ children, color = "var(--accent)" }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color }}>{children}</div>;
+}
+function SubHead({ children }) {
+  return <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{children}</div>;
+}
+function Card({ children, style }) {
+  return <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 24, display: "flex", flexDirection: "column", gap: 20, ...style }}>{children}</div>;
+}
+function Section({ id, children }) {
+  return <section id={id} style={{ display: "flex", flexDirection: "column", gap: 20, scrollMarginTop: 24 }}>{children}</section>;
+}
+function SectionHead({ kicker, title, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Eyebrow>{kicker}</Eyebrow>
+      <h2 style={{ fontSize: 23, fontWeight: 600, letterSpacing: "-.01em" }}>{title}</h2>
+      {children && <p style={{ fontSize: 14, color: "var(--text-2)", maxWidth: 760, lineHeight: 1.6 }}>{children}</p>}
+    </div>
+  );
+}
+function M({ children }) { return <span className="mono" style={{ color: "var(--text)" }}>{children}</span>; }
+
+function Diff({ rows, file = "screen-builder.jsx" }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "#0a0a0c" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 12px", borderBottom: "1px solid var(--border-soft)", background: "var(--panel-2)" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 99, background: "var(--text-4)" }} />
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-3)" }}>{file}</span>
+      </div>
+      {rows.map(([sign, ln], i) => {
+        const bg = sign === "-" ? "rgba(248,113,113,.06)" : sign === "+" ? "rgba(52,211,153,.06)" : "transparent";
+        const mk = sign === "-" ? "var(--bad)" : sign === "+" ? "var(--good)" : "var(--text-4)";
+        return (
+          <div key={i} className="mono" style={{ display: "flex", fontSize: 12, lineHeight: 1.6, background: bg }}>
+            <span style={{ width: 22, textAlign: "center", color: mk, flexShrink: 0, userSelect: "none", opacity: .8 }}>{sign === " " ? "" : sign}</span>
+            <span style={{ color: ln.trimStart().startsWith("//") ? "var(--text-4)" : "var(--text-2)", whiteSpace: "pre-wrap", paddingRight: 12 }}>{ln}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function PropsTable({ head = ["Prop", "Type", "Default", "Notes"], rows }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead><tr>{head.map(h => <th key={h} style={{ padding: "7px 12px", textAlign: "left", color: "var(--text-3)", fontWeight: 500, fontSize: 10.5, letterSpacing: ".06em", textTransform: "uppercase", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid var(--border-soft)" }}>
+              {r.map((cell, j) => <td key={j} className={j < 3 ? "mono" : ""} style={{ padding: "8px 12px", fontSize: j < 3 ? 12.5 : 13, color: j === 0 ? "var(--accent)" : j === 1 ? "var(--good)" : j === 2 ? "var(--text-3)" : "var(--text-2)", whiteSpace: j === 3 ? "normal" : "nowrap", verticalAlign: "top" }}>{cell}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function TokenChip({ t, note }) {
+  return (
+    <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", fontSize: 11, color: "var(--text-2)" }}>
+      <span style={{ width: 10, height: 10, borderRadius: 3, background: `var(${t})`, border: "1px solid rgba(255,255,255,.14)" }} />{t}{note && <span style={{ color: "var(--text-4)" }}>· {note}</span>}
+    </span>
+  );
+}
+function Note({ n, children }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 99, background: "var(--accent-soft)", border: "1px solid var(--accent-line)", color: "var(--accent)", fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>{n}</span>
+      <span style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }}>{children}</span>
+    </div>
+  );
+}
+function GoodBad({ items, kind }) {
+  return (
+    <Card style={{ padding: 20, gap: 12 }}>
+      <SubHead>{kind === "good" ? "What the design does" : "Why it needs a pass"}</SubHead>
+      {items.map((t, i) => (
+        <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+          <Icon name={kind === "good" ? "check" : "warn"} size={13} style={{ color: kind === "good" ? "var(--good)" : "var(--warn)", marginTop: 2 }} />
+          <span style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>{t}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   MOCK DOMAIN DATA — faithful to the suggest_bindings (dry-run) payload shape.
+   A function with BOTH column params and scalar params, so the mixed-modal
+   ordering + separation is exercised. current_scalar_value is null on add,
+   a string on edit.
+   ────────────────────────────────────────────────────────────────────────── */
+const SOURCE_COLUMNS = [
+  { column_id: "c1", column_name: "amount",     column_type: "float" },
+  { column_id: "c2", column_name: "unit_price", column_type: "float" },
+  { column_id: "c3", column_name: "quantity",   column_type: "int" },
+  { column_id: "c4", column_name: "currency",   column_type: "str" },
+];
+
+/* dry-run params: one pd.Series column param + three scalars (float / int / bool) */
+function makeParams(mode) {
+  // mode: "add" → all current_scalar_value null; "edit" → some pre-filled
+  return [
+    { param_id: "p_series", param_name: "series",    param_type: "pd.Series", param_kind: "column", suggested_columns: [{ column_id: "c1", column_name: "amount" }], current_scalar_value: null },
+    { param_id: "p_min",    param_name: "min_value", param_type: "float",     param_kind: "scalar", suggested_columns: [], current_scalar_value: mode === "edit" ? "0.5" : null },
+    { param_id: "p_dec",    param_name: "decimals",  param_type: "int",       param_kind: "scalar", suggested_columns: [], current_scalar_value: mode === "edit" ? "2"   : null },
+    { param_id: "p_inc",    param_name: "inclusive", param_type: "bool",      param_kind: "scalar", suggested_columns: [], current_scalar_value: mode === "edit" ? "True" : null },
+  ];
+}
+
+/* ── type badge — the SAME pill column rows already render. Reused for scalar
+   rows so both share the exact horizontal rhythm. ── */
+function TypeBadge({ t }) {
+  return <span className="mono" style={{ fontSize: 10, padding: "1px 5px", borderRadius: 99, background: "var(--panel-3)", color: "var(--text-3)" }}>{t}</span>;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE NEW PRIMITIVE — ScalarInput. One control, three param_types.
+   • int / float → text field (no client-side type validation; cast happens at
+     run time). Right-aligned default/override cue + a clear button when filled.
+   • bool        → segmented Default · True · False (default = blank = Python
+     default). A toggle variant is offered behind the boolControl tweak.
+   ══════════════════════════════════════════════════════════════════════════ */
+function ScalarInput({ param, value, onChange, boolStyle, defaultCue }) {
+  const isBool = param.param_type === "bool";
+  const filled = value !== "" && value != null;
+
+  /* ── boolean: segmented three-state ── */
+  if (isBool) {
+    if (boolStyle === "toggle") {
+      // toggle variant: a True/False switch with an explicit "use default" clear
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Switch checked={value === "True"} indeterminate={!filled} onChange={v => onChange(v ? "True" : "False")} />
+          <span style={{ fontSize: 11.5, color: filled ? "var(--text)" : "var(--text-4)", fontFamily: filled ? "'Geist Mono', monospace" : undefined }}>
+            {filled ? value : "Python default"}
+          </span>
+          {filled && <ClearBtn onClick={() => onChange("")} />}
+        </div>
+      );
+    }
+    const opts = [["", "Default"], ["True", "True"], ["False", "False"]];
+    return (
+      <div style={{ display: "inline-flex", gap: 3, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 3 }}>
+        {opts.map(([val, label]) => {
+          const sel = value === val || (val === "" && !filled);
+          const isDefault = val === "";
+          return (
+            <button key={label} onClick={() => onChange(val)} style={{
+              padding: "4px 13px", fontSize: 11.5, fontWeight: 600, borderRadius: 4, border: "none", cursor: "pointer",
+              fontFamily: isDefault ? undefined : "'Geist Mono', monospace",
+              background: sel ? (isDefault ? "var(--panel-3)" : "var(--accent)") : "transparent",
+              color: sel ? (isDefault ? "var(--text-2)" : "var(--accent-ink)") : "var(--text-3)",
+              transition: "background .12s, color .12s",
+            }}>{label}</button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  /* ── int / float: text field ── */
+  const placeholder = defaultCue === "placeholder" ? "Python default" : "";
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center", width: "100%" }}>
+      <input
+        className="sc-field"
+        type="text"
+        inputMode={param.param_type === "int" ? "numeric" : "decimal"}
+        placeholder={placeholder}
+        value={value || ""}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          flex: 1, fontSize: 11.5, padding: "5px 8px",
+          paddingRight: filled ? 70 : (defaultCue === "chip" ? 78 : 8),
+          borderRadius: "var(--radius)", border: "1px solid var(--border)",
+          background: "var(--panel-2)", color: "var(--text)",
+          fontFamily: "'Geist Mono', monospace", width: "100%",
+        }}
+      />
+      <div style={{ position: "absolute", right: 6, display: "flex", alignItems: "center", gap: 5, pointerEvents: filled ? "auto" : "none" }}>
+        {filled ? (
+          <>
+            <span className="mono" style={{ fontSize: 9, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", padding: "1px 6px", borderRadius: 99, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-line)" }}>override</span>
+            <ClearBtn onClick={() => onChange("")} />
+          </>
+        ) : defaultCue === "chip" ? (
+          <span className="mono" style={{ fontSize: 9, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", padding: "1px 6px", borderRadius: 99, background: "var(--panel-3)", color: "var(--text-4)" }}>default</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ClearBtn({ onClick }) {
+  return (
+    <button onClick={onClick} title="Clear — fall back to Python default" style={{
+      background: "none", border: "none", cursor: "pointer", color: "var(--text-4)",
+      padding: 0, lineHeight: 0, display: "inline-flex",
+    }}
+    onMouseEnter={e => e.currentTarget.style.color = "var(--text-2)"}
+    onMouseLeave={e => e.currentTarget.style.color = "var(--text-4)"}>
+      <Icon name="close" size={13} />
+    </button>
+  );
+}
+
+/* Switch — token-native toggle (proposed ui.jsx primitive, shared with the Join
+   brief). indeterminate = the bool is unset → Python default. */
+function Switch({ checked, indeterminate, onChange, disabled, size = 16 }) {
+  const w = size * 1.75, pad = 2, knob = size - pad * 2;
+  const on = checked && !indeterminate;
+  return (
+    <span
+      role="switch" aria-checked={indeterminate ? "mixed" : checked} tabIndex={disabled ? -1 : 0}
+      onClick={() => !disabled && onChange && onChange(!checked)}
+      style={{
+        width: w, height: size, flexShrink: 0, borderRadius: 99, position: "relative", cursor: disabled ? "not-allowed" : "pointer",
+        background: on ? "var(--accent)" : "var(--panel-3)",
+        border: "1px solid " + (on ? "transparent" : "var(--border)"),
+        opacity: disabled ? 0.45 : 1, transition: "background .16s, border-color .16s", display: "inline-block", verticalAlign: "middle",
+      }}
+    >
+      <span style={{
+        position: "absolute", top: pad - 1, left: indeterminate ? (w - knob) / 2 - 1 : (on ? w - knob - pad - 1 : pad - 1),
+        width: knob, height: knob, borderRadius: 99,
+        background: on ? "var(--accent-ink)" : "var(--text-3)",
+        transition: "left .16s",
+      }} />
+    </span>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PARAM ROWS — column row (existing) + scalar row (new). Same header rhythm:
+   [name (mono 600)] [type badge] … on the right, the control.
+   ══════════════════════════════════════════════════════════════════════════ */
+function ParamRowHeader({ param, required }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <span className="mono" style={{ fontSize: 11, color: "var(--text)", fontWeight: 600 }}>{param.param_name}</span>
+      <TypeBadge t={param.param_type} />
+      {required && <span style={{ fontSize: 10, color: "#e05252", fontWeight: 600 }}>required</span>}
+    </div>
+  );
+}
+
+function ColumnParamRow({ param, selections, onToggle }) {
+  return (
+    <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border-soft)", display: "flex", flexDirection: "column", gap: 6 }}>
+      <ParamRowHeader param={param} required />
+      <div style={{ fontSize: 10, color: "var(--text-3)" }}>
+        Bind column(s) to <span className="mono" style={{ color: "var(--accent)" }}>{param.param_name}</span>:
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 110, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "4px 6px", background: "var(--panel-2)" }}>
+        {SOURCE_COLUMNS.map(col => {
+          const sel = (selections || []).includes(col.column_id);
+          return (
+            <label key={col.column_id} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11, color: sel ? "var(--accent)" : "var(--text)", fontWeight: sel ? 600 : 400 }}>
+              <input type="checkbox" checked={sel} onChange={() => onToggle(col.column_id)} style={{ cursor: "pointer" }} />
+              <span className="mono">{col.column_name}</span>
+              <span style={{ fontSize: 10, color: "var(--text-4)" }}>{col.column_type}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ScalarParamRow({ param, value, onChange, boolStyle, defaultCue, hint }) {
+  return (
+    <div style={{ padding: "9px 0", borderBottom: "1px solid var(--border-soft)", display: "flex", flexDirection: "column", gap: 6 }}>
+      <ParamRowHeader param={param} />
+      <ScalarInput param={param} value={value} onChange={onChange} boolStyle={boolStyle} defaultCue={defaultCue} />
+      {hint === "per-row" && (
+        <span style={{ fontSize: 10, color: "var(--text-4)", lineHeight: 1.5 }}>
+          Blank → Python default. A wrong type errors at run time.
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* shared hint line — one row beneath the whole scalar group (hint === "shared") */
+function ScalarHint() {
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 10px", borderRadius: "var(--radius)", background: "var(--panel-2)", border: "1px solid var(--border-soft)" }}>
+      <Icon name="info" size={13} style={{ color: "var(--text-3)", marginTop: 1 }} />
+      <span style={{ fontSize: 10.5, color: "var(--text-3)", lineHeight: 1.55 }}>
+        Leave blank to use the function's Python default. Values aren't type-checked here — an incompatible value surfaces as a step error at run time.
+      </span>
+    </div>
+  );
+}
+
+function SectionLabel({ children, count }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 2, marginBottom: 1 }}>
+      <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase", color: "var(--text-3)" }}>{children}</span>
+      <span className="mono" style={{ fontSize: 9, color: "var(--text-4)", background: "var(--panel-3)", borderRadius: 99, padding: "0 6px" }}>{count}</span>
+      <span style={{ flex: 1, height: 1, background: "var(--border-soft)" }} />
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE LIVE PENDING-STEP CARD — the real card from screen-builder.jsx, now with
+   the scalar redesign. Drop/edit a step → this is what the user configures.
+   Fully interactive: type values, pick a bool, bind columns, clear back to
+   default, watch the Save body update.
+   ══════════════════════════════════════════════════════════════════════════ */
+function PendingStepCardLive({ mode, boolStyle, defaultCue, hint, onModeChange }) {
+  const params = React.useMemo(() => makeParams(mode), [mode]);
+  const columnParams = params.filter(p => p.param_kind === "column");
+  const scalarParams = params.filter(p => p.param_kind === "scalar");
+
+  const seedScalars = () => {
+    const s = {};
+    scalarParams.forEach(p => { s[p.param_id] = p.current_scalar_value || ""; });
+    return s;
+  };
+  const seedSelections = () => {
+    const s = {};
+    columnParams.forEach(p => { s[p.param_id] = (p.suggested_columns || []).map(c => c.column_id); });
+    return s;
+  };
+  const [scalars, setScalars] = useState(seedScalars);
+  const [selections, setSelections] = useState(seedSelections);
+  useEffect(() => { setScalars(seedScalars()); setSelections(seedSelections()); }, [mode]);
+
+  const allRequiredFilled = columnParams.every(p => (selections[p.param_id] || []).length > 0);
+
+  // the PATCH body — blanks omitted, exactly per handlePendingSave
+  const scalarBody = {};
+  scalarParams.forEach(p => { if (scalars[p.param_id] !== "" && scalars[p.param_id] != null) scalarBody[p.param_id] = scalars[p.param_id]; });
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,380px) minmax(0,1fr)", gap: 22, alignItems: "start" }}>
+
+      {/* the card itself, at its true 360px-panel width */}
+      <div style={{ padding: 10, borderRadius: "var(--radius-lg)", background: "var(--bg)", backgroundImage: "radial-gradient(rgba(255,255,255,0.022) 1px, transparent 0)", backgroundSize: "18px 18px", border: "1px solid var(--border)" }}>
+        <div className="sc-anim" key={mode} style={{
+          background: "var(--panel)", border: "2px solid var(--accent)", borderRadius: "var(--radius-lg)",
+          padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10, animation: "scFade .22s ease",
+        }}>
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, background: "var(--accent-soft)", color: "var(--accent)", borderRadius: 99, padding: "2px 7px", flexShrink: 0 }}>
+              {mode === "edit" ? "editing" : "pending"}
+            </span>
+            <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>clip_outliers</span>
+          </div>
+
+          {/* COLUMN BINDINGS */}
+          {columnParams.length > 0 && <SectionLabel count={columnParams.length}>Column bindings</SectionLabel>}
+          {columnParams.map(p => (
+            <ColumnParamRow key={p.param_id} param={p}
+              selections={selections[p.param_id]}
+              onToggle={id => setSelections(prev => {
+                const cur = prev[p.param_id] || [];
+                return { ...prev, [p.param_id]: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] };
+              })} />
+          ))}
+
+          {/* VALUES (scalars) */}
+          {scalarParams.length > 0 && <SectionLabel count={scalarParams.length}>Values</SectionLabel>}
+          {scalarParams.map(p => (
+            <ScalarParamRow key={p.param_id} param={p}
+              value={scalars[p.param_id]}
+              onChange={v => setScalars(prev => ({ ...prev, [p.param_id]: v }))}
+              boolStyle={boolStyle} defaultCue={defaultCue} hint={hint} />
+          ))}
+          {scalarParams.length > 0 && hint === "shared" && <ScalarHint />}
+
+          {/* footer */}
+          <div style={{ display: "flex", gap: 8, paddingTop: 2 }}>
+            <button disabled={!allRequiredFilled} style={{
+              flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600, borderRadius: "var(--radius)", border: "none",
+              background: allRequiredFilled ? "var(--accent)" : "var(--panel-3)",
+              color: allRequiredFilled ? "#fff" : "var(--text-4)",
+              cursor: allRequiredFilled ? "pointer" : "not-allowed",
+            }}>{mode === "edit" ? "Save changes" : "Save"}</button>
+            <button style={{ flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600, borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--panel-2)", color: "var(--text)", cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      {/* the live PATCH body + state controls */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-3)", letterSpacing: ".05em", textTransform: "uppercase" }}>State</span>
+          <div style={{ display: "inline-flex", gap: 3, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 3 }}>
+            {[["add", "Add new"], ["edit", "Edit existing"]].map(([val, label]) => (
+              <button key={val} onClick={() => onModeChange(val)} style={{
+                padding: "4px 12px", fontSize: 11.5, fontWeight: 600, borderRadius: 4, border: "none", cursor: "pointer",
+                background: mode === val ? "var(--accent)" : "transparent", color: mode === val ? "var(--accent-ink)" : "var(--text-3)", transition: "background .12s, color .12s",
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6 }}>
+          {mode === "edit"
+            ? <>Editing pre-fills every scalar from <M>current_scalar_value</M>. Those rows read as <strong style={{ color: "var(--text)" }}>overrides</strong> (accent cue + clear button). Clear one and it falls back to the Python default — and drops out of the PATCH body below.</>
+            : <>A fresh drop starts every scalar blank — the Python default is <em>not</em> pre-filled, because showing it would imply it's a persisted value. Fill the ones you want to override; leave the rest alone.</>}
+        </p>
+
+        <div>
+          <SubHead>PATCH body · scalar_values</SubHead>
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "#0a0a0c", padding: "12px 14px" }}>
+            <pre className="mono" style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>{renderBody(scalarBody)}</pre>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-4)", marginTop: 8, lineHeight: 1.5 }}>
+            Only filled scalars are sent. Clear every field and <M>scalar_values</M> is <M>{"{}"}</M> — a valid save that uses all Python defaults.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function renderBody(body) {
+  const keys = Object.keys(body);
+  if (keys.length === 0) return "{\n  \"scalar_values\": {}\n}";
+  const lines = keys.map((k, i) => `    "${k}": "${body[k]}"${i < keys.length - 1 ? "," : ""}`);
+  return "{\n  \"scalar_values\": {\n" + lines.join("\n") + "\n  }\n}";
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SMALL STATIC SPECIMENS — for the per-spec breakdowns
+   ══════════════════════════════════════════════════════════════════════════ */
+function Specimen({ label, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--text-4)" }}>{label}</span>
+      <div style={{ padding: "12px 14px", borderRadius: "var(--radius)", background: "var(--panel)", border: "1px solid var(--border)" }}>{children}</div>
+    </div>
+  );
+}
+
+/* a single self-contained scalar row for specimens */
+function ScalarRowDemo({ paramType, name, initial, boolStyle = "segmented", defaultCue = "chip", hint = "none" }) {
+  const [v, setV] = useState(initial || "");
+  const param = { param_id: "x", param_name: name, param_type: paramType, param_kind: "scalar" };
+  return <ScalarParamRow param={param} value={v} onChange={setV} boolStyle={boolStyle} defaultCue={defaultCue} hint={hint} />;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PAGE
+   ────────────────────────────────────────────────────────────────────────── */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": [
+    "#7c6cf5",
+    "rgba(124,108,245,0.12)",
+    "rgba(124,108,245,0.40)"
+  ],
+  "boolControl": "segmented",
+  "hintPlacement": "shared",
+  "defaultCue": "placeholder"
+}/*EDITMODE-END*/;
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [mode, setMode] = useState("add");
+  useEffect(() => {
+    const [a, soft, line] = t.accent;
+    const r = document.documentElement.style;
+    r.setProperty("--accent", a);
+    r.setProperty("--accent-soft", soft);
+    r.setProperty("--accent-line", line);
+  }, [t.accent]);
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "56px 28px 120px" }}>
+
+      {/* Masthead */}
+      <header style={{ display: "flex", flexDirection: "column", gap: 18, marginBottom: 40 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="3" width="8" height="8" rx="2" fill="var(--accent)" />
+            <rect x="13" y="3" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="3" y="13" width="8" height="8" rx="2" fill="var(--accent)" opacity=".5" />
+            <rect x="13" y="13" width="8" height="8" rx="2" fill="var(--accent)" />
+          </svg>
+          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: ".02em" }}>pipeui</span>
+          <span style={{ width: 1, height: 14, background: "var(--border)" }} />
+          <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>screen-builder.jsx · PendingStepCard · +ScalarInput</span>
+          <span className="mono" style={{ fontSize: 11, color: "var(--accent)", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: 99, padding: "2px 9px" }}>feat/scalar-input-ui-polish</span>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Eyebrow>Design Brief · Claude Design pass</Eyebrow>
+          <h1 style={{ fontSize: 34, fontWeight: 600, letterSpacing: "-.02em", lineHeight: 1.12 }}>Scalar input polish — typed value rows in the parameter modal</h1>
+          <p style={{ fontSize: 15, color: "var(--text-2)", maxWidth: 770, lineHeight: 1.6 }}>
+            The written spec that unblocks the issue. <M>#151</M> landed plain <M>&lt;input type="text"&gt;</M> placeholders for scalar params; this pass replaces them with a polished, typed-aware control that lives naturally beside the column-binding rows. It defines the <strong style={{ color: "var(--text)" }}>ScalarInput</strong> control (int / float / bool), the <strong style={{ color: "var(--text)" }}>type badge</strong> placement, the <strong style={{ color: "var(--text)" }}>blank = Python default</strong> cue, the pre-populated edit state, and how column + scalar params are <strong style={{ color: "var(--text)" }}>ordered and separated</strong> in a mixed modal. Everything below is <strong style={{ color: "var(--text)" }}>rendered live</strong> with the real tokens — <strong style={{ color: "var(--text)" }}>type into the fields</strong>. Claude Code implements directly from it.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
+          {[["ScalarInput control", "var(--accent)"], ["Type badge (inline)", "var(--accent)"], ["Segmented bool", "var(--accent)"], ["Default / override cue", "var(--good)"], ["Shared run-time hint", "var(--good)"], ["Columns→Values ordering", "var(--good)"], ["ui.jsx +1 (Switch, opt.)", "var(--good)"]].map(([t, c]) => (
+            <span key={t} className="mono" style={{ fontSize: 11.5, padding: "4px 11px", borderRadius: 99, background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text-2)", display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{t}
+            </span>
+          ))}
+        </div>
+      </header>
+
+      {/* Constraints banner */}
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", background: "var(--accent-soft)", border: "1px solid var(--accent-line)", borderRadius: "var(--radius)", marginBottom: 44 }}>
+        <Icon name="check" size={15} style={{ color: "var(--accent)", marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6 }}>
+          <strong style={{ color: "var(--text)", fontWeight: 600 }}>Constraints.</strong> Inline styles only · no new colours — every value below is an existing <M>:root</M> token · this slice touches only <M>screen-builder.jsx</M> (the modal render); no backend changes · <strong style={{ color: "var(--text)" }}>no client-side type validation</strong> — the cast happens at run time, the UI only warns inline · blank scalars are omitted from the PATCH body (blank = Python default, always valid) · on <em>edit</em>, scalars pre-fill from <M>current_scalar_value</M>; on <em>add</em>, they start empty (never seeded from the default).
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 60 }}>
+
+        {/* ── OVERVIEW / HERO ── */}
+        <Section id="overview">
+          <SectionHead kicker="The control at a glance" title="The whole pending card, live">
+            This is the real <M>PendingStepCard</M> for <M>clip_outliers(series, min_value, max_value=None, …)</M> — one <M>pd.Series</M> column param and three scalars (<M>float</M>, <M>int</M>, <M>bool</M>). Flip between <strong style={{ color: "var(--text)" }}>Add new</strong> and <strong style={{ color: "var(--text)" }}>Edit existing</strong> to see the empty vs. pre-populated states. Type into a field, pick a boolean, clear a value back to default — the PATCH body on the right updates exactly as <M>handlePendingSave</M> would send it.
+          </SectionHead>
+
+          <PendingStepCardLive mode={mode} boolStyle={t.boolControl} defaultCue={t.defaultCue} hint={t.hintPlacement} onModeChange={setMode} />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+            <GoodBad kind="bad" items={[
+              "#151 shipped a bare text input with a “Python default” placeholder and nothing else — no type cue, no signal that blank is meaningful, no distinction between a saved override and an empty field.",
+              "Scalar rows and column rows looked structurally identical, so a modal mixing both read as a flat undifferentiated list with no sense of “bindings vs. constants”.",
+              "Booleans have only two valid values but were typed as free text — inviting “true”, “1”, “yes” and a run-time cast error the user wouldn't see until the step ran.",
+              "Nothing communicated the core rule: blank means the function's own default, and a wrong type fails at run time, not at input time.",
+            ]} />
+            <GoodBad kind="good" items={[
+              "One ScalarInput, three param_types: text for int/float, a segmented Default·True·False for bool. Same field metrics as the column selector, so rows share a horizontal rhythm.",
+              "The type badge sits inline after the param name — the exact pill column rows already use — so a scalar row scans the same way a column row does.",
+              "A blank field carries a muted “default” cue; a filled one flips to an accent “override” chip plus a clear (×) that drops it back to the default. The persisted-vs-default state is never ambiguous.",
+              "Column params group under Column bindings, scalars under Values, with one shared run-time hint line beneath the scalar group.",
+            ]} />
+          </div>
+        </Section>
+
+        {/* ── SPEC 1 · THE SCALAR ROW ── */}
+        <Section id="row">
+          <SectionHead kicker="Spec · 1" title="The scalar row & its control">
+            A scalar row keeps the same two-part anatomy as a column row: a <strong style={{ color: "var(--text)" }}>header</strong> (<M>param_name</M> in mono + the type badge) and, below it, the <strong style={{ color: "var(--text)" }}>control</strong>. The control fills the row width and matches the column selector's border, radius, and <M>--panel-2</M> fill, so the two row kinds line up edge-to-edge.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <Specimen label="float · empty (add)"><ScalarRowDemo paramType="float" name="min_value" /></Specimen>
+              <Specimen label="float · filled (override)"><ScalarRowDemo paramType="float" name="min_value" initial="0.5" /></Specimen>
+              <Specimen label="int · empty"><ScalarRowDemo paramType="int" name="decimals" /></Specimen>
+              <Specimen label="int · filled (override)"><ScalarRowDemo paramType="int" name="decimals" initial="2" /></Specimen>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Note n="1"><strong style={{ color: "var(--text)" }}>Type badge — inline, after the name.</strong> Reuses the existing <M>param_type</M> pill (<M>--panel-3</M> fill, <M>--text-3</M> mono). Placing it in the header rather than inside or beside the input keeps it in the identical spot a column row shows its type, and leaves the input full-width.</Note>
+              <Note n="2"><strong style={{ color: "var(--text)" }}>Input metrics.</strong> <M>fontSize 11.5</M>, <M>5px 8px</M> padding, <M>--radius</M>, <M>1px --border</M>, <M>--panel-2</M> background, mono value text. Focus lifts the border to <M>--accent-line</M>. Identical box model to the column-selector list, so column and scalar controls are the same height.</Note>
+              <Note n="3"><strong style={{ color: "var(--text)" }}>No “required” marker.</strong> Scalars are always optional (blank = default), so they never carry the red <M>required</M> label that column params do. That asymmetry is intentional — it tells the user at a glance which rows must be filled.</Note>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 2 · BOOLEAN ── */}
+        <Section id="bool">
+          <SectionHead kicker="Spec · 2" title="Boolean params">
+            A <M>bool</M> has exactly two valid values — but blank (Python default) is a valid third state. A free-text field can't express “these are your only choices”, so booleans get a <strong style={{ color: "var(--text)" }}>segmented Default · True · False</strong> control. <M>Default</M> is the unset state (sends nothing); <M>True</M>/<M>False</M> send that literal string, which the run-time cast reads cleanly. A <M>toggle</M> variant is available behind the <strong style={{ color: "var(--text)" }}>Tweaks → Boolean control</strong> switch.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <Specimen label="segmented · default (recommended)"><ScalarRowDemo paramType="bool" name="inclusive" boolStyle="segmented" /></Specimen>
+              <Specimen label="segmented · set to True"><ScalarRowDemo paramType="bool" name="inclusive" initial="True" boolStyle="segmented" /></Specimen>
+              <Specimen label="toggle variant · default"><ScalarRowDemo paramType="bool" name="inclusive" boolStyle="toggle" /></Specimen>
+              <Specimen label="toggle variant · set to True"><ScalarRowDemo paramType="bool" name="inclusive" initial="True" boolStyle="toggle" /></Specimen>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Note n="1"><strong style={{ color: "var(--text)" }}>Recommendation: segmented.</strong> Three explicit, equal-weight choices map the domain exactly (two valid values + a default). A bare two-state toggle can't represent “unset”, forcing a separate clear affordance and making “off” ambiguous with “default”. The segmented control needs no extra clear and reads at a glance.</Note>
+              <Note n="2"><strong style={{ color: "var(--text)" }}>Value emitted.</strong> <M>True</M> / <M>False</M> as capitalised strings (matching <M>current_scalar_value</M> on edit, and Python's own casing). <M>Default</M> emits nothing — the param is omitted from <M>scalar_values</M>.</Note>
+              <Note n="3"><strong style={{ color: "var(--text)" }}>Toggle variant.</strong> If the team prefers a switch, it ships with an indeterminate (centred-knob) rest state for “default” and an explicit <M>×</M> to return to it after a choice. Flip <strong style={{ color: "var(--text)" }}>Tweaks → Boolean control</strong> to compare live in the hero card.</Note>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 3 · DEFAULT VS OVERRIDE ── */}
+        <Section id="default">
+          <SectionHead kicker="Spec · 3" title="Blank = default · the empty / override cue">
+            The single most important thing a scalar row must communicate: <strong style={{ color: "var(--text)" }}>blank is meaningful</strong>. An empty field isn't “unfinished” — it's “use the function's Python default”. The design makes both states legible without a tooltip.
+          </SectionHead>
+
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <Specimen label="empty → default chip"><ScalarRowDemo paramType="float" name="max_value" defaultCue="chip" /></Specimen>
+              <Specimen label="filled → override chip + clear"><ScalarRowDemo paramType="float" name="max_value" initial="100.0" defaultCue="chip" /></Specimen>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Note n="1"><strong style={{ color: "var(--text)" }}>Empty.</strong> A muted <M>default</M> chip ( <M>--panel-3</M> / <M>--text-4</M> ) sits inside the field's right edge. It reads as “this row resolves to the Python default” without pretending a value is present. Tweak the cue to a placeholder string (<strong style={{ color: "var(--text)" }}>Tweaks → Default cue</strong>) if the team prefers prose over a chip.</Note>
+              <Note n="2"><strong style={{ color: "var(--text)" }}>Filled.</strong> The chip flips to an accent <M>override</M> ( <M>--accent-soft</M> / <M>--accent</M> ) and a clear <M>×</M> appears. Clicking <M>×</M> empties the field — instantly returning the row to the default state and removing it from the PATCH body.</Note>
+              <Note n="3"><strong style={{ color: "var(--text)" }}>Pre-populated edit.</strong> On edit, every scalar with a saved <M>current_scalar_value</M> opens in the filled/override state. The value is the real persisted string; the override chip confirms it's a saved value rather than a default. (Switch the hero card to <strong style={{ color: "var(--text)" }}>Edit existing</strong> to see all three rows pre-filled.)</Note>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 4 · HINT ── */}
+        <Section id="hint">
+          <SectionHead kicker="Spec · 4" title="The run-time hint — one shared line">
+            The hint — “leave blank for the Python default; a wrong type errors at run time” — is the same for every scalar in the modal. Repeating it per row is noise. It ships as <strong style={{ color: "var(--text)" }}>one shared line beneath the Values group</strong>, with an info glyph, in muted text. (A per-row variant is available behind <strong style={{ color: "var(--text)" }}>Tweaks → Hint placement</strong> for comparison.)
+          </SectionHead>
+          <Card>
+            <div style={{ maxWidth: 460 }}><ScalarHint /></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Note n="1"><strong style={{ color: "var(--text)" }}>Placement.</strong> Directly under the last scalar row, before the Save/Cancel footer. It scopes to the whole Values group, not any single row — which is exactly its meaning.</Note>
+              <Note n="2"><strong style={{ color: "var(--text)" }}>Glyph.</strong> Adds one new entry to <M>ICONS</M> in <M>ui.jsx</M>: <M>info</M> (a circled <em>i</em>, 1.5 stroke, matching the existing icon set). The only additive change outside the card render.</Note>
+              <Note n="3"><strong style={{ color: "var(--text)" }}>Not a tooltip.</strong> The rule is load-bearing for correct use, so it stays always-visible rather than hidden behind hover — which would be invisible on touch and easy to miss.</Note>
+            </div>
+          </Card>
+        </Section>
+
+        {/* ── SPEC 5 · MIXED MODAL ── */}
+        <Section id="mixed">
+          <SectionHead kicker="Spec · 5" title="Mixed-param modal — ordering & separation">
+            When a function has both kinds, the modal leads with <strong style={{ color: "var(--text)" }}>Column bindings</strong>, then <strong style={{ color: "var(--text)" }}>Values</strong> — confirming the issue's suggested default. Column bindings are the required, structural decisions; scalar values are optional tuning. Each group gets a small uppercase label with a count and a hairline rule, so the modal reads as two clear bands rather than one flat list.
+          </SectionHead>
+          <Card>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <SectionLabel count={1}>Column bindings</SectionLabel>
+              <Note n="·"><strong style={{ color: "var(--text)" }}>First — required.</strong> <M>pd.Series</M>, <M>pd.Series[bool]</M> and column-backed <M>str</M> params. They gate Save (the button stays disabled until every required binding has ≥1 column), so they belong at the top where the user hits them first.</Note>
+              <SectionLabel count={3}>Values</SectionLabel>
+              <Note n="·"><strong style={{ color: "var(--text)" }}>Second — optional.</strong> <M>int</M> / <M>float</M> / <M>bool</M> scalars (and <M>str</M> params left in plain-string mode). None gate Save. The shared hint closes the group.</Note>
+            </div>
+            <Note n="i"><strong style={{ color: "var(--text)" }}>Edge cases.</strong> Scalar-only function → no Column bindings label, Values band fills the card. Column-only → unchanged from today, no Values band. The <M>pd.DataFrame</M> “auto (full table)” row keeps its current treatment and sorts with the column group.</Note>
+          </Card>
+        </Section>
+
+        {/* ── COMPONENT BREAKDOWN ── */}
+        <Section id="components">
+          <SectionHead kicker="Build · 1" title="Component breakdown">
+            One new presentational component plus two small helpers, all inside <M>screen-builder.jsx</M>. The existing <M>scalarValues</M> state, <M>handleSave</M> binding-collection, and PATCH shape are untouched — this is a render-layer pass.
+          </SectionHead>
+
+          <Card>
+            <SubHead>ScalarInput — new</SubHead>
+            <PropsTable rows={[
+              ["param", "object", "—", "The dry-run param: reads param_type (int / float / bool) to pick the control."],
+              ["value", "string", "\"\"", "Controlled value from scalarValues[param_id]. \"\" = blank = default."],
+              ["onChange", "(v) => void", "—", "Writes scalarValues[param_id]. Clear (×) calls onChange(\"\")."],
+              ["boolStyle", "\"segmented\" | \"toggle\"", "\"segmented\"", "Bool render. Segmented is the shipped default; toggle is the alt."],
+              ["defaultCue", "\"chip\" | \"placeholder\"", "\"chip\"", "How the empty state is signalled in the field."],
+            ]} />
+          </Card>
+
+          <Card>
+            <SubHead>ScalarHint — new (tiny)</SubHead>
+            <PropsTable head={["Prop", "Type", "Notes"]} rows={[
+              ["—", "no props", "Static shared hint line + info glyph. Rendered once per modal, after the Values group, only when ≥1 scalar param exists."],
+            ]} />
+          </Card>
+
+          <Card>
+            <SubHead>PendingStepCard — modified</SubHead>
+            <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.6, marginTop: -6 }}>
+              The param loop is partitioned by <M>param_kind</M> into a column group and a scalar group, each preceded by a <M>SectionLabel</M> (uppercase label + count + rule). The inline scalar <M>&lt;input&gt;</M> from #151 is replaced by <M>&lt;ScalarInput&gt;</M>; one <M>&lt;ScalarHint&gt;</M> closes the scalar group. Required-binding gating, Save handler, and the column-selector block are unchanged.
+            </div>
+          </Card>
+
+          <Card>
+            <SubHead>ui.jsx — additive (no breaking changes)</SubHead>
+            <PropsTable head={["Add", "Where", "Notes"]} rows={[
+              ["info", "ICONS", "New glyph for the shared hint line. One object entry; nothing else in ui.jsx changes."],
+              ["Switch", "export (optional)", "Only if the toggle bool variant ships. Token-native, shared with the Join brief. Skip if segmented is chosen."],
+            ]} />
+          </Card>
+        </Section>
+
+        {/* ── DIFF ── */}
+        <Section id="diff">
+          <SectionHead kicker="Build · 2" title="The change, as a diff">
+            The shape of the edit to the scalar branch of the <M>PendingStepCard</M> param loop. Illustrative — the implementing agent writes the final code against current <M>main</M>.
+          </SectionHead>
+          <Diff rows={[
+            [" ", "{params.map(p => {"],
+            [" ", "  const isScalar = !isDataFrame && !isMultiCol && !(isStr && strMode === \"column\");"],
+            [" ", "  return ("],
+            [" ", "    <div key={p.param_id} /* row */>"],
+            [" ", "      <div /* header: name + type pill */ />"],
+            ["-", "      {isScalar && ("],
+            ["-", "        <input type=\"text\" placeholder=\"Python default\""],
+            ["-", "          value={scalarValues[p.param_id] || \"\"}"],
+            ["-", "          onChange={e => setScalarValues(...)} />"],
+            ["-", "      )}"],
+            ["+", "      {isScalar && ("],
+            ["+", "        <ScalarInput"],
+            ["+", "          param={p}"],
+            ["+", "          value={scalarValues[p.param_id] || \"\"}"],
+            ["+", "          onChange={v => setScalarValues(prev => ({ ...prev, [p.param_id]: v }))}"],
+            ["+", "          boolStyle=\"segmented\""],
+            ["+", "          defaultCue=\"chip\" />"],
+            ["+", "      )}"],
+            [" ", "    </div>"],
+            [" ", "  );"],
+            [" ", "})}"],
+            ["+", ""],
+            ["+", "// after the loop, once, when scalarParams.length > 0:"],
+            ["+", "{scalarParams.length > 0 && <ScalarHint />}"],
+          ]} />
+        </Section>
+
+        {/* ── ACCEPTANCE ── */}
+        <Section id="acceptance">
+          <SectionHead kicker="Done means" title="Acceptance, mapped to the design">
+            How each criterion on the issue is satisfied by what's specced above.
+          </SectionHead>
+          <Card>
+            {[
+              ["Scalar rows appear beside column rows", "Same row anatomy + the Columns / Values grouping (Spec 5)."],
+              ["Name + styled input + type badge per row", "ParamRowHeader (name + inline type pill) over ScalarInput (Spec 1)."],
+              ["Inline hint: blank = default, wrong type = run-time error", "One shared ScalarHint line under the Values group (Spec 4)."],
+              ["Boolean uses the designed control", "Segmented Default · True · False (Spec 2); toggle behind a tweak."],
+              ["Pre-populated edit shows current_scalar_value", "Edit state seeds scalars; filled rows show the override cue (Spec 3)."],
+              ["Mixed modal uses the designed ordering", "Column bindings first, Values second, labelled bands (Spec 5)."],
+              ["All-blank saves with no scalar_values entries", "Blanks omitted from the PATCH body — verify live in the hero card."],
+            ].map(([crit, how], i) => (
+              <div key={i} style={{ display: "flex", gap: 11, alignItems: "flex-start", paddingBottom: i < 6 ? 11 : 0, borderBottom: i < 6 ? "1px solid var(--border-soft)" : "none" }}>
+                <Icon name="check" size={14} style={{ color: "var(--good)", marginTop: 2 }} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{crit}</span>
+                  <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.5 }}>{how}</span>
+                </div>
+              </div>
+            ))}
+          </Card>
+        </Section>
+
+        {/* ── TOKENS ── */}
+        <Section id="tokens">
+          <SectionHead kicker="Reference" title="Tokens used — nothing new">
+            Every value in this brief is an existing <M>:root</M> token. No new colours, radii, or fonts are introduced.
+          </SectionHead>
+          <Card style={{ gap: 14 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <TokenChip t="--accent" note="override chip, focus, segmented active" />
+              <TokenChip t="--accent-soft" note="override chip fill" />
+              <TokenChip t="--accent-line" note="focus border" />
+              <TokenChip t="--panel-2" note="input fill" />
+              <TokenChip t="--panel-3" note="default chip, type badge" />
+              <TokenChip t="--border" note="input border" />
+              <TokenChip t="--border-soft" note="row rules, hint border" />
+              <TokenChip t="--text" note="value text" />
+              <TokenChip t="--text-3" note="labels, hint, badge" />
+              <TokenChip t="--text-4" note="default chip text" />
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <span className="mono" style={{ fontSize: 11, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", color: "var(--text-2)" }}>--radius · 6px</span>
+              <span className="mono" style={{ fontSize: 11, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", color: "var(--text-2)" }}>Geist Mono · values & badges</span>
+              <span className="mono" style={{ fontSize: 11, padding: "3px 10px", borderRadius: 99, background: "var(--panel-3)", border: "1px solid var(--border)", color: "var(--text-2)" }}>fontSize 11.5 · input</span>
+            </div>
+          </Card>
+        </Section>
+
+      </div>
+
+      {/* footer */}
+      <footer style={{ marginTop: 80, paddingTop: 24, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>pipeui · scalar input UI polish · Claude Design pass</span>
+        <span style={{ flex: 1 }} />
+        <span className="mono" style={{ fontSize: 11, color: "var(--text-4)" }}>rendered live · real tokens · screen-builder.jsx</span>
+      </footer>
+
+      {/* Tweaks */}
+      <TweaksPanel>
+        <TweakSection label="Theme" />
+        <TweakColor label="Accent" value={t.accent}
+          options={[
+            ["#7c6cf5", "rgba(124,108,245,0.12)", "rgba(124,108,245,0.40)"],
+            ["#3b9e6e", "rgba(59,158,110,0.14)", "rgba(59,158,110,0.42)"],
+            ["#d6915b", "rgba(214,145,91,0.14)", "rgba(214,145,91,0.42)"],
+            ["#5b9dd6", "rgba(91,157,214,0.14)", "rgba(91,157,214,0.42)"]
+          ]}
+          onChange={v => setTweak("accent", v)} />
+        <TweakSection label="Open design decisions" />
+        <TweakRadio label="Boolean control" value={t.boolControl}
+          options={["segmented", "toggle"]} onChange={v => setTweak("boolControl", v)} />
+        <TweakRadio label="Hint placement" value={t.hintPlacement}
+          options={["shared", "per-row"]} onChange={v => setTweak("hintPlacement", v)} />
+        <TweakRadio label="Default cue" value={t.defaultCue}
+          options={["chip", "placeholder"]} onChange={v => setTweak("defaultCue", v)} />
+      </TweaksPanel>
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

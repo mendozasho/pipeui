@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS parameter (
     content_hash_id UUID NOT NULL UNIQUE,
     param_name      VARCHAR NOT NULL,
     param_type      VARCHAR NOT NULL,
-    function_id     UUID NOT NULL  -- references function_registry(function_id)
+    function_id     UUID NOT NULL,  -- references function_registry(function_id)
+    has_default     BOOLEAN NOT NULL DEFAULT FALSE,  -- #258: param has a Python default
+    default_value   VARCHAR  -- #258: str() of the Python default; NULL when has_default is FALSE
 );
 
 CREATE TABLE IF NOT EXISTS source_column_map (
@@ -55,14 +57,16 @@ CREATE TABLE IF NOT EXISTS source_function_map (
     source_id              UUID NOT NULL,  -- references source_registry(source_id)
     set_id                 UUID NOT NULL,  -- references function_set(set_id)
     position               INTEGER NOT NULL DEFAULT 0,
-    output_mode            VARCHAR NOT NULL DEFAULT 'append'
+    output_mode            VARCHAR NOT NULL DEFAULT 'append',
+    append_name            VARCHAR  -- user-provided append column name; NULL -> auto-label
 );
 
 CREATE TABLE IF NOT EXISTS alias_map (
     alias_map_id UUID PRIMARY KEY,
     column_id    UUID NOT NULL,  -- references column_registry(column_id)
     parameter_id UUID NOT NULL,  -- references parameter(param_id)
-    source_id    UUID NOT NULL   -- references source_registry(source_id)
+    source_id    UUID NOT NULL,  -- references source_registry(source_id)
+    position     INTEGER NOT NULL DEFAULT 0  -- add-order of the bound column within its parameter
 );
 
 CREATE TABLE IF NOT EXISTS function_set (
@@ -87,6 +91,44 @@ CREATE TABLE IF NOT EXISTS builtin_registry (
     display_name  VARCHAR NOT NULL,
     description   TEXT,
     config_schema JSON
+);
+
+-- Persisted scalar argument overrides per (source, param) pair.
+-- value is stored as VARCHAR; the execution layer casts to param_type at run time.
+-- If no row exists for a (source_id, param_id) pair, the Python default is used.
+CREATE TABLE IF NOT EXISTS source_scalar_map (
+    scalar_map_id UUID PRIMARY KEY,
+    source_id     UUID NOT NULL,  -- references source_registry(source_id)
+    param_id      UUID NOT NULL,  -- references parameter(param_id)
+    value         VARCHAR NOT NULL,
+    UNIQUE (source_id, param_id)
+);
+
+-- Output-target map: ties a `replace` transform step's OUTPUT to an ordered set
+-- of target columns (bundle i -> target i). The first table that maps a function's
+-- *output* to columns — alias_map is param-keyed INPUT, source_function_map is
+-- source->set, source_scalar_map is scalar values (ADR-0001). Keyed by
+-- (source_function_map_id, function_id) -> ordered (column_id, position). Only
+-- `replace` steps write rows here; `append` steps write none.
+CREATE TABLE IF NOT EXISTS output_target_map (
+    output_target_map_id   UUID PRIMARY KEY,
+    source_function_map_id UUID NOT NULL,  -- references source_function_map(source_function_map_id)
+    function_id            UUID NOT NULL,  -- references function_registry(function_id)
+    column_id              UUID NOT NULL,  -- references column_registry(column_id)
+    position               INTEGER NOT NULL DEFAULT 0  -- bundle index this target overwrites
+);
+
+-- Per-function transform output config (#264). output_mode + append_name are a
+-- property of each FUNCTION within a step, not of the whole set — a multi-function
+-- set can mix append/replace and per-function append names. Keyed (sfm_id, function_id),
+-- mirroring output_target_map's per-function granularity. Legacy steps without a row
+-- fall back to source_function_map.output_mode / append_name.
+CREATE TABLE IF NOT EXISTS function_output_config (
+    source_function_map_id UUID NOT NULL,  -- references source_function_map(source_function_map_id)
+    function_id            UUID NOT NULL,  -- references function_registry(function_id)
+    output_mode            VARCHAR NOT NULL DEFAULT 'append',
+    append_name            VARCHAR,        -- user-provided append column name; NULL -> auto-label
+    PRIMARY KEY (source_function_map_id, function_id)
 );
 
 -- Built-in pipeline steps (join, pivot, filter) attached to a source.

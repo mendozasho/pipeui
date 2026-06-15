@@ -15,6 +15,7 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from pipeui.db import get_conn
+from pipeui.workflow.export import build_results_report
 from pipeui.workflow.run import run_validation_across_sources
 
 router = APIRouter(prefix="/validations", tags=["validations"])
@@ -49,3 +50,28 @@ def run_validation_by_function(
         raise HTTPException(status_code=404, detail=f"Function {function_id!r} not found")
 
     return result
+
+
+@router.get("/{function_id}/export/results")
+def export_results_report(
+    function_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Export the transposed results report for a validation function (Functions-page entry point).
+
+    Runs the function across every source it is attached to (each attached source ran)
+    and returns {"columns": [...], "rows": [...]} — one row per RunResult, keyed by its
+    normalized label, with pass/fail + metadata columns, INCLUDING runs that fully passed.
+
+    404 when function_id is unknown.
+    """
+    try:
+        fid = uuid.UUID(function_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid function_id: {function_id!r}")
+
+    result = run_validation_across_sources(conn, fid)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Function {function_id!r} not found")
+
+    return build_results_report(result)

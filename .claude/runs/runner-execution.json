@@ -1,0 +1,156 @@
+{
+  "feature_slug": "runner-execution",
+  "ledger_hash": "708254b2ec9393bdda712c5b139e56918e78f004d767b7b899dd75ca79204f51",
+  "accumulator_branch": "release/runner-execution",
+  "final_pr_base": "release/v0.0.1-beta",
+  "github_mode": "gh-cli",
+  "current_round": 1,
+  "slices": {
+    "1": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-1",
+      "workspace": null,
+      "pr": 245,
+      "integrated_at": "2026-06-15T02:33:39Z",
+      "note": "Round 1. Parent #218 (open), sub-issues #226 #227 #228 #229 closed. Squash fc646347. 80 py + 5 frontend green; behavioral tests promoted."
+    },
+    "2": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-2",
+      "workspace": null,
+      "pr": 247,
+      "integrated_at": "2026-06-15T03:00:00Z",
+      "note": "Round 2. Parent #219 open; sub-issues #230 #231 #232 #233 closed. Squash 429a91a. 135 py + 47 frontend green; all tests promoted. Phase-3 feedback: alias_map DDL broke positional INSERT fixtures in test_api_pipelines_run/test_api_run_all/test_api_run_set/test_api_validations (not in predicted touched_files) - fixed mechanically."
+    },
+    "3": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-3",
+      "workspace": null,
+      "pr": 248,
+      "integrated_at": "2026-06-15T03:20:00Z",
+      "note": "Round 3. Parent #220 open; sub-issues #234 #235 #236 #237 closed. Squash 3c86b2c. 134 py + 53 frontend green; all promoted. Follow-up debt: multi-param-per-bundle worker dispatch deferred (out of scope)."
+    },
+    "4": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-4",
+      "workspace": null,
+      "pr": 249,
+      "integrated_at": "2026-06-15T03:45:00Z",
+      "note": "Round 4. Parent #221 open; sub-issues #238 #239 #240 #241 closed. Squash 8c67936. 136 py + 57 frontend green; all promoted. FLAGGED: user-provided append NAME wired UI->API but not persisted server-side in v1 (needs append_name col on source_function_map; 19 INSERT sites). Awaiting user decision: accept v1 deferral vs kick back to to-slices."
+    },
+    "5": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-5",
+      "workspace": null,
+      "pr": 250,
+      "integrated_at": "2026-06-15T04:10:00Z",
+      "note": "Round 5. Parent #222 open; sub-issues #242 #243 #244 closed. Squash e31d0d4. 56 py + 18 frontend green; resolves #193 export symptom. Promoted."
+    },
+    "6": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-6",
+      "workspace": null,
+      "pr": 246,
+      "integrated_at": "2026-06-15T02:33:39Z",
+      "note": "Round 1. Parent #223 checked off but OPEN by design (no sub-issues). Squash 2327f569. 3 docs-content tests green; archived to #223 (commit 0ceeefe)."
+    },
+    "4b": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-4b",
+      "workspace": null,
+      "pr": 252,
+      "integrated_at": "2026-06-15T04:40:00Z",
+      "note": "to-code addendum (NOT in frozen slice ledger), added at user direction to close the slice-4 append-name persistence gap (#251, refs #221 #239). Squash 311ecfe. Full suite 427 passed, 1 pre-existing macOS worker failure. NB: an iCloud ' 2' dup ref (.git/index 2, refs/heads/release/runner-execution 2) appeared mid-round and broke a fetch; removed per known quirk, repo healthy."
+    },
+    "4c": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-4c",
+      "workspace": null,
+      "pr": 255,
+      "integrated_at": "2026-06-15T05:10:00Z",
+      "note": "to-code addendum (NOT in frozen slice ledger). Bug fix found in manual testing of #253: get_pipeline 500 on pre-feature DBs (#254). Registered alias_map.position + source_function_map.append_name in _REGISTRY_SCHEMA_MIGRATIONS. Squash 48fb32e. 153 tests green; verified live (reloaded server, dev DB migrated, endpoint 200). Folds into #253."
+    },
+    "4d": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-4d",
+      "workspace": null,
+      "pr": 257,
+      "integrated_at": "2026-06-15T05:30:00Z",
+      "note": "to-code addendum (NOT in frozen slice ledger). Gap found in manual testing of #253: builtin palette cards had no detail drawer (#256). Added PaletteBuiltinDrawer reusing __UI__.Drawer. Squash 0c15a51. 79 frontend tests green. Folds into #253."
+    },
+    "scalar-params": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-scalar",
+      "workspace": null,
+      "pr": 259,
+      "integrated_at": "2026-06-15T06:30:00Z",
+      "note": "to-code addendum (NOT in frozen slice ledger). Critical correctness gap #258: executor never read source_scalar_map, so functions with scalar params couldn't run (TypeError -> 0/0). Now resolves+broadcasts scalar values, captures defaults at registration, surfaces failed-run errors, locks single runner. Squash 8dd0b32. 437 py + 80 frontend green; verified live (is_above_threshold threshold=5 -> 29/11 counts). Root cause: missing acceptance criterion (PRD assumed source_scalar_map->executor wiring; never existed even on beta). Folds into #253."
+    },
+    "nan-export": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-nan",
+      "workspace": null,
+      "pr": 263,
+      "integrated_at": "2026-06-15T07:30:00Z",
+      "note": "to-code addendum. Bug #262: transformed-report export 500'd on NaN (nan not JSON compliant) for null-containing data, so appended columns never showed. get_staging_rows scrubs NaN/NaT/inf->null via _json_safe. Squash 7fc49b6. 440 py green; verified live (customers export 200 with all 5 appended cols). Root cause: slice-5 export tests used null-free synthetic data."
+    },
+    "outcfg": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-outcfg",
+      "workspace": null,
+      "pr": 265,
+      "integrated_at": "2026-06-15T08:30:00Z",
+      "note": "to-code addendum, PARTIAL for #264 (backend). Append auto-label = fn_name_column (uppercase_email); new function_output_config makes output_mode/append_name per-function (was per-set); runner/attach/patch wired w/ legacy fallback. Squash 78dd785. 443 py green; live-verified (customers appends now round_to_monthly_spend/uppercase_email/etc). #264 STAYS OPEN for the per-function modal UI."
+    },
+    "setiter": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-setiter",
+      "workspace": null,
+      "pr": 267,
+      "integrated_at": "2026-06-15T09:15:00Z",
+      "note": "to-code addendum #266: function-set steps were routed to one executor by dominant type, dropping validations inside transform/mixed sets (missing from results report). run_pipeline now processes every function a step contains by its own type (_step_has). Squash 7bd560b. 445 py green."
+    },
+    "8": {
+      "status": "blocked",
+      "branch": "feature/runner-execution-8",
+      "workspace": null,
+      "pr": 0,
+      "integrated_at": null,
+      "note": "blocked-on-design (#225). Not picked up by to-code."
+    },
+    "anno": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-anno",
+      "workspace": null,
+      "pr": 269,
+      "integrated_at": "2026-06-15T09:45:00Z",
+      "note": "#268: worker evaluated user annotations -> pd.Series[bool] crashed module exec (Series not subscriptable), failing every fn in the file. Compile with future-annotations flag. Squash 02f522251719c536c9109a4542710521abff0db6-short. 446 py green; live: within_range now runs (remaining failure is a string-column binding mismatch, not a bug). Exposed by #266."
+    },
+    "noise": {
+      "status": "integrated",
+      "branch": "feature/runner-execution-noise",
+      "workspace": null,
+      "pr": 271,
+      "integrated_at": "2026-06-15T10:15:00Z",
+      "note": "#270: strip macOS [worker] setrlimit-failed noise from worker error messages so the real failure surfaces (_clean_worker_stderr). Squash 805b9a3. 448 py green."
+    }
+  },
+  "integration_order": [
+    1,
+    6,
+    2,
+    3,
+    4,
+    5,
+    "4b",
+    "4c",
+    "4d",
+    "scalar-params",
+    "colorder",
+    "nan-export",
+    "outcfg",
+    "setiter",
+    "anno",
+    "noise"
+  ]
+}

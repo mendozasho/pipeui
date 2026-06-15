@@ -67,7 +67,7 @@ def _seed_pipeline(conn, source_id, column_ids):
     param_a_id = uuid.uuid4()
     param_a_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
         [param_a_id, param_a_ch, "col_param", "str", fn_a_id],
     )
 
@@ -82,7 +82,7 @@ def _seed_pipeline(conn, source_id, column_ids):
     param_b_id = uuid.uuid4()
     param_b_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
         [param_b_id, param_b_ch, "df", "pd.DataFrame", fn_b_id],
     )
 
@@ -127,7 +127,7 @@ def _seed_pipeline(conn, source_id, column_ids):
     # --- Alias binding: col_param -> column_ids[0] ---
     alias_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
         [alias_id, column_ids[0], param_a_id, source_id],
     )
 
@@ -218,7 +218,7 @@ def _make_function(conn, fn_name: str, params: list[tuple[str, str]]) -> tuple[u
     for p_name, p_type in params:
         p_id = uuid.uuid4()
         p_ch = uuid.uuid4()
-        conn.execute("INSERT INTO parameter VALUES (?, ?, ?, ?, ?)", [p_id, p_ch, p_name, p_type, fn_id])
+        conn.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)", [p_id, p_ch, p_name, p_type, fn_id])
         param_ids.append(p_id)
     return fn_id, param_ids
 
@@ -291,6 +291,69 @@ def test_post_unknown_source_returns_404(client, db):
 
 
 @pytest.mark.integration
+def test_post_str_param_plain_string_attaches_in_one_go(client, db):
+    """Bug #186 (1): POST with a str param in plain-string mode (scalar_values, no
+    binding) succeeds in a single request and persists the literal."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_api_str_plain", [("label", "str")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [],
+        "scalar_values": {str(param_id): "hello"},
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True, body
+
+    # Literal persisted to source_scalar_map via the same POST
+    row = db.execute(
+        "SELECT value FROM source_scalar_map WHERE source_id = ? AND param_id = ?",
+        [source_id, param_id],
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "hello"
+
+
+@pytest.mark.integration
+def test_post_scalar_value_persisted_and_visible_in_get(client, db):
+    """Bug #186 (1)/(2): POST with scalar_values for an int param persists the value
+    and GET surfaces it as scalar_value on the placed step's param."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_api_int_scalar", [("threshold", "int")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [],
+        "scalar_values": {str(param_id): "11"},
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+    get_resp = client.get(f"/pipelines/{source_id}")
+    params = get_resp.json()["steps"][0]["functions"][0]["params"]
+    threshold = next(p for p in params if p["param_name"] == "threshold")
+    assert threshold["scalar_value"] == "11"
+
+
+@pytest.mark.integration
+def test_post_str_param_without_binding_or_value_still_fails(client, db):
+    """Bug #186 (1): a str param with neither a binding nor a literal still returns
+    the structured ok=False failure."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_api_str_novalue", [("label", "str")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["missing_params"][0]["param_name"] == "label"
+
+
+@pytest.mark.integration
 def test_post_attach_reflected_in_get(client, db):
     """Guarantee 9: successful attach reflected in subsequent GET."""
     source_id, col_ids = make_registered_source(db, n_columns=1)
@@ -307,6 +370,80 @@ def test_post_attach_reflected_in_get(client, db):
     steps = get_resp.json()["steps"]
     assert len(steps) == 1
     assert steps[0]["functions"][0]["function_name"] == "fn_get_after_post"
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — POST attach carries replace output_targets through the API
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_post_replace_output_targets_persists_map_rows(client, db):
+    """Slice 4 #2/#5: a replace attach with output_targets writes the output_target_map
+    rows via the API (UI -> POST seam)."""
+    source_id, col_ids = make_registered_source(db, n_columns=4)
+    fn_id, (param_id,) = _make_function(db, "fn_api_replace", [("cols", "pd.Series")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "output_mode": "replace",
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0]), str(col_ids[1])]}],
+        "output_targets": [str(col_ids[2]), str(col_ids[3])],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    sfm_id = body["source_function_map_id"]
+
+    rows = db.execute(
+        "SELECT column_id FROM output_target_map WHERE source_function_map_id = ? ORDER BY position",
+        [sfm_id],
+    ).fetchall()
+    got = [str(r[0]) for r in rows]
+    assert got == [str(col_ids[2]), str(col_ids[3])]
+
+
+@pytest.mark.integration
+def test_post_replace_target_count_mismatch_returns_ok_false_not_500(client, db):
+    """Slice 4 #1: a replace attach whose target count != bundle count returns a
+    structured ok=False failure (HTTP 200), never a 500."""
+    source_id, col_ids = make_registered_source(db, n_columns=5)
+    fn_id, (param_id,) = _make_function(db, "fn_api_mismatch", [("cols", "pd.Series")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "output_mode": "replace",
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0]), str(col_ids[1])]}],
+        "output_targets": [str(col_ids[2]), str(col_ids[3]), str(col_ids[4])],  # 3 != 2
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "2" in body["detail"] and "3" in body["detail"]
+
+
+@pytest.mark.integration
+def test_post_append_name_persisted_via_api(client, db):
+    """Slice 4b: an append attach with a user-provided append_name persists the
+    (normalized) name to source_function_map via the API (modal -> POST seam)."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    fn_id, (param_id,) = _make_function(db, "fn_api_append", [("col", "str")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "output_mode": "append",
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0])]}],
+        "append_name": "Risk Score",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    sfm_id = body["source_function_map_id"]
+
+    row = db.execute(
+        "SELECT append_name FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()
+    assert row[0] == "Risk_Score"
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +548,7 @@ def _seed_auto_set(conn, source_id, column_ids):
     )
     param_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO parameter VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
         [param_id, uuid.uuid4(), "x", "str", fn_id],
     )
     # Auto-created set: set_name == function_name, single member
@@ -431,7 +568,7 @@ def _seed_auto_set(conn, source_id, column_ids):
     )
     # One alias binding
     conn.execute(
-        "INSERT INTO alias_map VALUES (?, ?, ?, ?)",
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
         [uuid.uuid4(), column_ids[0], param_id, source_id],
     )
     return sfm_id, set_id, fn_id, param_id
@@ -632,6 +769,116 @@ def test_patch_invalid_output_mode_returns_422(client, db):
 # GET ordering — source_function_map.position ASC
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Dry-run response shape — param_kind + available_columns (#151)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_dry_run_includes_param_kind_and_available_columns(client, db):
+    """Dry-run response includes param_kind and available_columns fields."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    fn_id, (p_str, p_int) = _make_function(db, "fn_dr_shape", [("col", "str"), ("n", "int")])
+
+    resp = client.post(
+        f"/pipelines/{source_id}/steps?dry_run=true",
+        json={"function_id": str(fn_id)},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "available_columns" in body
+    assert len(body["available_columns"]) == 2
+
+    param_kinds = {p["param_name"]: p["param_kind"] for p in body["params"]}
+    assert param_kinds["col"] == "column"
+    assert param_kinds["n"] == "scalar"
+
+
+@pytest.mark.integration
+def test_dry_run_scalar_has_empty_suggested_columns(client, db):
+    """Dry-run: scalar params have empty suggested_columns and current_scalar_value=null."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_dr_scalar", [("n", "int")])
+
+    resp = client.post(
+        f"/pipelines/{source_id}/steps?dry_run=true",
+        json={"function_id": str(fn_id)},
+    )
+    assert resp.status_code == 200
+    params = resp.json()["params"]
+    assert len(params) == 1
+    assert params[0]["param_kind"] == "scalar"
+    assert params[0]["suggested_columns"] == []
+    assert params[0]["current_scalar_value"] is None
+
+
+# ---------------------------------------------------------------------------
+# PATCH with scalar_values and bindings (#151)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_patch_scalar_values_upserts_and_returns_ok(client, db):
+    """PATCH with scalar_values upserts into source_scalar_map and returns ok=true."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_api_scalar", [("n", "int")])
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "scalar_values": {str(p_id): "7"},
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    row = db.execute(
+        "SELECT value FROM source_scalar_map WHERE source_id = ? AND param_id = ?",
+        [source_id, p_id],
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "7"
+
+
+@pytest.mark.integration
+def test_patch_scalar_values_second_call_updates_no_duplicate(client, db):
+    """Second PATCH with same (source_id, param_id) updates value — no duplicate row."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_api_scalar2", [("n", "int")])
+    sfm_id, _, _, _ = _seed_auto_set(db, source_id, col_ids)
+
+    client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={"scalar_values": {str(p_id): "1"}})
+    client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={"scalar_values": {str(p_id): "2"}})
+
+    rows = db.execute(
+        "SELECT value FROM source_scalar_map WHERE source_id = ? AND param_id = ?",
+        [source_id, p_id],
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "2"
+
+
+@pytest.mark.integration
+def test_patch_bindings_replaces_alias_map(client, db):
+    """PATCH with bindings replaces all alias_map rows for that step."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_id, param_id = _seed_auto_set(db, source_id, col_ids)
+
+    # Initially bound to col_ids[0] (from _seed_auto_set); patch to col_ids[1]
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "bindings": {str(param_id): [str(col_ids[1])]},
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    rows = db.execute(
+        "SELECT column_id FROM alias_map WHERE parameter_id = ? AND source_id = ?",
+        [param_id, source_id],
+    ).fetchall()
+    assert len(rows) == 1
+    assert str(rows[0][0]) == str(col_ids[1])
+
+
+# ---------------------------------------------------------------------------
+# GET ordering — source_function_map.position ASC
+# ---------------------------------------------------------------------------
+
 @pytest.mark.integration
 def test_get_pipeline_ordered_by_sfm_position(client, db):
     """GET returns steps ordered by source_function_map.position ASC."""
@@ -658,3 +905,185 @@ def test_get_pipeline_ordered_by_sfm_position(client, db):
     # fn_b (position 1) should come before fn_a (position 10)
     assert steps[0]["functions"][0]["function_name"] == "fn_order_b"
     assert steps[1]["functions"][0]["function_name"] == "fn_order_a"
+
+
+# ---------------------------------------------------------------------------
+# GET /pipelines/{source_id} — placed built-in steps in the canvas list (#209)
+# ---------------------------------------------------------------------------
+
+def _make_right_source(conn):
+    """Register a second source with a uniquely-named column (avoids the
+    column_registry content_hash_id collision a second make_registered_source
+    would cause). Returns (source_id, column_name)."""
+    import datetime as _dt
+    from pipeui.ids import content_hash_id as _ch
+    src_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [src_id, uuid.uuid4(), f"right_{src_id}", _dt.date.today(), "upsert", "id"],
+    )
+    col_id = uuid.uuid4()
+    col_name = f"rcol_{src_id.hex[:6]}"
+    conn.execute(
+        "INSERT INTO column_registry VALUES (?, ?, ?, ?)",
+        [col_id, _ch("column_registry", col_name, "INTEGER"), col_name, "INTEGER"],
+    )
+    conn.execute(
+        "INSERT INTO source_column_map VALUES (?, ?, ?)",
+        [_ch("source_column_map", str(src_id), str(col_id)), col_id, src_id],
+    )
+    return src_id, col_name
+
+
+@pytest.mark.integration
+def test_get_pipeline_returns_builtin_step_with_discriminator(client, db):
+    """#209 AC1: GET /pipelines/{source_id} returns a placed built-in step in
+    steps[] with step_type='builtin', its builtin_type and builtin_config."""
+    from pipeui.workflow.builtins import attach_builtin
+
+    source_id, _ = make_registered_source(db, n_columns=1)
+    right_id, rcol = _make_right_source(db)
+    cfg = {
+        "right_source_id": str(right_id),
+        "join_type": "inner",
+        "on": [{"left_col": "col_0", "right_col": rcol}],
+        "keep_columns": "all",
+    }
+    res = attach_builtin(db, source_id, "join", cfg)
+    assert res["ok"] is True
+
+    resp = client.get(f"/pipelines/{source_id}")
+    assert resp.status_code == 200
+    steps = resp.json()["steps"]
+    assert len(steps) == 1
+    bstep = steps[0]
+    assert bstep["step_type"] == "builtin"
+    assert bstep["builtin_type"] == "join"
+    assert bstep["step_id"] == res["step_id"]
+    assert bstep["builtin_config"]["join_type"] == "inner"
+
+
+@pytest.mark.integration
+def test_get_pipeline_function_step_carries_step_type_no_regression(client, db):
+    """#209 AC2: a function step in the GET response carries step_type='function'
+    and still includes its full nested functions[] payload (no regression)."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_disc", [("col", "str")])
+    post = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(col_ids[0])]}],
+    })
+    assert post.json()["ok"] is True
+
+    steps = client.get(f"/pipelines/{source_id}").json()["steps"]
+    assert steps[0]["step_type"] == "function"
+    assert steps[0]["functions"][0]["function_name"] == "fn_disc"
+
+
+@pytest.mark.integration
+def test_get_pipeline_interleaves_builtin_and_function_by_position(client, db):
+    """#209 AC1: function (position 0) and built-in (position 1) come back ordered
+    by position with the correct discriminators."""
+    from pipeui.workflow.builtins import attach_builtin
+
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, _ = _make_function(db, "fn_inter", [("df", "pd.DataFrame")])
+    client.post(f"/pipelines/{source_id}/steps", json={"function_id": str(fn_id)})
+
+    right_id, rcol = _make_right_source(db)
+    attach_builtin(db, source_id, "join", {
+        "right_source_id": str(right_id),
+        "join_type": "left",
+        "on": [{"left_col": "col_0", "right_col": rcol}],
+        "keep_columns": "all",
+    })
+
+    steps = client.get(f"/pipelines/{source_id}").json()["steps"]
+    assert [s["step_type"] for s in steps] == ["function", "builtin"]
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — PATCH rewrites alias_map column positions; new order reads back
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_patch_rewrites_column_positions_and_reads_back(client, db):
+    """Slice 2 #3: PATCH rewrites a parameter's column positions in the provided
+    order; GET reads the bindings back in that new order."""
+    source_id, col_ids = make_registered_source(db, n_columns=3)
+    fn_id, (param_id,) = _make_function(db, "fn_patch_pos", [("cols", "pd.Series")])
+
+    # Attach with add-order col_0, col_1, col_2
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [{"param_id": str(param_id), "column_ids": [str(c) for c in col_ids]}],
+    })
+    assert resp.json()["ok"] is True
+    sfm_id = resp.json()["source_function_map_id"]
+
+    # PATCH to a new order: col_2, col_0, col_1
+    new_order = [str(col_ids[2]), str(col_ids[0]), str(col_ids[1])]
+    presp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "bindings": {str(param_id): new_order},
+    })
+    assert presp.status_code == 200
+    assert presp.json() == {"ok": True}
+
+    # alias_map.position reflects the new order
+    rows = db.execute(
+        "SELECT column_id, position FROM alias_map WHERE parameter_id = ? AND source_id = ? ORDER BY position",
+        [param_id, source_id],
+    ).fetchall()
+    assert [str(cid) for cid, _ in rows] == new_order
+    assert [pos for _, pos in rows] == [0, 1, 2]
+
+    # GET reads bindings back in the new order
+    get_resp = client.get(f"/pipelines/{source_id}")
+    fn = get_resp.json()["steps"][0]["functions"][0]
+    param = next(p for p in fn["params"] if p["param_id"] == str(param_id))
+    assert [b["column_name"] for b in param["bindings"]] == ["col_2", "col_0", "col_1"]
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/3 — acceptance #1: an equal-length-among-varying
+# violation at attach returns a STRUCTURED failure, never a 500.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_post_unequal_varying_attach_returns_structured_failure_not_500(client, db):
+    """A multi-bind attach with mismatched varying column counts (3,2) returns a
+    structured failure body (ok=False with detail) at 200 — not a 500."""
+    source_id, col_ids = make_registered_source(db, n_columns=5)
+    fn_id, (p_a, p_b) = _make_function(db, "fn_api_unequal", [("a", "pd.Series"), ("b", "pd.Series")])
+
+    resp = client.post(f"/pipelines/{source_id}/steps", json={
+        "function_id": str(fn_id),
+        "bindings": [
+            {"param_id": str(p_a), "column_ids": [str(c) for c in col_ids[:3]]},
+            {"param_id": str(p_b), "column_ids": [str(c) for c in col_ids[3:5]]},
+        ],
+    })
+    assert resp.status_code != 500
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "3" in body["detail"] and "2" in body["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-execution/5 — #243: the transformed-report export route exists
+# and returns the empty-payload contract for a registered source with no
+# transform run yet (route-existence + shape guard at the pipelines seam).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_transformed_export_route_returns_empty_payload_for_registered_source(client, db):
+    """GET /pipelines/{source_id}/export/transformed exists and returns {columns,rows}.
+
+    A registered source with no transform run yet has no staging table, so the
+    transformed report is an empty payload (200) — never a 404 (source exists) or 500.
+    """
+    source_id, _ = make_registered_source(db, n_columns=2)
+    resp = client.get(f"/pipelines/{source_id}/export/transformed")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"columns": [], "rows": []}

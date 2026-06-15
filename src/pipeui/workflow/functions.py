@@ -167,6 +167,13 @@ def _inspect_function(fn_name: str, fn_obj) -> dict | str:
     # --- derivation ---
     param_names = [p.name for p in params]
     param_types_list = [_annotation_to_str(p.annotation) for p in params]  # type: ignore[misc]
+    # #258: capture each param's Python default so the executor can fall back to it
+    # and the frontend can distinguish required params from optional ones.
+    param_has_default = [p.default is not inspect.Parameter.empty for p in params]
+    param_default_values = [
+        str(p.default) if p.default is not inspect.Parameter.empty else None
+        for p in params
+    ]
     fn_class = derive_function_class(param_types_list)
     fn_return_type = derive_function_return_type(ret_ann)
     fn_type = derive_function_type(fn_return_type)  # type: ignore[arg-type]
@@ -176,6 +183,8 @@ def _inspect_function(fn_name: str, fn_obj) -> dict | str:
     return {
         "param_names": param_names,
         "param_types": param_types_list,
+        "param_has_default": param_has_default,
+        "param_default_values": param_default_values,
         "function_class": fn_class,
         "function_return_type": fn_return_type,
         "function_type": fn_type,
@@ -269,6 +278,8 @@ def _parse_sql_header(source: str) -> dict | str:
         "function_signature": fn_sig,
         "param_names": [],
         "param_types": [],
+        "param_has_default": [],
+        "param_default_values": [],
     }
 
 
@@ -339,6 +350,9 @@ def register_function_entry(
 
     param_names: list[str] = data["param_names"]
     param_types: list[str] = data["param_types"]
+    # #258: defaults captured at inspection (empty/absent for the SQL pd.DataFrame path)
+    param_has_default: list[bool] = data.get("param_has_default") or [False] * len(param_names)
+    param_default_values: list[str | None] = data.get("param_default_values") or [None] * len(param_names)
 
     conn.execute("BEGIN")
     try:
@@ -387,17 +401,22 @@ def register_function_entry(
             conn.execute("DELETE FROM parameter WHERE function_id = ?", [function_id])
 
         # Write parameter rows (one transaction with function_registry row — §10)
-        for param_name, param_type in zip(param_names, param_types):
+        for param_name, param_type, p_has_default, p_default in zip(
+            param_names, param_types, param_has_default, param_default_values
+        ):
             param_id = new_id()
             param_chid = content_hash_id(
                 "parameter", param_name, str(function_id), param_type
             )
             conn.execute(
                 """
-                INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO parameter
+                    (param_id, content_hash_id, param_name, param_type, function_id,
+                     has_default, default_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                [param_id, param_chid, param_name, param_type, function_id],
+                [param_id, param_chid, param_name, param_type, function_id,
+                 p_has_default, p_default],
             )
 
         conn.execute("COMMIT")

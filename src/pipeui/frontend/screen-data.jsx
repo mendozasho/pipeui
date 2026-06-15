@@ -835,9 +835,15 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
         const passed = validationSteps.reduce((sum, s) => sum + (s.rows_passed ?? 0), 0);
         const failed = validationSteps.reduce((sum, s) => sum + (s.rows_failed ?? 0), 0);
         const total = passed + failed;
+        const firstVal = validationSteps[0] || {};
         addResultCard({
           run_id: crypto.randomUUID(),
           card_type: "validation",
+          // function_type drives the card variant per RunResult (#193); label and
+          // result_id come from the serialized RunResult.
+          function_type: "validation",
+          label: firstVal.label,
+          result_id: firstVal.result_id,
           trigger: "source",
           source_id: source.source_id,
           source_name: source.source_name,
@@ -853,9 +859,13 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
 
       if (transformSteps.length > 0) {
         const lastOk = [...transformSteps].reverse().find(s => s.status === "ok");
+        const firstXform = transformSteps[0] || {};
         addResultCard({
           run_id: crypto.randomUUID(),
           card_type: "transform",
+          function_type: "transform",
+          label: firstXform.label,
+          result_id: firstXform.result_id,
           trigger: "source",
           source_id: source.source_id,
           source_name: source.source_name,

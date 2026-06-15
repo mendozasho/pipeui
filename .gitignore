@@ -13,3 +13,5 @@ build/
 pipeui.config.json
 .claude/worktrees/
 uv.lock
+
+node_modules/

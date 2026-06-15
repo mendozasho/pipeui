@@ -245,6 +245,29 @@ class TestScanFunctions:
         assert names == {"a", "b"}
 
     @pytest.mark.integration
+    def test_scan_captures_param_defaults(self, db, tmp_path):
+        """#258: param defaults are captured at registration so the executor can fall back
+        to them and the frontend can tell required params from optional ones."""
+        write_py(tmp_path, "mod.py", """
+            def is_above_threshold(value: str, threshold: int = 5) -> bool:
+                return len(value) > threshold
+        """)
+        scan_functions(db, [str(tmp_path)])
+        fn_id = db.execute(
+            "SELECT function_id FROM function_registry WHERE function_name = 'is_above_threshold'"
+        ).fetchone()[0]
+        rows = db.execute(
+            "SELECT param_name, has_default, default_value FROM parameter WHERE function_id = ?",
+            [fn_id],
+        ).fetchall()
+        by_name = {r[0]: (r[1], r[2]) for r in rows}
+        # threshold has a default of 5 → captured; value has none → required
+        assert by_name["threshold"][0] is True
+        assert by_name["threshold"][1] == "5"
+        assert by_name["value"][0] is False
+        assert by_name["value"][1] is None
+
+    @pytest.mark.integration
     def test_scan_reregisters_preserves_surrogate_id(self, db, tmp_path):
         """Guarantee: Principle 2 — re-scanning same function preserves surrogate function_id."""
         py = write_py(tmp_path, "mod.py", """
@@ -765,7 +788,7 @@ class TestGetFunctionDetail:
             [uuid.uuid4(), set_id, fn_id, 0],
         )
         conn.execute(
-            "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
             [uuid.uuid4(), source_id, set_id, 0, "append"],
         )
 
@@ -809,7 +832,7 @@ class TestGetFunctionDetail:
                 [uuid.uuid4(), set_id, fn_id, 0],
             )
             conn.execute(
-                "INSERT INTO source_function_map VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                 [uuid.uuid4(), sid, set_id, 0, "append"],
             )
 

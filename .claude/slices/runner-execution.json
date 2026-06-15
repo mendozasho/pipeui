@@ -1,0 +1,299 @@
+{
+  "feature_slug": "runner-execution",
+  "slice_status": "frozen",
+  "source_prd_hash": "98d2cb055ef1c17c162f309ef21b5f204bb220d539dc15f584f9f9688ef79a33",
+  "decomposition": [
+    {
+      "slice_id": 1,
+      "slice_name": "RunResult + stateful executor foundation (single-column path, #193 card-type)",
+      "intent": "Introduce the RunResult object (base + validation-specialized subclass) with its UUID5 identity and normalized/cleaned label, refactor workflow/run.py from free functions into a stateful per-step executor that produces RunResults, and serialize/render them so the existing single-column (N=1) path works end-to-end and the mixed-set wrong card-type bug (#193) is fixed.",
+      "layers": ["business_logic", "api", "ui"],
+      "scope": "RunResult type + label normalization util; executor refactor of run.py producing RunResults for the N=1 path; API serialization of RunResults; Results screen renders cards from a list of RunResults (so N results render naturally later). Regression lock on the single-column validation and transform paths.",
+      "size": "L",
+      "acceptance": [
+        "A single-column validation run returns one RunResult carrying status and pass/fail counts; RunResult identity is a deterministic UUID5(function, argument bundle, source).",
+        "A single-column transform run returns one RunResult; the existing N=1 transform/validation behavior is unchanged (regression-locked at the workflow seam).",
+        "POST /pipelines/{source_id}/run and the validations run endpoint serialize RunResult(s) with a readable label and the UUID5 identity.",
+        "The Results screen renders a result card per RunResult from the serialized list, showing pass/fail counts and the label.",
+        "A mixed validation/transform set renders the correct card type per result (closes #193 card-type symptom), driven by RunResult function_type.",
+        "Label normalization is a pure function: strips leading underscores and odd tokens, never returns an empty label (unit-tested directly)."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        "src/pipeui/results.py",
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/api/validations.py",
+        "src/pipeui/frontend/screen-results.jsx",
+        "src/pipeui/frontend/screen-data.jsx",
+        "tests/test_run_workflow.py",
+        "tests/test_api_pipelines_run.py",
+        "tests/test_api_validations.py",
+        "tests/test_api_pipelines.py",
+        "tests/test_results.py",
+        "src/pipeui/frontend/screen-results.test.jsx",
+        "src/pipeui/frontend/test-setup.js",
+        ".claude/runs/runner-execution/1.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/workflow/run.py", "shared_with": [2, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/api/pipelines.py", "shared_with": [3, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/api/validations.py", "shared_with": [3, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-results.jsx", "shared_with": [5, 8], "access": "modifies" },
+        { "surface": "src/pipeui/results.py", "shared_with": [3, 4, 5], "access": "creates" },
+        { "surface": "tests/test_run_workflow.py", "shared_with": [3, 4], "access": "modifies" },
+        { "surface": "tests/test_api_pipelines.py", "shared_with": [3, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-results.test.jsx", "shared_with": [5, 8], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/test-setup.js", "shared_with": [2, 3, 4, 5], "access": "reads" }
+      ]
+    },
+    {
+      "slice_id": 2,
+      "slice_name": "Column order: alias_map.position + add-order + minimal reorder control",
+      "intent": "Persist user-placed column order so argument bundles can align by position: add a position column to alias_map, write add-order on attach, read ORDER BY parameter_id, position in the runner and get_pipeline, support reorder via the step PATCH, and ship a minimal conventions-following reorder control in the mapping modal.",
+      "layers": ["data", "business_logic", "api", "ui"],
+      "scope": "alias_map.position DDL; attach writes positions in add-order; patch_pipeline_step rewrites positions; run.py/_fetch_steps and get_pipeline order by position (replacing the alphabetical column_name sort); a minimal move-up/down or numbered-order control in the mapping modal in screen-builder.jsx.",
+      "size": "M",
+      "acceptance": [
+        "alias_map has a position INTEGER column; the schema builder creates it.",
+        "Attaching a function writes alias_map.position in the order the columns were provided (add-order default).",
+        "get_pipeline and the runner read a parameter's bound columns ORDER BY position, not alphabetically by column_name.",
+        "The step PATCH endpoint rewrites a parameter's column positions and the new order is read back.",
+        "The mapping modal shows a minimal reorder control that changes column order and persists it via the PATCH (frontend test on the rendered control + call)."
+      ],
+      "depends_on": [1],
+      "touched_files": [
+        "src/pipeui/schema/queries.py",
+        "src/pipeui/workflow/attach.py",
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_schema.py",
+        "tests/test_attach.py",
+        "tests/test_api_pipelines.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        "src/pipeui/frontend/test-setup.js",
+        ".claude/runs/runner-execution/2.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/workflow/run.py", "shared_with": [1, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/workflow/attach.py", "shared_with": [3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/schema/queries.py", "shared_with": [4], "access": "modifies" },
+        { "surface": "src/pipeui/api/pipelines.py", "shared_with": [1, 3, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.jsx", "shared_with": [3, 4, 7], "access": "modifies" },
+        { "surface": "tests/test_attach.py", "shared_with": [3, 4], "access": "modifies" },
+        { "surface": "tests/test_schema.py", "shared_with": [4], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.test.jsx", "shared_with": [3, 4, 7], "access": "modifies" }
+      ]
+    },
+    {
+      "slice_id": 3,
+      "slice_name": "Multi-select validation execution (argument bundles)",
+      "intent": "Execute multi_select_eligible validation functions over argument bundles: a pure bundle-pairing function (positional zip, static-param broadcast, equal-length rule), the executor loop producing one RunResult per bundle, scalar-run normalization, the equal-length guard enforced backend and frontend, and multi-column binding in the mapping modal — so a validation function bound to N columns runs N times and surfaces N labeled pass/fail cards.",
+      "layers": ["business_logic", "api", "ui"],
+      "scope": "New pure pairing module (workflow/bundles.py); run.py executor loops bundles for validation; scalar-run normalization to a vector; equal-length-among-varying guard in attach (backend) and the mapping modal (frontend); multi-column binding UI in screen-builder.jsx; per-bundle RunResults flow to the Results cards from slice 1.",
+      "size": "L",
+      "acceptance": [
+        "Bundle pairing is a pure function (no DB/worker): zip-by-position yields N ordered bundles; a length-1 static param broadcasts into every bundle; matrix 3,3,1 -> 3 bundles, single-param N -> N bundles, all-static -> 1 bundle (unit-tested directly).",
+        "Unequal lengths among varying params (e.g. 3,2) raise a validation error from the pure function and are rejected at attach with a structured failure (not a 500); the frontend mapping modal blocks the mismatched attach.",
+        "A validation function bound to N columns produces N RunResults, one per bundle, each labeled by its varying column(s).",
+        "A scalar-shaped validation function bound to a column runs once per record and yields a normalized boolean vector (scalar run).",
+        "POST run returns the per-bundle RunResults and the Results screen shows N labeled pass/fail cards.",
+        "The mapping modal lets a user bind multiple columns to one parameter following existing conventions."
+      ],
+      "depends_on": [1, 2],
+      "touched_files": [
+        "src/pipeui/workflow/bundles.py",
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/workflow/attach.py",
+        "src/pipeui/results.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/api/validations.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_bundle_pairing.py",
+        "tests/test_run_workflow.py",
+        "tests/test_attach.py",
+        "tests/test_api_pipelines_run.py",
+        "tests/test_api_validations.py",
+        "tests/test_api_pipelines.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        "src/pipeui/frontend/test-setup.js",
+        ".claude/runs/runner-execution/3.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/workflow/run.py", "shared_with": [1, 2, 4], "access": "modifies" },
+        { "surface": "src/pipeui/workflow/attach.py", "shared_with": [2, 4], "access": "modifies" },
+        { "surface": "src/pipeui/results.py", "shared_with": [1, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/workflow/bundles.py", "shared_with": [4], "access": "creates" },
+        { "surface": "src/pipeui/api/pipelines.py", "shared_with": [1, 2, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/api/validations.py", "shared_with": [1, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.jsx", "shared_with": [2, 4, 7], "access": "modifies" },
+        { "surface": "tests/test_run_workflow.py", "shared_with": [1, 4], "access": "modifies" },
+        { "surface": "tests/test_attach.py", "shared_with": [2, 4], "access": "modifies" },
+        { "surface": "tests/test_api_pipelines.py", "shared_with": [1, 2, 4, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.test.jsx", "shared_with": [2, 4, 7], "access": "modifies" }
+      ]
+    },
+    {
+      "slice_id": 4,
+      "slice_name": "Multi-select transform execution + output_mode + output-target map",
+      "intent": "Extend the bundle executor to transforms: output_mode append (cleaned auto-label or user-provided name) and replace (overwrite an explicit, user-selected ordered set of target columns paired with bundles) via a new output-target map, write the transformed report, handle the pd.DataFrame whole-table edge, and surface replace-target/append-name selection in the mapping modal.",
+      "layers": ["data", "business_logic", "api", "ui"],
+      "scope": "New output-target mapping (DDL in schema/queries.py; writes in attach.py); run.py transform path loops bundles, applies output_mode into the transformed report; append naming (cleaned label/user name); replace into ordered target columns (count must equal bundle count); pd.DataFrame returns whole table; replace-target + append-name UI in screen-builder.jsx.",
+      "size": "L",
+      "acceptance": [
+        "A transform in append mode bound to N columns adds N new columns to the transformed report, each named by a cleaned auto-label or the user-provided name; no collisions.",
+        "A transform in replace mode overwrites the N user-selected ordered target columns (bundle i -> target i); the target count must equal the bundle count or the attach is rejected.",
+        "The output-target map persists the ordered target columns for a replace step and the runner reads them in order.",
+        "A pd.DataFrame transform receives and returns the whole table (one run), regardless of output_mode.",
+        "The transformed report reflects the applied transform; each transform run also yields a RunResult.",
+        "The mapping modal lets the user choose replace-target columns and an optional append name following existing conventions."
+      ],
+      "depends_on": [3],
+      "touched_files": [
+        "src/pipeui/schema/queries.py",
+        "src/pipeui/workflow/attach.py",
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/workflow/bundles.py",
+        "src/pipeui/results.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_schema.py",
+        "tests/test_run_workflow.py",
+        "tests/test_attach.py",
+        "tests/test_api_pipelines.py",
+        "tests/test_staging.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        ".claude/runs/runner-execution/4.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/workflow/run.py", "shared_with": [1, 2, 3], "access": "modifies" },
+        { "surface": "src/pipeui/workflow/attach.py", "shared_with": [2, 3], "access": "modifies" },
+        { "surface": "src/pipeui/schema/queries.py", "shared_with": [2], "access": "modifies" },
+        { "surface": "src/pipeui/workflow/bundles.py", "shared_with": [3], "access": "modifies" },
+        { "surface": "src/pipeui/results.py", "shared_with": [1, 3, 5], "access": "modifies" },
+        { "surface": "src/pipeui/api/pipelines.py", "shared_with": [1, 2, 3, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.jsx", "shared_with": [2, 3, 7], "access": "modifies" },
+        { "surface": "tests/test_schema.py", "shared_with": [2], "access": "modifies" },
+        { "surface": "tests/test_run_workflow.py", "shared_with": [1, 3], "access": "modifies" },
+        { "surface": "tests/test_attach.py", "shared_with": [2, 3], "access": "modifies" },
+        { "surface": "tests/test_api_pipelines.py", "shared_with": [1, 2, 3, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.test.jsx", "shared_with": [2, 3, 7], "access": "modifies" }
+      ]
+    },
+    {
+      "slice_id": 5,
+      "slice_name": "Results-screen consumption: exports (results report + transformed report) + minimal drawer",
+      "intent": "Surface RunResults for consumption on the Results screen: build the transposed results report (one row per RunResult, pass/fail/metadata, including passing runs, normalized labels) and the transformed report export, and add a minimal results drawer reusing an existing component that shows a RunResult's metadata when a card is opened. Resolves the #193 staging-export-failure symptom.",
+      "layers": ["business_logic", "api", "ui"],
+      "scope": "New export module (workflow/export.py) building the transposed results report and the transformed report; export endpoints in api/pipelines.py / api/validations.py; export buttons + a minimal drawer (reusing the existing detail-drawer component from ui.jsx) wired on the Results screen.",
+      "size": "M",
+      "acceptance": [
+        "Exporting a validation run produces a transposed results report: one row per RunResult keyed by its label, with pass/fail (and metadata) columns, including runs that fully passed.",
+        "The results report has two entry points: a Functions-page validation run (each attached source ran) and validations tied to a source (each validation function ran).",
+        "Exporting a source's transformed report produces its transformed data table after all assigned transforms completed.",
+        "All export labels are normalized (no leading underscores or odd tokens) so the file is well-formed.",
+        "The staging-export path no longer fails for a mixed validation/transform set (closes the #193 export symptom).",
+        "Opening a result card opens a minimal drawer that renders the RunResult's metadata, reusing the existing detail-drawer component rather than a new one."
+      ],
+      "depends_on": [1, 3, 4],
+      "touched_files": [
+        "src/pipeui/workflow/export.py",
+        "src/pipeui/results.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/api/validations.py",
+        "src/pipeui/frontend/screen-results.jsx",
+        "src/pipeui/frontend/ui.jsx",
+        "tests/test_api_pipelines.py",
+        "tests/test_api_staging.py",
+        "tests/test_api_validations.py",
+        "src/pipeui/frontend/screen-results.test.jsx",
+        "src/pipeui/frontend/ui.test.jsx",
+        "src/pipeui/frontend/test-setup.js",
+        ".claude/runs/runner-execution/5.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/results.py", "shared_with": [1, 3, 4], "access": "reads" },
+        { "surface": "src/pipeui/api/pipelines.py", "shared_with": [1, 2, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/api/validations.py", "shared_with": [1, 3], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-results.jsx", "shared_with": [1, 8], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.jsx", "shared_with": [7, 8], "access": "modifies" },
+        { "surface": "tests/test_api_pipelines.py", "shared_with": [1, 2, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-results.test.jsx", "shared_with": [1, 8], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.test.jsx", "shared_with": [7, 8], "access": "modifies" }
+      ]
+    },
+    {
+      "slice_id": 6,
+      "slice_name": "Docs reconciliation (design.md + CLAUDE_REFERENCE §12)",
+      "intent": "Reconcile the design docs with the frozen execution model: state multi_select_eligible as a granularity-derived label decoupled from current alias_map presence, document the multi-param argument-bundle model with static-param broadcast and the equal-length rule, remove pd.DataFrame from the eligible enumeration (annotate per §12), and introduce the canonical terms scalar run / argument bundle / static param.",
+      "layers": ["docs"],
+      "scope": "Edit .claude/design.md and CLAUDE_REFERENCE §12 so they no longer contradict the frozen ledger/CONTEXT.md and ADR-0001.",
+      "size": "S",
+      "acceptance": [
+        "design.md no longer lists pd.DataFrame as multi_select_eligible (it is annotated 'not eligible — full table always passed, see §12').",
+        "design.md documents the multi-param argument-bundle positional-pairing model with static-param broadcast and the equal-length-among-varying rule, and uses the canonical terms scalar run / argument bundle / static param.",
+        "CLAUDE_REFERENCE §12 is consistent with design.md and CONTEXT.md on multi-select and pd.DataFrame (no remaining contradiction)."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        ".claude/design.md",
+        ".claude/CLAUDE_REFERENCE.md",
+        ".claude/runs/runner-execution/6.md"
+      ],
+      "shared_surfaces": []
+    },
+    {
+      "slice_id": 7,
+      "slice_name": "[design-gated] Polished drag-reorder pane",
+      "intent": "Replace the minimal reorder control with the polished drag-reorder pane for argument-bundle column order, per the attached visual-design brief. Blocked-on-design; enhances slice 2 and never blocks it.",
+      "layers": ["ui"],
+      "scope": "Polished drag-and-drop reorder pane in the Builder, layered on the minimal reorder control (slice 2) and the position backend; requires a design brief before build.",
+      "size": "M",
+      "acceptance": [
+        "The Builder exposes a drag-reorder pane that sets alias_map.position via the existing PATCH and matches the attached design brief.",
+        "Reordering via the pane changes the bundle execution order end-to-end (frontend test on the drag interaction + PATCH call)."
+      ],
+      "depends_on": [2, 4, 5],
+      "touched_files": [
+        "src/pipeui/frontend/screen-builder.jsx",
+        "src/pipeui/frontend/ui.jsx",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        "src/pipeui/frontend/ui.test.jsx",
+        ".claude/runs/runner-execution/7.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/frontend/screen-builder.jsx", "shared_with": [2, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.jsx", "shared_with": [5, 8], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-builder.test.jsx", "shared_with": [2, 3, 4], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.test.jsx", "shared_with": [5, 8], "access": "modifies" }
+      ]
+    },
+    {
+      "slice_id": 8,
+      "slice_name": "[design-gated] Rich results drawer",
+      "intent": "Replace the minimal results drawer with the full rich drawer (full arguments, sources, the check, failing rows), per the attached visual-design brief. Blocked-on-design; enhances the minimal drawer in slice 5 and never blocks it.",
+      "layers": ["ui"],
+      "scope": "Polished rich results drawer on the Results screen, layered on the minimal drawer (slice 5) and the RunResult metadata; requires a design brief before build.",
+      "size": "M",
+      "acceptance": [
+        "The result drawer renders the full RunResult detail (arguments, sources, the check, failing rows) matching the attached design brief.",
+        "The rich drawer consumes the same RunResult data the minimal drawer used (frontend test on the expanded content)."
+      ],
+      "depends_on": [5, 7],
+      "touched_files": [
+        "src/pipeui/frontend/screen-results.jsx",
+        "src/pipeui/frontend/ui.jsx",
+        "src/pipeui/frontend/screen-results.test.jsx",
+        "src/pipeui/frontend/ui.test.jsx",
+        ".claude/runs/runner-execution/8.md"
+      ],
+      "shared_surfaces": [
+        { "surface": "src/pipeui/frontend/screen-results.jsx", "shared_with": [1, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.jsx", "shared_with": [5, 7], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/screen-results.test.jsx", "shared_with": [1, 5], "access": "modifies" },
+        { "surface": "src/pipeui/frontend/ui.test.jsx", "shared_with": [5, 7], "access": "modifies" }
+      ]
+    }
+  ]
+}

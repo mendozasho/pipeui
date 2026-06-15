@@ -1,0 +1,55 @@
+{
+  "feature_slug": "render-builtin-steps",
+  "discovery_status": "frozen",
+  "stack_context": "mixed",
+  "intent": "Placed built-in pipeline steps (today only the join built-in) render as distinct, removable, and editable cards on the Report Builder canvas, appearing immediately after the #152 join configuration modal saves — closing the visual half of #152's AC7 that the modal slice deliberately left out.",
+  "definition_of_done": "GET /pipelines/{source_id} (get_pipeline, extended) returns built-in steps with a step_type discriminator interleaved with function steps in position order, each carrying builtin_type and builtin_config; function steps also gain step_type=\"function\" and keep their rich functions[] payload. StepCard renders a distinct built-in variant reusing PaletteBuiltinCard's accent edge + 'built-in' tag, showing a config summary (e.g. 'Join · <right source> · inner · N keys'). A placed built-in can be removed via DELETE /sources/{source_id}/attach-builtin/{step_id} and edited by re-opening the #152 join modal pre-filled from builtin_config, saving via PATCH /sources/{source_id}/attach-builtin/{step_id}. After submitJoinStep succeeds the card appears with no manual reload (existing loadPipeline re-fetch). pytest covers the extended endpoint shape; vitest covers the built-in card render, remove, and edit-open.",
+  "mvp_scope": "Extend get_pipeline to emit built-in steps (reuse get_builtin_steps) tagged with step_type; add a built-in branch to StepCard with a config summary, remove, and edit; branch PipelineCanvas keying/remove/edit by step_type; wire the join modal for edit mode (POST for new, PATCH for edit, pre-fill from builtin_config). Join is the only exercised built-in; the card is generic over builtin_type.",
+  "explicitly_out_of_scope": [
+    "Drag-reordering built-in cards on the canvas (built-in cards are non-draggable this slice; function-step drag across a built-in keeps its existing PATCH-by-sfm_id path)",
+    "Dedicated filter/pivot step cards — the built-in card stays generic over builtin_type; only join is wired end-to-end",
+    "OrderBadge/Checkbox StepCard interaction redesign (builder-step-cards-redesign brief) — already shipped in ui.jsx",
+    "Consolidating onto the unified GET /sources/{source_id}/pipeline endpoint (extend-get_pipeline was chosen as the minimal change)",
+    "Fixing position ties between source_function_map and source_builtin_map (pre-existing edge)"
+  ],
+  "affected_components": [
+    "src/pipeui/workflow/attach.py — get_pipeline: append built-in steps via get_builtin_steps, add step_type to all steps, order by position",
+    "src/pipeui/api/pipelines.py — GET /pipelines/{source_id} passes through the extended shape (likely no change)",
+    "src/pipeui/frontend/screen-builder.jsx — StepCard built-in variant; PipelineCanvas key/remove/edit branching; SidePanel + submitJoinStep POST-vs-PATCH and edit-mode modal wiring",
+    "the #152 join source picker modal component — accept an initial config + edit mode",
+    "tests/ — pytest for endpoint shape; vitest spec for screen-builder built-in card"
+  ],
+  "dependencies": [
+    "#152 join source picker modal (shipped, PR #208) — provides the modal reused for create and edit",
+    "#117 built-in steps backend (shipped) — source_builtin_map, attach/detach/patch, get_unified_pipeline, get_builtin_steps"
+  ],
+  "terms_resolved": ["built-in step", "function step", "placed step", "unified pipeline", "step_type"],
+  "assumptions": [
+    "get_pipeline gains step_type on function steps too; the frontend treats a missing step_type as a function step for backward safety",
+    "Edit reuses the exact #152 join modal; builtin_config round-trips back into the modal's state for pre-fill",
+    "Built-in steps render interleaved by position but are not draggable in this slice"
+  ],
+  "resolved_decisions": [
+    {
+      "question": "Which endpoint feeds built-in steps to the canvas — extend GET /pipelines/{id} (get_pipeline) or switch the canvas to the unified GET /sources/{id}/pipeline?",
+      "resolution": "Extend get_pipeline (the minimal/surgical route the user chose). get_pipeline's function steps carry the rich nested functions[] that StepCard hard-depends on; the unified endpoint returns thin function steps and switching would regress the function cards unless first enriched. Appending built-in steps (via get_builtin_steps) plus a step_type field is additive and satisfies AC2. The unified endpoint stays as-is, unused by the canvas."
+    },
+    {
+      "question": "Is editing a placed built-in step (re-open modal / PATCH config) in scope, given the ACs require only remove?",
+      "resolution": "In scope. The user opted to include edit: the built-in card's edit affordance re-opens the #152 join modal pre-filled from builtin_config and saves via PATCH /sources/{source_id}/attach-builtin/{step_id}. This extends the modal (currently POST-only) to a POST-new / PATCH-edit branch."
+    },
+    {
+      "question": "Does #209 depend on the builder-step-cards-redesign design brief the design README maps to it?",
+      "resolution": "No. That brief is the OrderBadge + Checkbox interaction redesign, already shipped in ui.jsx and consumed by StepCard. #209's built-in card derives its distinct look from the existing PaletteBuiltinCard treatment (accent edge + 'built-in' mono tag), per #209's own body. #209 has no outstanding design dependency; the README's ticket mapping is loose."
+    },
+    {
+      "question": "How does the step appear immediately after the join modal saves?",
+      "resolution": "No optimistic insert needed — submitJoinStep already calls loadPipeline() on success, which re-fetches the canvas endpoint. Once get_pipeline returns built-in steps, the card appears on that re-fetch automatically (AC1)."
+    },
+    {
+      "question": "Are filter and pivot in scope given the title says 'join/filter/pivot'?",
+      "resolution": "Only join is wired end-to-end (modal + attach + execute). The built-in StepCard variant is generic over builtin_type so pivot/filter render if ever present, but only join is built, exercised, and tested in this slice."
+    }
+  ],
+  "open_risks_to_resolve": []
+}
