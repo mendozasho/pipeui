@@ -51,36 +51,33 @@ function RegisterModal({ file, onConfirm, onCancel }) {
   const [columns, setColumns] = useState([]);
   const [ingestionMethod, setIngestionMethod] = useState("upsert");
 
-  // Parse column headers from the uploaded file client-side
+  // Fetch column headers from the backend, which reads only the first row of the
+  // file (openpyxl read-only / a single csv row). This avoids parsing a large
+  // workbook on the browser's main thread and works for files too big for the JS
+  // heap. On any failure we log and leave `columns` empty, which falls back to the
+  // plain text input below — the error is surfaced, not silently swallowed.
   React.useEffect(() => {
     if (!file) return;
-    const ext = file.name.split(".").pop().toLowerCase();
-    if (ext === "csv" || ext === "tsv") {
-      const reader = new FileReader();
-      reader.onload = e => {
-        try {
-          const sep = ext === "tsv" ? "\t" : ",";
-          const firstLine = e.target.result.split("\n")[0] || "";
-          const cols = firstLine.split(sep).map(c => c.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
-          setColumns(cols);
-          if (cols.length > 0) setPrimaryKey(cols[0]);
-        } catch { /* fall back to text input */ }
-      };
-      reader.readAsText(file);
-    } else if (ext === "xlsx" || ext === "xls") {
-      const reader = new FileReader();
-      reader.onload = e => {
-        try {
-          const wb = XLSX.read(e.target.result, { type: "array" });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-          const cols = (rows[0] || []).map(String).filter(Boolean);
-          setColumns(cols);
-          if (cols.length > 0) setPrimaryKey(cols[0]);
-        } catch { /* fall back to text input */ }
-      };
-      reader.readAsArrayBuffer(file);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/sources/peek-columns", { method: "POST", body: fd });
+        if (!res.ok) {
+          console.error("peek-columns failed:", res.status);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        const cols = (data.columns || []).filter(Boolean);
+        setColumns(cols);
+        if (cols.length > 0) setPrimaryKey(cols[0]);
+      } catch (err) {
+        console.error("peek-columns error:", err);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [file]);
 
   return (
@@ -1027,4 +1024,4 @@ window.__ScreenData__ = ScreenData;
 
 // Named exports for the dev-time vitest harness only; the app consumes the screen
 // via the window.__ScreenData__ global above.
-export { ScreenData, MigrationConfirmModal, ColumnTypeRow };
+export { ScreenData, MigrationConfirmModal, ColumnTypeRow, RegisterModal };

@@ -8,8 +8,8 @@
 // Harness: vitest + jsdom (see vitest.config.js, test-setup.js). Dev-time only —
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { MigrationConfirmModal } from "./screen-data.jsx";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { MigrationConfirmModal, RegisterModal } from "./screen-data.jsx";
 
 afterEach(() => {
   cleanup();
@@ -61,5 +61,47 @@ describe("MigrationConfirmModal", () => {
     fireEvent.click(screen.getByText("Migrate anyway"));
     // Default scope is "this_source".
     expect(onConfirm).toHaveBeenCalledWith("this_source");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RegisterModal — column headers come from the backend peek-columns endpoint,
+// not from client-side workbook parsing.
+// ---------------------------------------------------------------------------
+describe("RegisterModal", () => {
+  it("populates the primary-key dropdown from /sources/peek-columns", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ columns: ["id", "name", "value"] }) })
+    );
+    render(
+      React.createElement(RegisterModal, {
+        file: { name: "data.xlsx" },
+        onConfirm: () => {},
+        onCancel: () => {},
+      })
+    );
+    await waitFor(() => expect(screen.getByText("value")).toBeTruthy());
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/sources/peek-columns",
+      expect.objectContaining({ method: "POST" })
+    );
+    // First column becomes the default primary key (PK select is the first combobox).
+    expect(screen.getAllByRole("combobox")[0].value).toBe("id");
+  });
+
+  it("falls back to a text input and logs (not silent) when peek-columns fails", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn(() => Promise.resolve({ ok: false, status: 500 }));
+    render(
+      React.createElement(RegisterModal, {
+        file: { name: "data.xlsx" },
+        onConfirm: () => {},
+        onCancel: () => {},
+      })
+    );
+    await waitFor(() => expect(console.error).toHaveBeenCalled());
+    // No detected columns → the primary-key field is a plain text input.
+    expect(screen.getByPlaceholderText("e.g. id")).toBeTruthy();
+    spy.mockRestore();
   });
 });

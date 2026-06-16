@@ -34,6 +34,35 @@ def find_source_by_pattern(
     return None
 
 
+def peek_header_columns(file_path: str) -> list[str]:
+    """Return only the header (first row) column names from a CSV/TSV or XLSX file.
+
+    Reads just the first row — for XLSX via openpyxl's read-only iterator, for
+    delimited files via a single ``csv.reader`` row — so a file with hundreds of
+    thousands of rows never has to be materialized to list its columns. Blank /
+    whitespace-only header cells are dropped. Returns ``[]`` for an empty file or an
+    unsupported extension; the caller treats ``[]`` as "couldn't detect" and falls
+    back to a free-text column input.
+    """
+    ext = Path(file_path).suffix.lower()
+    if ext == ".xlsx":
+        import openpyxl  # lazy import — only needed on the upload path
+        wb = openpyxl.load_workbook(file_path, read_only=True)
+        try:
+            ws = wb[wb.sheetnames[0]]
+            header = next(ws.iter_rows(values_only=True), ())
+        finally:
+            wb.close()  # read-only workbooks must be closed to release the file
+        return [str(c).strip() for c in header if c is not None and str(c).strip()]
+    if ext in (".csv", ".tsv"):
+        import csv
+        delimiter = "\t" if ext == ".tsv" else ","
+        with open(file_path, newline="", encoding="utf-8-sig") as fh:
+            row = next(csv.reader(fh, delimiter=delimiter), [])
+        return [c.strip().strip("\"'") for c in row if c and c.strip()]
+    return []
+
+
 def create_source(
     conn: duckdb.DuckDBPyConnection,
     file_path: str,
