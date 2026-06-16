@@ -14,4 +14,10 @@ pipeui.config.json
 .claude/worktrees/
 uv.lock
 
-node_modules/
+# node deps — no trailing slash so a stray `node_modules` symlink is ignored too
+node_modules
+
+# lock files — not committed in this project
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
