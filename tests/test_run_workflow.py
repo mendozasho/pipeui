@@ -1558,6 +1558,39 @@ def test_resolve_frame_transformed_materializes_if_absent(db, tmp_path):
 
 
 @pytest.mark.integration
+def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path):
+    """MINOR-2 (hostile-audit): a source with NO transform steps has no transformed
+    output; resolve_frame(transformed) falls back to a staged copy of the RAW instance
+    table so transformed resolution still yields a frame. DECIDED behavior (keep the
+    fallback, not an error) — a source with nothing to transform has its raw data as
+    its 'transformed output'. See resolve._materialize."""
+    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.sql_user_table import instance_table_name
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    # A validations-only pipeline: it has a step, but nothing that produces transformed output.
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    _seed_validation_step(db, source_id, col_id, "gt0", val_path, position=0)
+    assert _list_staging_tables(db, source_id) == []
+
+    frame, ref = resolve_frame(db, source_id, "transformed")
+
+    raw = db.execute(f'SELECT * FROM "{instance_table_name(source_id)}"').df()
+    # Fallback: raw content returned as the transformed frame (no transform columns added).
+    assert frame.sort_values("val")["val"].tolist() == raw.sort_values("val")["val"].tolist()
+    assert frame.sort_values("val")["val"].tolist() == [10, 20, 30]
+    # A staged copy was created so the reference resolves to a real table.
+    assert len(_list_staging_tables(db, source_id)) == 1
+    assert ref.mode == "transformed"
+
+
+@pytest.mark.integration
 def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
     """AC4: a transformed reference forming a cycle (A->C->A) raises an error naming
     the sources in the cycle and does not loop."""
@@ -1907,13 +1940,21 @@ def test_set_containing_pipeline_output_unchanged_golden(db, tmp_path):
     _seed_mixed_set(db, source_id, col_id, val_path, tfm_path)
 
     steps = run_pipeline(db, source_id, "all")["steps"]
+    # Keyed by name ON PURPOSE: per-member emission ORDER may interleave (a set behaves
+    # as if its members were placed individually; #13 reconciliation note), so a mixed
+    # set is no longer grouped transforms-then-validations. This asserts the real
+    # invariant — each result's CONTENT and the transform/validation SPLIT into distinct
+    # result types — NOT list order. Do not re-add an order assertion.
     by_name = {e["function_name"]: e for e in steps}
     assert set(by_name) == {"gt0", "dbl"}
 
+    # The transform/validation split: the transform member yields a transform result
+    # (+ row count), the validation member a validation result (+ pass/fail) — distinct.
     tfm = by_name["dbl"]
     assert tfm["function_type"] == "transform"
     assert tfm["status"] == "ok"
     assert tfm["rows_affected"] == 3
+    assert tfm["rows_passed"] is None and tfm["rows_failed"] is None
 
     val = by_name["gt0"]
     assert val["function_type"] == "validation"

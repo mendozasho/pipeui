@@ -182,8 +182,11 @@ def _materialize(
 
     latest = _latest_staging(conn, source_id)
     if latest is None:
-        # No transform steps produced output; fall back to a staged copy of the
-        # instance table so transformed resolution still yields a frame.
+        # No transform steps produced output (e.g. a validations-only pipeline);
+        # fall back to a staged copy of the instance table so transformed resolution
+        # still yields a frame. DECIDED behavior (keep, not error): a source with
+        # nothing to transform has its raw data as its "transformed output". Tested:
+        # test_resolve_frame_transformed_no_transforms_falls_back_to_raw.
         import time
 
         tname = instance_table_name(source_id)

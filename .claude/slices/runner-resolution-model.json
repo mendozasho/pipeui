@@ -108,9 +108,9 @@
       "scope": "StepContext.from_builtin (source_builtin_map) / from_function / from_set (source_function_map); a StepExecutor per step type registered in a step-type registry; run_pipeline dispatches through the registry. Behavior-preserving for existing function and built-in steps.",
       "size": "L",
       "acceptance": [
-        "Function and built-in steps dispatched through the StepExecutor registry produce results identical to pre-refactor output on a mixed pipeline.",
+        "Function and built-in steps dispatched through the StepExecutor registry produce per-result content identical to pre-refactor (each entry's function_type, status, row counts, identity), with transforms and validations preserved as distinct RunResult/ValidationRunResult types; per-member emission ORDER may interleave (a mixed set is no longer grouped transforms-then-validations \u2014 it behaves as if its members were placed individually, per slice 4).",
         "StepContext.from_builtin constructs a context from a source_builtin_map row; from_function / from_set construct from source_function_map rows, carrying the properties previously passed as step-dict keys.",
-        "The inline if/elif step dispatch is removed from run_pipeline and its output is unchanged on a mixed function+builtin pipeline.",
+        "The inline if/elif step dispatch is removed from run_pipeline; each result entry's content is unchanged on a mixed function+builtin pipeline (per-member ordering may interleave; the transform/validation split into distinct result types is preserved).",
         "Each superseded dispatch path removed in this slice is covered by a behavior-preserving test asserting equal output before and after."
       ],
       "depends_on": [
@@ -157,7 +157,8 @@
           ],
           "access": "modifies"
         }
-      ]
+      ],
+      "reconciliation_note": "2026-06-16 (post-to-code, hostile-audit kickback): AC#0/#2 originally said 'results identical to pre-refactor output', which implied step ORDER preservation. The refactor interleaves results by member (slice-4 'as if individual'), so a mixed set's emission order changed from grouped transforms-then-validations. User decision: interleaving is intended; the real invariant is per-result content identical + transform/validation split preserved (resolved via RunResult vs ValidationRunResult, not a new object). AC reworded to match; an order-blindness-is-intentional marker added to the golden test. Conflict between slice-3 (preserve) and slice-4 (individual) resolved in favor of slice 4."
     },
     {
       "slice_id": 4,

@@ -117,11 +117,11 @@ unchanged.
   computed with the same identity helper as `RunResult` (over source + mode +
   staging timestamp), and tied into the `RunResult` scheme so a consumed
   transformed output is a first-class, traceable result like any run.
-- **Join honors the toggle.** `_execute_join` / `_validate_join_config` read the
-  right-hand source through `resolve_frame` per `use_transformed` instead of
-  hardcoding the raw instance table. The right-column-fetch endpoint that the
-  join modal already calls with the transformed flag returns the transformed
-  column set.
+- **Join honors the toggle.** `_execute_join` reads the right-hand source through
+  `resolve_frame` per `use_transformed` instead of hardcoding the raw instance
+  table (`_validate_join_config` validates config shape only — it does not resolve
+  frames). The right-column-fetch endpoint that the join modal already calls with
+  the transformed flag returns the transformed column set.
 - **Migration + bounded removal.** Migrate the workflows that route through
   `run_pipeline` (run / validation / results endpoints and staging) onto the
   model. Remove only execution code this refactor directly supersedes, each
@@ -141,22 +141,28 @@ API response shapes, DB snapshot equality — never internal call sequences. The
 run against a real ephemeral DuckDB sandbox per §13 (fresh DB per test; no
 test-level transaction wrapper, since the runner owns transactions). Because this
 is largely a refactor, the dominant pattern is **behavior preservation**: migrated
-paths and any removed code must yield results identical to today, proven by tests,
-alongside the net-new guarantees. All data-shaped guarantees are exercised with
+paths and any removed code must yield each result's content identical to today
+(per-entry type / status / row counts / identity), with transforms and validations
+preserved as their distinct `RunResult` / `ValidationRunResult` types — per-member
+emission order may interleave (a set behaves as if its members were placed
+individually, so a mixed set is no longer grouped transforms-then-validations).
+Proven by tests, alongside the net-new guarantees. All data-shaped guarantees are exercised with
 messy/null real-world data, not only clean fixtures.
 
 - **Runner / executor seam — `test_run_workflow.py` (integration, highest seam).**
   The core guarantees: `function step` and `built-in step` dispatched through the
-  `StepExecutor` registry produce the same results as before; `StepContext`
-  factory constructors build correctly from the existing map tables; the
-  function-set adapter yields results identical to the same functions placed
-  individually; `resolve_frame` returns the raw instance table for raw and the
+  `StepExecutor` registry produce per-result content identical to before (type,
+  status, row counts, identity) with the transform/validation split preserved —
+  per-member order may interleave; `StepContext` factory constructors build
+  correctly from the existing map tables; the function-set adapter yields results
+  identical to the same functions placed individually; `resolve_frame` returns the raw instance table for raw and the
   transformed output for transformed; materialize-if-absent runs a never-run
   source on demand; a transformed-join cycle errors with the sources named; the
   transformed-output `result_id` is deterministic and surfaced through `RunResult`.
-- **Built-in executor seam — `test_builtins.py` (integration).** `_execute_join` /
-  `_validate_join_config` honor `use_transformed`: raw selects the instance table,
-  transformed selects the resolved frame; verified with null-containing,
+- **Built-in executor seam — `test_builtins.py` (integration).** `_execute_join`
+  honors `use_transformed`: raw selects the instance table, transformed selects the
+  resolved frame (`_validate_join_config` validates config shape only); verified
+  with null-containing,
   type-messy join data.
 - **API seam — `test_api_pipelines_run.py`, `test_api_staging.py`,
   `test_api_validations.py`, `test_api_run_set.py`, `test_api_run_all.py`
