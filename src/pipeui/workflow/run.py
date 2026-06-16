@@ -44,8 +44,11 @@ import pandas as pd
 
 from pipeui.results import RunResult, ValidationRunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
-from pipeui.workflow.builtins import execute_builtin_step, get_builtin_steps
+from pipeui.workflow.builtins import get_builtin_steps
 from pipeui.workflow.bundles import pair_bundles
+from pipeui.workflow import executors as _executors
+from pipeui.workflow.context import StepContext
+from pipeui.workflow.executors import StepRunEnv
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.worker import call_function
 
@@ -1072,74 +1075,28 @@ def run_pipeline(
     ts = int(time.time())
     step_results = []
 
+    # Uniform dispatch (runner-resolution-model slice 3): every step is wrapped in a
+    # StepContext and run through the StepExecutor resolved from STEP_EXECUTORS by its
+    # step_type. This replaces the inline if/elif type branching; behavior is preserved
+    # because each executor wraps the same helpers the inline branch used.
+    env = StepRunEnv(
+        conn=conn,
+        source_id=source_id,
+        original_df=original_df,
+        ts=ts,
+        want_transforms=want_transforms,
+        want_validations=want_validations,
+    )
     for step in active_steps:
-        # Built-in step (join/pivot/filter): reshape the working table in place,
-        # stage it, and record a result. It is not a function set, so handle it
-        # before the function-step fields are read.
-        if step.get("step_type") == "builtin":
-            try:
-                working_df = execute_builtin_step(conn, working_df, step)
-                _write_staging_table(conn, source_id, working_df, ts)
-                step_results.append(
-                    _builtin_result(
-                        step, source_id, status="ok", error=None,
-                        rows_affected=len(working_df),
-                    )
-                )
-            except Exception as exc:
-                step_results.append(
-                    _builtin_result(
-                        step, source_id, status="failed", error=str(exc),
-                        rows_affected=None,
-                    )
-                )
+        ctx = StepContext.for_step(step)
+        executor = _executors.STEP_EXECUTORS.get(ctx.step_type)
+        if executor is None:
+            # No registered executor for this step type — skip it (the registry is
+            # the sole dispatch authority; an unregistered type produces no output).
             continue
-
-        sfm_id = step["source_function_map_id"]
-        set_name = step["set_name"]
-
-        # #266: process EVERY function the step holds, each by its own type — transforms
-        # (chain working_df, write staging) then validations (read original_df). A mixed
-        # set thus runs both; the executors each filter to their own function type.
-        if want_transforms and _step_has(step, "transform"):
-            new_working, error, run_results = _execute_transform_step(
-                working_df, step, conn=conn, source_id=source_id
-            )
-            if error:
-                # A failed step surfaces one error entry (the step did not complete).
-                # Prefer the failing run's identity when the executor produced one.
-                tr = _transform_runresult(step, source_id, status="failed", error=error)
-                entry = {
-                    "source_function_map_id": sfm_id,
-                    "set_name": set_name,
-                    "rows_affected": None,
-                    "rows_passed": None,
-                    "rows_failed": None,
-                }
-                entry.update(tr.to_dict())
-                step_results.append(entry)
-            else:
-                working_df = new_working
-                _write_staging_table(conn, source_id, working_df, ts)
-                # One result entry per bundle (per transform run). Fall back to the
-                # step-level RunResult when a step produced no per-bundle runs.
-                emitted = run_results or [
-                    _transform_runresult(step, source_id, status="ok", error=None).to_dict()
-                ]
-                for rr in emitted:
-                    entry = {
-                        "source_function_map_id": sfm_id,
-                        "set_name": set_name,
-                        "rows_affected": len(working_df),
-                        "rows_passed": None,
-                        "rows_failed": None,
-                    }
-                    entry.update(rr)
-                    step_results.append(entry)
-
-        if want_validations and _step_has(step, "validation"):
-            fn_results = _execute_validation_step(original_df, step, conn=conn, source_id=source_id)
-            step_results.extend(fn_results)
+        outcome = executor.execute(ctx, working_df, env)
+        working_df = outcome.working
+        step_results.extend(outcome.entries)
 
     return {
         "run_type": run_type,
