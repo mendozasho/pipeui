@@ -1831,3 +1831,144 @@ def test_run_pipeline_mixed_output_matches_golden(db, tmp_path):
     final = db.execute(f'SELECT * FROM "{staging[0]}"').df()
     assert "dbl_val" in final.columns
     assert sorted(final["val"].tolist()) == [20, 30]
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #4 — Function-set adapter
+#   A function set is flattened by an adapter into a stream of per-member
+#   executions dispatched through the StepExecutor registry by each member's
+#   step type, so a set behaves exactly like its members placed individually
+#   and built-in members are additive later (heterogeneous-member readiness).
+# ---------------------------------------------------------------------------
+
+def _comparable_entry(entry):
+    """The behavior-bearing fields of a step-result entry, identity stripped.
+
+    result_id / set_id / set_name / source_function_map_id are identity/origin
+    keys that differ between a set and the same functions placed on separate
+    sources; the *behavior* of a flattened member is its function name, type,
+    status and row counts.
+    """
+    return {
+        "function_name": entry.get("function_name"),
+        "function_type": entry.get("function_type"),
+        "status": entry.get("status"),
+        "rows_affected": entry.get("rows_affected"),
+        "rows_passed": entry.get("rows_passed"),
+        "rows_failed": entry.get("rows_failed"),
+        "error": entry.get("error"),
+    }
+
+
+@pytest.mark.integration
+def test_function_set_flattened_equals_members_placed_individually(db, tmp_path):
+    """#14 idx0: a function set is flattened into per-member executions whose
+    results are identical to the same functions placed individually on a source.
+
+    A two-member set (validation gt0 @0, transform dbl @1) bound to column `a` is
+    run via the adapter; the SAME two functions placed as separate single-function
+    steps (same positions) on a second identical source are run individually. The
+    behavior-bearing result fields must match member-for-member."""
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+
+    # Set source: gt0 + dbl in ONE function_set.
+    set_src, _ = _register_multicol_source_and_ingest(db, tmp_path, name="setsrc", cols=("a",))
+    set_col = _val_col(db, set_src, "a")
+    _seed_mixed_set(db, set_src, set_col, val_path, tfm_path)
+    set_result = run_pipeline(db, set_src, "all")
+
+    # Individual source: gt0 and dbl placed as two separate steps, same positions.
+    ind_src, _ = _register_multicol_source_and_ingest(db, tmp_path, name="indsrc", cols=("a",))
+    ind_col = _val_col(db, ind_src, "a")
+    _seed_validation_step(db, ind_src, ind_col, "gt0", val_path, position=0)
+    _seed_transform_step(db, ind_src, ind_col, "dbl", tfm_path, output_mode="append", position=1)
+    ind_result = run_pipeline(db, ind_src, "all")
+
+    set_by_name = {e["function_name"]: _comparable_entry(e) for e in set_result["steps"]}
+    ind_by_name = {e["function_name"]: _comparable_entry(e) for e in ind_result["steps"]}
+
+    assert set(set_by_name) == {"gt0", "dbl"}
+    assert set_by_name == ind_by_name
+
+
+@pytest.mark.integration
+def test_set_containing_pipeline_output_unchanged_golden(db, tmp_path):
+    """#14 idx1: run_pipeline output for a set-containing pipeline is unchanged.
+
+    Golden values for a mixed set (gt0 validation + dbl transform on column `a`,
+    rows 1,2,3): the transform doubles into an appended column (all 3 rows survive)
+    and the validation passes all 3 rows. These are the pre-refactor emissions the
+    flattening adapter must reproduce."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a",))
+    col_id = _val_col(db, source_id, "a")
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_mixed_set(db, source_id, col_id, val_path, tfm_path)
+
+    steps = run_pipeline(db, source_id, "all")["steps"]
+    by_name = {e["function_name"]: e for e in steps}
+    assert set(by_name) == {"gt0", "dbl"}
+
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+
+    val = by_name["gt0"]
+    assert val["function_type"] == "validation"
+    assert val["status"] == "ok"
+    assert val["rows_passed"] == 3
+    assert val["rows_failed"] == 0
+
+    # The flattened transform still chains into the staging frame (appended column).
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    final = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+    assert any(c.startswith("dbl") for c in final.columns)
+
+
+@pytest.mark.unit
+def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_path):
+    """#14 idx2: the adapter dispatches each member through the StepExecutor
+    registry BY the member's step type — not hardcoded to function. Proven with a
+    member list containing a NON-function member object routed to a fake executor
+    registered under its step type. In-memory only; no set-membership storage."""
+    from pipeui.workflow import executors as ex_mod
+    from pipeui.workflow.context import StepContext
+    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+
+    seen = {"types": []}
+
+    class _RecordingExecutor:
+        def execute(self, ctx, working, env):
+            seen["types"].append(ctx.step_type)
+            return StepExecResult(working=working, entries=[{"member_type": ctx.step_type}])
+
+    # A set step carrying a heterogeneous member list: one ordinary function member
+    # and one non-function member whose step_type routes to a different executor.
+    set_step = {
+        "step_type": "function",
+        "position": 0,
+        "set_id": "s", "set_name": "het", "source_function_map_id": "sfm",
+        "functions": [
+            {"function_id": "f1", "function_name": "fn_member",
+             "function_type": "transform", "step_type": "function"},
+            {"function_id": "x1", "function_name": "weird_member",
+             "function_type": "transform", "step_type": "noop_member"},
+        ],
+    }
+    ctx = StepContext.for_step(set_step)
+    env = StepRunEnv(conn=db, source_id=uuid.uuid4(),
+                     original_df=pd.DataFrame({"a": [1]}), ts=0,
+                     want_transforms=True, want_validations=True)
+
+    patched = dict(ex_mod.STEP_EXECUTORS)
+    patched["function"] = _RecordingExecutor()
+    patched["noop_member"] = _RecordingExecutor()
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        outcome = FunctionSetExecutor().execute(ctx, pd.DataFrame({"a": [1]}), env)
+
+    # Both members dispatched, each resolved by its OWN step type via the registry.
+    assert seen["types"] == ["function", "noop_member"]
+    assert [e["member_type"] for e in outcome.entries] == ["function", "noop_member"]
