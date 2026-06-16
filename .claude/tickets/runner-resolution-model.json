@@ -1,0 +1,90 @@
+{
+  "feature_slug": "runner-resolution-model",
+  "repo": "mendozasho/pipeui",
+  "last_projected_at": "2026-06-16T00:00:00Z",
+  "tickets": {
+    "1": {
+      "parent_issue": 11,
+      "sub_issues": [],
+      "parent_hash": "26928e720b5d659260981c52cb2a3f77a51f1b357549c0b73ab8606044077f8a"
+    },
+    "2": {
+      "parent_issue": 12,
+      "sub_issues": [
+        {
+          "issue": 16,
+          "owns_acceptance": [
+            0,
+            1,
+            2,
+            5
+          ],
+          "hash": "fc6796094ed8881036ca61e454d9574b39d041d688812b6cd803bf2a5b76456a"
+        },
+        {
+          "issue": 17,
+          "owns_acceptance": [
+            3
+          ],
+          "hash": "a76dabb8de3016fdf5f12d278ad799c4581126924dc9b2bf83dd3445be7313d8"
+        },
+        {
+          "issue": 18,
+          "owns_acceptance": [
+            4
+          ],
+          "hash": "4b570f59776867506bf65fe5025a0cb827544386a3e0c541b7ee9aef028cfdc4"
+        }
+      ],
+      "parent_hash": "83392a181675cba7c45a5115c5ec1a864d1ffd63a1b91cacf04d6ab2cc7f5532"
+    },
+    "3": {
+      "parent_issue": 13,
+      "sub_issues": [
+        {
+          "issue": 19,
+          "owns_acceptance": [
+            1
+          ],
+          "hash": "ce332812c8a1c6e6b6e4bc37039fa8defe6a0c30f7d80c9cd860b9c9ae3fafd3"
+        },
+        {
+          "issue": 20,
+          "owns_acceptance": [
+            0,
+            2,
+            3
+          ],
+          "hash": "3d0b3e03ad5898662721e3684ace1c7594df8e610279e02609ce573238d40b84"
+        }
+      ],
+      "parent_hash": "fa5adcabe0932ff3e6433fa72f7eed86dd5de982829cb180ae1e04db9f57dd11"
+    },
+    "4": {
+      "parent_issue": 14,
+      "sub_issues": [],
+      "parent_hash": "741e1e830b3890a9c917a304463588109b4bc2353a27a73efcbcdf10f3b66df2"
+    },
+    "5": {
+      "parent_issue": 15,
+      "sub_issues": [
+        {
+          "issue": 21,
+          "owns_acceptance": [
+            0,
+            1
+          ],
+          "hash": "e6a8156f74d213082b20e80236fbb908b4b274cc11e955895a68f72af384fe1a"
+        },
+        {
+          "issue": 22,
+          "owns_acceptance": [
+            2
+          ],
+          "hash": "916f7ee2d2a02cc140965660b169a0bf6e25d751a87b996b8afad24b724cda6b"
+        }
+      ],
+      "parent_hash": "03687ab25d9a7d8e8da33e1d6b5a22dd092fc2d773eb3a15e2b125bb7fec8d97"
+    }
+  }
+}
