@@ -173,6 +173,62 @@ def get_source(
     return detail
 
 
+@router.get("/{source_id}/join-columns")
+def get_join_columns(
+    source_id: str,
+    transformed: bool = False,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Columns the join modal binds against for a right-hand source.
+
+    With ``transformed=false`` (default) returns the source's RAW registered columns
+    — the instance table's schema. With ``transformed=true`` returns the source's
+    TRANSFORMED column set: the columns of the frame ``resolve_frame`` resolves for
+    the transformed mode (its latest staging output, materialized on demand if the
+    source has never run). This is the endpoint the join column picker calls with the
+    transformed flag so the user maps keys against the columns the join will actually
+    see (PRD Implementation Decisions -> Join honors the toggle).
+
+    Returns {"columns": [{"column_name", "column_type"}]}. 404 when the source is
+    unknown.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    exists = conn.execute(
+        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
+    ).fetchone()
+    if exists is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    if not transformed:
+        cols = conn.execute(
+            """
+            SELECT cr.column_name, cr.column_type
+            FROM column_registry cr
+            JOIN source_column_map scm ON scm.column_id = cr.column_id
+            WHERE scm.source_id = ?
+            ORDER BY cr.column_name
+            """,
+            [sid],
+        ).fetchall()
+        return {"columns": [{"column_name": c[0], "column_type": c[1]} for c in cols]}
+
+    # Transformed: resolve the transformed frame and report its columns. The dtype is
+    # best-effort from the resolved frame (the registry has no row for derived columns).
+    from pipeui.workflow.resolve import TRANSFORMED, resolve_frame
+
+    frame, _ref = resolve_frame(conn, sid, TRANSFORMED)
+    return {
+        "columns": [
+            {"column_name": str(name), "column_type": str(dtype)}
+            for name, dtype in zip(frame.columns, frame.dtypes)
+        ]
+    }
+
+
 @router.get("/{source_id}/rows")
 def get_rows(
     source_id: str,
