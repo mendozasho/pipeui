@@ -46,6 +46,21 @@ def normalize_label(raw: Optional[str]) -> str:
     return cleaned if cleaned else _EMPTY_LABEL_FALLBACK
 
 
+def transformed_result_id(source_id: "uuid.UUID", mode: str, staging_ts: str) -> str:
+    """Deterministic short result_id for a consumed transformed snapshot.
+
+    Built with the same identity scheme as ``RunResult`` (UUID5 over the
+    ``run_result`` table namespace, then truncated for display), so a transformed
+    output a step joins against is a first-class, traceable result like any run
+    (CONTEXT.md → Transformed-output result_id; PRD Implementation Decisions).
+
+    Equal inputs (same source + mode + staging timestamp) always produce the same
+    id, which is what makes a snapshot's identity stable across resolutions.
+    """
+    full = content_hash_id(_RESULT_NAMESPACE, str(source_id), mode, str(staging_ts))
+    return full.hex[:_SHORT_ID_LEN]
+
+
 @dataclass(frozen=True)
 class RunResult:
     """Outcome of one normalized run (one argument bundle).
