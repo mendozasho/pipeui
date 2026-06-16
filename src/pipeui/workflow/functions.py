@@ -404,7 +404,13 @@ def register_function_entry(
         for param_name, param_type, p_has_default, p_default in zip(
             param_names, param_types, param_has_default, param_default_values
         ):
-            param_id = new_id()
+            # §2 exception: the parameter surrogate is DERIVED from
+            # (function_id, param_name), not random. A rescan re-registers the
+            # function (DELETE + reinsert parameter rows); a random param_id would
+            # change every time and orphan every alias_map.parameter_id binding.
+            # param names are unique within a function, so this stays unique, and it
+            # is stable even when param_type changes (which recomputes content_hash_id).
+            param_id = content_hash_id("parameter", "param_id", str(function_id), param_name)
             param_chid = content_hash_id(
                 "parameter", param_name, str(function_id), param_type
             )

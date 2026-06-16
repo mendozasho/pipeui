@@ -53,8 +53,11 @@ instance table live as tables **inside one DuckDB database file**. There is no
 
 **Identity columns (every registry table).** Two id columns:
 - the **surrogate `*_id`** (`source_id`, `function_id`, `column_id`,
-  `param_id`) — DuckDB native `UUID`, `uuid4`, **primary key**, NOT NULL. This
-  is the only value that maps and writes reference (§2).
+  `param_id`) — DuckDB native `UUID`, **primary key**, NOT NULL. This
+  is the only value that maps and writes reference (§2). Normally `uuid4`; the one
+  exception is `parameter.param_id`, which is *derived* as `uuid5` of
+  (`function_id`, `param_name`) so it stays stable across a rescan and never
+  orphans `alias_map` bindings (see the `parameter` table notes).
 - the **`content_hash_id`** — DuckDB native `UUID`, `uuid5`, mutable,
   recomputed on edit (§2, §3), unique *within its own table*.
 
@@ -109,8 +112,8 @@ deferred to a future cleanup pass but is no longer blocked.
 
 | column | DuckDB type | null | notes |
 | --- | --- | --- | --- |
-| `param_id` | UUID | no | PK, surrogate (uuid4) |
-| `content_hash_id` | UUID | no | uuid5 of (`param_name`, `function_id`, `param_type`) — ties the param to a specific function |
+| `param_id` | UUID | no | PK, surrogate. **Exception to the uuid4-surrogate rule:** *derived* as `uuid5` of (`function_id`, `param_name`) so it survives a rescan. A rescan re-registers the function (DELETE + reinsert `parameter` rows); a random `param_id` would change every time and orphan every `alias_map.parameter_id` binding. Stable even when `param_type` changes (which recomputes `content_hash_id`). Unique because param names are unique within a function. |
+| `content_hash_id` | UUID | no | uuid5 of (`param_name`, `function_id`, `param_type`) — ties the param to a specific function. Distinct field-tuple from `param_id`, so the two never collide. |
 | `param_name` | VARCHAR | no | name in the function definition; used for keyword binding (§12) |
 | `param_type` | VARCHAR(enum) | no | user-typed in the module |
 | `function_id` | UUID | no | FK → `function_registry.function_id` (surrogate) |
