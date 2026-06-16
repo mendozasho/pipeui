@@ -38,6 +38,13 @@ from pipeui.ids import new_id
 
 _VALID_JOIN_TYPES = {"inner", "left", "right", "full"}
 _VALID_AGGREGATIONS = {"sum", "avg", "min", "max", "count"}
+# Filter operators (CONTEXT.md "built-in step" → Filter config shape). The first
+# group are binary comparisons; is_null/is_not_null take no value.
+_FILTER_COMPARISONS = {"eq": "=", "neq": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+_VALID_FILTER_OPERATORS = set(_FILTER_COMPARISONS) | {
+    "contains", "not_contains", "is_null", "is_not_null"
+}
+_NULLARY_FILTER_OPERATORS = {"is_null", "is_not_null"}
 
 
 def _validate_join_config(cfg: dict) -> str | None:
@@ -72,6 +79,20 @@ def _validate_pivot_config(cfg: dict) -> str | None:
     return None
 
 
+def _validate_filter_config(cfg: dict) -> str | None:
+    if not cfg.get("column"):
+        return "filter config must include column"
+    operator = cfg.get("operator")
+    if operator not in _VALID_FILTER_OPERATORS:
+        return (
+            f"operator must be one of {sorted(_VALID_FILTER_OPERATORS)!r}; got {operator!r}"
+        )
+    # Binary operators need a value; is_null / is_not_null do not.
+    if operator not in _NULLARY_FILTER_OPERATORS and cfg.get("value") in (None, ""):
+        return f"operator {operator!r} requires a value"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # attach / detach / patch
 # ---------------------------------------------------------------------------
@@ -95,7 +116,7 @@ def attach_builtin(
     elif builtin_type == "pivot":
         err = _validate_pivot_config(builtin_config)
     else:
-        err = None  # filter config validation deferred
+        err = _validate_filter_config(builtin_config)
     if err:
         return {"ok": False, "detail": err}
 
@@ -300,6 +321,8 @@ def execute_builtin_step(
         return _execute_join(conn, df, cfg)
     elif btype == "pivot":
         return _execute_pivot(conn, df, cfg)
+    elif btype == "filter":
+        return _execute_filter(conn, df, cfg)
     else:
         raise ValueError(f"Unknown builtin_type: {btype!r}")
 
@@ -393,5 +416,53 @@ def _execute_pivot(
         result = conn.execute(sql).df()
     finally:
         conn.execute(f'DROP VIEW IF EXISTS "{_pivot_view}"')
+
+    return result
+
+
+def _execute_filter(
+    conn: duckdb.DuckDBPyConnection,
+    df: pd.DataFrame,
+    cfg: dict,
+) -> pd.DataFrame:
+    """Execute a filter built-in step — keep rows where the column matches the predicate.
+
+    Config shape (CONTEXT.md):
+      { "column": "...", "operator": "eq|neq|gt|gte|lt|lte|contains|not_contains|is_null|is_not_null",
+        "value": "<string>" }
+
+    The value is stored as a string and bound as a parameter; DuckDB casts it to the
+    column's type for comparison. contains/not_contains compare against the column cast
+    to VARCHAR. is_null / is_not_null take no value.
+    """
+    err = _validate_filter_config(cfg)
+    if err:
+        raise ValueError(err)
+
+    column = cfg["column"]
+    operator = cfg["operator"]
+    value = cfg.get("value")
+    col_sql = f'"{column}"'
+
+    _filter_view = f"_builtin_filter_{uuid.uuid4().hex[:8]}"
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_filter_view}" AS SELECT * FROM df')
+
+    if operator in _FILTER_COMPARISONS:
+        where, params = f"{col_sql} {_FILTER_COMPARISONS[operator]} ?", [value]
+    elif operator == "contains":
+        where, params = f"CAST({col_sql} AS VARCHAR) LIKE ?", [f"%{value}%"]
+    elif operator == "not_contains":
+        where, params = f"CAST({col_sql} AS VARCHAR) NOT LIKE ?", [f"%{value}%"]
+    elif operator == "is_null":
+        where, params = f"{col_sql} IS NULL", []
+    else:  # is_not_null (validated above)
+        where, params = f"{col_sql} IS NOT NULL", []
+
+    try:
+        result = conn.execute(
+            f'SELECT * FROM "{_filter_view}" WHERE {where}', params
+        ).df()
+    finally:
+        conn.execute(f'DROP VIEW IF EXISTS "{_filter_view}"')
 
     return result

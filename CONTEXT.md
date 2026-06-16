@@ -152,6 +152,8 @@ Built-ins are exposed in two places in the UI:
 
 **Filter config shape:** `{ column: col_id, operator: eq|neq|gt|gte|lt|lte|contains|not_contains|is_null|is_not_null, value: string }` — single-condition row filter in v1; multi-condition (AND/OR) deferred.
 
+**Execution (resolved).** `run_pipeline` executes built-in steps from `source_builtin_map`, merged with function steps by `position` (shared position space). A built-in reshapes the **working table** (`working_df`) in place, stages the result, and emits a transform-shaped result entry (`step_type="builtin"`). Built-ins therefore run as part of the **transform chain** — on `transforms` and `all` runs — and are skipped on a `validations`-only or single-`set` run. The `filter` operator value is a string bound as a parameter; DuckDB casts it to the column type (`contains`/`not_contains` compare the column cast to VARCHAR). **Known limitation (deferred):** validation steps read the *original* source table, so they do not yet see columns/rows produced by a built-in earlier in the pipeline (e.g. a join's added columns). Tracked for a follow-up that runs validations against the post-built-in working table.
+
 ## effective column set
 
 The set of columns available to a pipeline step at a given position. For steps after a join, this includes the original source's columns plus any columns brought in by the join. Computed server-side at dry-run time and returned in the dry-run response as `available_columns: [{ column_id, column_name, column_type }]`. The frontend parameter mapping modal uses this list instead of the static source column list.
