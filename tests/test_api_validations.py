@@ -387,3 +387,60 @@ def test_results_export_unknown_function_returns_404(db):
     client = _pipelines_client(db)
     r = client.get(f"/validations/{uuid.uuid4()}/export/results")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# runner-resolution-model slice 5 (#15 / #21) — cross-source validation endpoint
+# routes through the unified execution model (run_validation_across_sources ->
+# run_pipeline -> STEP_EXECUTORS). Locks the migration: the response is produced by
+# the registry, not a bypass path.
+# ---------------------------------------------------------------------------
+
+import pipeui.workflow.executors as _executors_mod  # noqa: E402
+
+
+class _SpyExecutor:
+    def __init__(self, inner, log):
+        self._inner = inner
+        self._log = log
+
+    def execute(self, ctx, working, env):
+        self._log.append(ctx.step_type)
+        return self._inner.execute(ctx, working, env)
+
+
+@pytest.mark.integration
+def test_cross_source_validation_routes_through_registry(client, db, tmp_path, monkeypatch):
+    """#21[1]: the cross-source validation endpoint runs each source's validations through
+    the STEP_EXECUTORS registry (the unified model). Same per-source response shape, fed by
+    the registry — no superseded execution path."""
+    src1_id, _ = register_and_ingest(db, tmp_path, name="reg1")
+    src2_id, _ = register_and_ingest(db, tmp_path, name="reg2")
+    col1_id = get_column_id(db, src1_id)
+    col2_id = get_column_id(db, src2_id)
+
+    module_path = write_fn(tmp_path, "reg_pos", "data", "return data > 0")
+    fn_id, _, _ = seed_validation_fn_and_attach(db, src1_id, col1_id, "reg_pos", module_path)
+    # Attach the same function (same fn_id) to src2 via a new set.
+    set2_id = uuid.uuid4()
+    db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set2_id, uuid.uuid4(), "reg_pos_s2", None])
+    db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set2_id, fn_id, 0])
+    sfm2_id = uuid.uuid4()
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+               [sfm2_id, src2_id, set2_id, 0, "append"])
+    param_id = db.execute("SELECT param_id FROM parameter WHERE function_id = ?", [fn_id]).fetchone()[0]
+    alias_id2 = content_hash_id("alias_map", str(param_id), str(col2_id), str(src2_id))
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+               [alias_id2, col2_id, param_id, src2_id])
+
+    log: list[str] = []
+    spied = {k: _SpyExecutor(v, log) for k, v in _executors_mod.STEP_EXECUTORS.items()}
+    monkeypatch.setattr(_executors_mod, "STEP_EXECUTORS", spied)
+
+    resp = client.post(f"/validations/run?function_id={fn_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "sources" in body and len(body["sources"]) == 2   # shape preserved
+    for s in body["sources"]:
+        assert "source_id" in s and "status" in s
+    assert log, "cross-source validation endpoint bypassed the STEP_EXECUTORS registry"
