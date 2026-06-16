@@ -25,6 +25,7 @@ from typing import Any
 
 FUNCTION = "function"
 BUILTIN = "builtin"
+SET = "set"
 
 
 @dataclass(frozen=True)
@@ -56,10 +57,16 @@ class StepContext:
 
     @classmethod
     def from_set(cls, step: dict) -> "StepContext":
-        """Build a context from a ``source_function_map`` row treated as a set
-        (the set-origin name for the function step path; a set is the function-step
-        container, so it shares ``from_function``'s execution shape)."""
-        return cls(step_type=FUNCTION, position=step["position"], data=dict(step))
+        """Build a context from a ``source_function_map`` row treated as a set.
+
+        Every function step in this schema IS a set (its members live in
+        ``function_set_map``), so a function-map row is tagged ``SET`` and routes to
+        the function-set adapter, which flattens the set into per-member executions
+        dispatched through the registry by each member's step type (slice 4). The
+        wrapped data is identical to ``from_function``'s — only the dispatch tag
+        differs (``SET`` -> adapter; the adapter re-dispatches each member as
+        ``FUNCTION`` -> the per-member function executor)."""
+        return cls(step_type=SET, position=step["position"], data=dict(step))
 
     @classmethod
     def from_builtin(cls, step: dict) -> "StepContext":
@@ -70,8 +77,8 @@ class StepContext:
     def for_step(cls, step: dict) -> "StepContext":
         """Pick the factory by the fetched step's ``step_type`` — the single entry
         the runner calls so no ``if/elif`` on step type survives in the loop. A
-        built-in row routes to ``from_builtin``; any other (function/set) row routes
-        to ``from_function``."""
+        built-in row routes to ``from_builtin``; any other (function-map) row is a
+        set and routes to ``from_set`` (which tags ``SET`` for the adapter)."""
         if step.get("step_type") == BUILTIN:
             return cls.from_builtin(step)
-        return cls.from_function(step)
+        return cls.from_set(step)
