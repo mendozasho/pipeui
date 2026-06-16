@@ -14,6 +14,7 @@ from pipeui.workflow.functions import (
     discover_functions_in_file,
     get_function,
     list_functions,
+    register_function_entry,
     scan_functions,
     _inspect_function,
 )
@@ -344,18 +345,17 @@ class TestScanFunctions:
                 return x
         """)
 
-        # Monkeypatch new_id so it raises on the second call (first: function_id, second: param_id)
-        call_count = {"n": 0}
-        real_new_id = __import__("pipeui.ids", fromlist=["new_id"]).new_id
+        # Inject a failure during the parameter write (after the function_registry row
+        # is inserted in the same transaction). param_id is derived via content_hash_id
+        # with the "parameter" namespace, so raise there to exercise the rollback.
+        real_chid = __import__("pipeui.ids", fromlist=["content_hash_id"]).content_hash_id
 
-        def failing_new_id():
-            call_count["n"] += 1
-            if call_count["n"] >= 2:
-                raise RuntimeError("injected failure for param_id")
-            return real_new_id()
+        def failing_content_hash_id(table_name, *fields):
+            if table_name == "parameter":
+                raise RuntimeError("injected failure for parameter write")
+            return real_chid(table_name, *fields)
 
-        monkeypatch.setattr("pipeui.ids.new_id", failing_new_id)
-        monkeypatch.setattr("pipeui.workflow.functions.new_id", failing_new_id)
+        monkeypatch.setattr("pipeui.workflow.functions.content_hash_id", failing_content_hash_id)
 
         log = scan_functions(db, [str(tmp_path)])
         # The function should be absent from function_registry
@@ -844,3 +844,69 @@ class TestGetFunctionDetail:
         # Both sources present, no duplicates
         assert source_ids == {str(src_a), str(src_b)}
         assert len(attached) == 2
+
+
+# ---------------------------------------------------------------------------
+# param_id stability across rescans (deterministic surrogate — §2 exception)
+# ---------------------------------------------------------------------------
+
+def _fn_data():
+    return {
+        "function_class": "column_backed",
+        "function_return_type": "pd.Series[bool]",
+        "function_doc": "doc",
+        "function_signature": "is_valid(col: str) -> pd.Series[bool]",
+        "function_type": "validation",
+        "param_names": ["col"],
+        "param_types": ["str"],
+    }
+
+
+@pytest.mark.integration
+def test_param_id_is_deterministic_from_function_id_and_name(db):
+    """param_id is derived from (function_id, param_name), not random."""
+    from pipeui.ids import content_hash_id
+
+    register_function_entry(db, Path("/x/checks.py"), "is_valid", _fn_data())
+    fn_id, param_id = db.execute(
+        "SELECT function_id, param_id FROM parameter WHERE param_name = 'col'"
+    ).fetchone()
+    expected = content_hash_id("parameter", "param_id", str(fn_id), "col")
+    assert uuid.UUID(str(param_id)) == expected
+
+
+@pytest.mark.integration
+def test_param_id_survives_rescan_and_keeps_alias_map_binding(db):
+    """Re-registering a function (rescan) preserves param_id, so an existing
+    alias_map binding still resolves to a live parameter row."""
+    status1 = register_function_entry(db, Path("/x/checks.py"), "is_valid", _fn_data())
+    assert status1 == "added"
+    param_id_before = db.execute(
+        "SELECT param_id FROM parameter WHERE param_name = 'col'"
+    ).fetchone()[0]
+
+    # Bind a column to this parameter via alias_map (what attach_function writes).
+    am_id, col_id, src_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    db.execute(
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id, position) "
+        "VALUES (?, ?, ?, ?, 0)",
+        [am_id, col_id, param_id_before, src_id],
+    )
+
+    # Rescan: re-register the identical function (Principle 2 collapse path).
+    status2 = register_function_entry(db, Path("/x/checks.py"), "is_valid", _fn_data())
+    assert status2 == "re-registered"
+
+    param_id_after = db.execute(
+        "SELECT param_id FROM parameter WHERE param_name = 'col'"
+    ).fetchone()[0]
+    assert param_id_after == param_id_before  # surrogate survived the rescan
+
+    # The binding still points at a live parameter row (not orphaned).
+    bound = db.execute(
+        "SELECT p.param_name FROM alias_map am "
+        "JOIN parameter p ON p.param_id = am.parameter_id "
+        "WHERE am.alias_map_id = ?",
+        [am_id],
+    ).fetchone()
+    assert bound is not None and bound[0] == "col"

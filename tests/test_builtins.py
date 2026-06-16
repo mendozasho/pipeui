@@ -36,6 +36,7 @@ from pipeui.workflow.builtins import (
     get_unified_pipeline,
     patch_builtin,
 )
+from pipeui.workflow.run import run_pipeline
 from tests.conftest import make_registered_source
 
 
@@ -413,3 +414,70 @@ def test_attach_builtin_filter_accepted(source):
     ).fetchone()
     assert row is not None
     assert row[0] == "filter"
+
+
+# ---------------------------------------------------------------------------
+# Filter built-in: config validation + execution
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_attach_builtin_filter_validates_config(source):
+    conn, source_id, _ = source
+    ok = attach_builtin(conn, source_id, "filter", {"column": "amount", "operator": "gt", "value": "5"})
+    assert ok["ok"], ok
+    assert not attach_builtin(conn, source_id, "filter", {"column": "amount", "operator": "between", "value": "5"})["ok"]
+    assert not attach_builtin(conn, source_id, "filter", {"column": "amount", "operator": "gt"})["ok"]
+    assert not attach_builtin(conn, source_id, "filter", {"operator": "gt", "value": "5"})["ok"]
+    # nullary operator needs no value
+    assert attach_builtin(conn, source_id, "filter", {"column": "amount", "operator": "is_null"})["ok"]
+
+
+@pytest.mark.integration
+def test_execute_builtin_filter_operators(db):
+    df = pd.DataFrame({"k": ["a", "b", "c", None], "n": [1, 5, 10, 7]})
+
+    def run(cfg):
+        return execute_builtin_step(db, df, {"builtin_type": "filter", "builtin_config": cfg})
+
+    assert list(run({"column": "n", "operator": "gte", "value": "5"})["n"]) == [5, 10, 7]
+    assert list(run({"column": "n", "operator": "eq", "value": "10"})["n"]) == [10]
+    assert list(run({"column": "k", "operator": "contains", "value": "b"})["k"]) == ["b"]
+    assert list(run({"column": "k", "operator": "is_null", "value": None})["n"]) == [7]
+    assert list(run({"column": "k", "operator": "is_not_null", "value": None})["n"]) == [1, 5, 10]
+
+
+# ---------------------------------------------------------------------------
+# run_pipeline now iterates source_builtin_map (built-ins were previously skipped)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_run_pipeline_executes_builtin_filter_step(db):
+    """A built-in step attached to a source is executed by run_pipeline and reshapes
+    the working table (regression: source_builtin_map used to be skipped entirely)."""
+    source_id, _ = _make_source(db, "flt")
+    _make_instance_table(db, source_id, pd.DataFrame({"id": [1, 2, 3, 4], "amount": [10, 200, 30, 400]}))
+
+    attached = attach_builtin(db, source_id, "filter", {"column": "amount", "operator": "gt", "value": "100"})
+    assert attached["ok"], attached
+
+    out = run_pipeline(db, source_id, "all")
+    assert out is not None
+    builtin_results = [s for s in out["steps"] if s.get("step_type") == "builtin"]
+    assert len(builtin_results) == 1
+    b = builtin_results[0]
+    assert b["status"] == "ok"
+    assert b["builtin_type"] == "filter"
+    assert b["rows_affected"] == 2  # amount > 100 → [200, 400]
+
+
+@pytest.mark.integration
+def test_run_pipeline_validations_only_skips_builtins(db):
+    """A validations-only run does not execute built-ins (they reshape the working
+    table, which validations don't read)."""
+    source_id, _ = _make_source(db, "flt2")
+    _make_instance_table(db, source_id, pd.DataFrame({"id": [1, 2, 3], "amount": [10, 20, 30]}))
+    assert attach_builtin(db, source_id, "filter", {"column": "amount", "operator": "gt", "value": "100"})["ok"]
+
+    out = run_pipeline(db, source_id, "validations")
+    assert out is not None
+    assert [s for s in out["steps"] if s.get("step_type") == "builtin"] == []
