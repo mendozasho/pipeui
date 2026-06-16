@@ -1647,3 +1647,187 @@ def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
     # The both-null row r4 still has nulls in amount and region.
     r4 = frame[frame["id"] == "r4"].iloc[0]
     assert pd.isna(r4["amount"]) and pd.isna(r4["region"])
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #3 — Uniform StepExecutor contract +
+# step-type registry (sub-issues #19, #20).
+#
+# Behavior-preserving refactor: the inline if/elif step dispatch in run_pipeline
+# is replaced by a StepExecutor resolved from a step-type registry, backed by
+# class-based StepContext factory constructors over the existing map tables.
+# Every test below also relies on the full suite staying green (the pre-existing
+# function/built-in behavioral guarantees above).
+# ---------------------------------------------------------------------------
+
+
+def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator="gte"):
+    """Attach a built-in filter step keeping rows where `column operator value`."""
+    from pipeui.workflow.builtins import attach_builtin
+
+    res = attach_builtin(
+        db, source_id, "filter",
+        {"column": column, "operator": operator, "value": str(value)},
+    )
+    assert res["ok"], res
+    return res["step_id"]
+
+
+# --- #19: StepContext factory constructors -------------------------------
+
+@pytest.mark.unit
+def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
+    """#19: StepContext.from_function builds a context from a source_function_map
+    (function) step dict, carrying the properties previously passed as step-dict
+    keys (set_id, set_name, source_function_map_id, position, functions)."""
+    from pipeui.workflow.run import _fetch_steps
+    from pipeui.workflow.context import StepContext
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
+
+    step = _fetch_steps(db, source_id)[0]
+    step.setdefault("step_type", "function")
+
+    ctx = StepContext.from_function(step)
+    assert ctx.step_type == "function"
+    assert ctx.position == step["position"]
+    # Properties the step dict held are all reachable from the context.
+    assert ctx.get("set_id") == step["set_id"]
+    assert ctx.get("set_name") == step["set_name"]
+    assert ctx.get("source_function_map_id") == step["source_function_map_id"]
+    assert ctx.get("functions") == step["functions"]
+
+
+@pytest.mark.unit
+def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
+    """#19: StepContext.from_set builds a context from a source_function_map row
+    (the set-origin name for the function step path), carrying the same keys."""
+    from pipeui.workflow.run import _fetch_steps
+    from pipeui.workflow.context import StepContext
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
+
+    step = _fetch_steps(db, source_id)[0]
+    step.setdefault("step_type", "function")
+
+    ctx = StepContext.from_set(step)
+    assert ctx.get("set_id") == step["set_id"]
+    assert ctx.get("functions") == step["functions"]
+    assert ctx.position == step["position"]
+
+
+@pytest.mark.unit
+def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
+    """#19: StepContext.from_builtin builds a context from a source_builtin_map
+    row, carrying step_id / builtin_type / builtin_config / position."""
+    from pipeui.workflow.builtins import get_builtin_steps
+    from pipeui.workflow.context import StepContext
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=0)
+
+    bstep = get_builtin_steps(db, source_id)[0]
+    ctx = StepContext.from_builtin(bstep)
+
+    assert ctx.step_type == "builtin"
+    assert ctx.position == bstep["position"]
+    assert ctx.get("step_id") == bstep["step_id"]
+    assert ctx.get("builtin_type") == "filter"
+    assert ctx.get("builtin_config") == bstep["builtin_config"]
+
+
+# --- #20: StepExecutor registry + dispatch swap --------------------------
+
+@pytest.mark.unit
+def test_step_executor_registry_has_function_and_builtin_executors():
+    """#20: the step-type registry resolves an executor for each step type
+    (function/set -> function executor; builtin -> builtin executor)."""
+    from pipeui.workflow.executors import STEP_EXECUTORS, StepExecutor
+
+    assert "function" in STEP_EXECUTORS
+    assert "builtin" in STEP_EXECUTORS
+    for ex in STEP_EXECUTORS.values():
+        assert isinstance(ex, StepExecutor)
+
+
+@pytest.mark.integration
+def test_run_pipeline_dispatches_through_registry(db, tmp_path):
+    """#20: run_pipeline routes every step through the StepExecutor registry — a
+    mixed function+builtin pipeline produces results only if both registry
+    executors are invoked. Patching the registry to drop the builtin executor
+    must make the builtin step vanish from the output (proving dispatch goes
+    through the registry, not an inline branch)."""
+    from pipeui.workflow import executors as ex_mod
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path,
+                         output_mode="append", position=0)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=1, operator="gte")
+
+    # Baseline: both the function transform and the builtin filter appear.
+    full = run_pipeline(db, source_id, "all")
+    names = [s.get("function_name") for s in full["steps"]]
+    assert "dbl" in names
+    assert "filter" in names
+
+    # Remove the builtin executor from the registry; the builtin step must drop
+    # out — proof the runner dispatches via the registry and not an inline if.
+    patched = {k: v for k, v in ex_mod.STEP_EXECUTORS.items() if k != "builtin"}
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        partial = run_pipeline(db, source_id, "all")
+    names2 = [s.get("function_name") for s in partial["steps"]]
+    assert "dbl" in names2
+    assert "filter" not in names2
+
+
+@pytest.mark.integration
+def test_run_pipeline_mixed_output_matches_golden(db, tmp_path):
+    """#20 idx0/idx2/idx3: registry dispatch produces results identical to the
+    pre-refactor inline-dispatch output on a mixed function+builtin pipeline.
+
+    The golden values below were captured from the PRE-refactor run_pipeline
+    (inline if/elif dispatch) on this exact fixture; the refactor must reproduce
+    them, proving the superseded path's behavior is preserved before and after.
+    """
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path,
+                         output_mode="append", position=0)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=1, operator="gte")
+
+    result = run_pipeline(db, source_id, "all")
+    steps = result["steps"]
+
+    # Two step-result entries: the function transform, then the builtin filter.
+    by_name = {s.get("function_name"): s for s in steps}
+    assert set(by_name) == {"dbl", "filter"}
+
+    # Function transform: ran ok, appended a column, all 3 rows survive in working.
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+
+    # Builtin filter: ran ok over the (transformed) working table; val>=20 keeps 2.
+    flt = by_name["filter"]
+    assert flt["step_type"] == "builtin"
+    assert flt["builtin_type"] == "filter"
+    assert flt["status"] == "ok"
+    assert flt["rows_affected"] == 2
+
+    # The final staging table reflects BOTH steps: the appended transform column
+    # is present AND only the val>=20 rows remain (filter ran after transform).
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    final = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+    assert "dbl_val" in final.columns
+    assert sorted(final["val"].tolist()) == [20, 30]
