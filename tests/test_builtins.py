@@ -481,3 +481,132 @@ def test_run_pipeline_validations_only_skips_builtins(db):
     out = run_pipeline(db, source_id, "validations")
     assert out is not None
     assert [s for s in out["steps"] if s.get("step_type") == "builtin"] == []
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 (#16) — _execute_join honors use_transformed via resolve_frame
+#
+#   J0 (AC0). use_transformed=false joins the right source's RAW instance table
+#             (behavior unchanged).
+#   J1 (AC1). use_transformed=true joins the right source's TRANSFORMED frame
+#             resolved via resolve_frame (its latest staging table).
+#   J2 (AC2). A transformed join against a never-run right source materializes it
+#             on demand; the join output reflects the right source's transforms.
+#   J5 (AC5). A join over null-containing / type-messy keys behaves correctly.
+# ---------------------------------------------------------------------------
+
+def _join_cfg(right_id, *, use_transformed, join_type="inner", on=None):
+    return {
+        "right_source_id": str(right_id),
+        "use_transformed": use_transformed,
+        "join_type": join_type,
+        "on": on or [{"left_col": "id", "right_col": "id"}],
+        "keep_columns": "all",
+    }
+
+
+def test_execute_join_raw_unchanged_when_use_transformed_false(db):
+    """J0 (AC0): use_transformed=false joins the RAW instance table — even when a
+    transformed staging table also exists, raw is what's joined (unchanged behavior)."""
+    left_id, _ = _make_source(db, "jl0")
+    right_id, _ = _make_source(db, "jr0")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]})
+    raw_right = pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # A *different* transformed staging table exists for the right source — must be ignored.
+    db.execute(
+        f'CREATE TABLE "staging_{right_id.hex[:8]}_999" AS '
+        "SELECT * FROM (VALUES (1, 'XFORM')) AS t(id, rtag)"
+    )
+
+    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=False)}
+    result = execute_builtin_step(db, left_df, step)
+
+    # Inner join on id against RAW right: ids 1,2 match; tags are the raw ones.
+    assert len(result) == 2
+    assert set(result["rtag"]) == {"raw1", "raw2"}
+
+
+def test_execute_join_transformed_uses_resolved_frame(db):
+    """J1 (AC1): use_transformed=true joins the right source's latest staging frame
+    (its transformed output), not the raw instance table."""
+    left_id, _ = _make_source(db, "jl1")
+    right_id, _ = _make_source(db, "jr1")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]})
+    raw_right = pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # The right source's transformed output (latest staging): same keys, different values.
+    db.execute(
+        f'CREATE TABLE "staging_{right_id.hex[:8]}_1000" AS '
+        "SELECT * FROM (VALUES (1, 'XF1'), (2, 'XF2'), (3, 'XF3')) AS t(id, rtag)"
+    )
+
+    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
+    result = execute_builtin_step(db, left_df, step)
+
+    # Inner join on id against the TRANSFORMED frame: ids 1,2,3 match; tags are transformed.
+    assert len(result) == 3
+    assert set(result["rtag"]) == {"XF1", "XF2", "XF3"}
+
+
+@pytest.mark.integration
+def test_execute_join_transformed_materializes_never_run_right_source(db):
+    """J2 (AC2): a transformed join against a right source that has never run
+    materializes it on demand; the join output reflects the right source's transforms."""
+    left_id, _ = _make_source(db, "jl2")
+    right_id, _ = _make_source(db, "jr2")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3, 4], "lval": [10, 20, 30, 40]})
+    # Right raw has 4 rows; a filter transform on the right keeps amount > 100.
+    raw_right = pd.DataFrame({"id": [1, 2, 3, 4], "amount": [50, 200, 75, 400]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # Right source has a transform but has NEVER been run (no staging table yet).
+    assert attach_builtin(
+        db, right_id, "filter", {"column": "amount", "operator": "gt", "value": "100"}
+    )["ok"]
+
+    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
+    result = execute_builtin_step(db, left_df, step)
+
+    # resolve_frame ran the right source's pipeline: only ids 2 and 4 survive the filter,
+    # so the inner join keeps exactly those two rows.
+    assert set(result["id"]) == {2, 4}
+    assert set(result["amount"]) == {200, 400}
+
+
+def test_execute_join_messy_null_keys(db):
+    """J5 (AC5): a join over null-containing / type-messy keys behaves correctly —
+    NULL keys do not match (SQL semantics) and no rows are dropped or corrupted."""
+    left_id, _ = _make_source(db, "jl5")
+    right_id, _ = _make_source(db, "jr5")
+
+    # Mixed-content / NULL-bearing keys on both sides (VARCHAR keys).
+    left_df = pd.DataFrame({"key": ["a", None, "b", "c"], "lval": [1, 2, 3, 4]})
+    raw_right = pd.DataFrame({"key": ["a", "b", None, "z"], "rval": [100, 200, 300, 400]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    step = {
+        "builtin_type": "join",
+        "builtin_config": _join_cfg(
+            right_id, use_transformed=False, on=[{"left_col": "key", "right_col": "key"}]
+        ),
+    }
+    result = execute_builtin_step(db, left_df, step)
+
+    # Only non-null matching keys join: 'a' and 'b'. NULL=NULL never matches.
+    matched = result[["key", "lval", "rval"]].dropna(subset=["key"])
+    assert set(matched["key"]) == {"a", "b"}
+    assert len(result) == 2
+    # Values are paired correctly, not corrupted.
+    by_key = {r["key"]: (r["lval"], r["rval"]) for _, r in result.iterrows()}
+    assert by_key["a"] == (1, 100)
+    assert by_key["b"] == (3, 200)

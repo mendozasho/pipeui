@@ -337,40 +337,52 @@ def _execute_join(
     Config shape:
       { "right_source_id": "...", "join_type": "inner|left|right|full",
         "on": [{"left_col": "...", "right_col": "..."}],
-        "keep_columns": "all" }
+        "use_transformed": bool, "keep_columns": "all" }
+
+    The right-hand source is resolved through ``resolve_frame`` per the
+    ``use_transformed`` flag — raw -> the source's instance table, transformed ->
+    the source's resolved transformed output (latest staging, materialized on demand
+    if never run). This is the single seam that decides where the join's right input
+    comes from, so the toggle is honored instead of always reading raw (PRD
+    Implementation Decisions -> Join honors the toggle).
     """
-    from pipeui.sql_user_table import instance_table_name
+    from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
 
     right_source_id = uuid.UUID(cfg["right_source_id"])
     join_type = cfg.get("join_type", "inner").upper()
     on_clauses = cfg["on"]
+    mode = TRANSFORMED if cfg.get("use_transformed") else RAW
 
-    right_tname = instance_table_name(right_source_id)
+    # Resolve the right frame through the seam; register both sides as temp views so
+    # the join shape is uniform regardless of where the right frame came from.
+    right_df, _ref = resolve_frame(conn, right_source_id, mode)
 
-    # Register left df as a temporary view
     _left_view = f"_builtin_join_left_{uuid.uuid4().hex[:8]}"
+    _right_view = f"_builtin_join_right_{uuid.uuid4().hex[:8]}"
     conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_left_view}" AS SELECT * FROM left_df')
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_right_view}" AS SELECT * FROM right_df')
 
     on_sql = " AND ".join(
-        f'"{_left_view}"."{c["left_col"]}" = "{right_tname}"."{c["right_col"]}"'
+        f'"{_left_view}"."{c["left_col"]}" = "{_right_view}"."{c["right_col"]}"'
         for c in on_clauses
     )
 
     keep_columns = cfg.get("keep_columns", "all")
     if keep_columns == "all":
-        select_clause = f'"{_left_view}".*, "{right_tname}".*'
+        select_clause = f'"{_left_view}".*, "{_right_view}".*'
     else:
         select_clause = "*"
 
     sql = (
         f'SELECT {select_clause} '
         f'FROM "{_left_view}" '
-        f'{join_type} JOIN "{right_tname}" ON {on_sql}'
+        f'{join_type} JOIN "{_right_view}" ON {on_sql}'
     )
     try:
         result = conn.execute(sql).df()
     finally:
         conn.execute(f'DROP VIEW IF EXISTS "{_left_view}"')
+        conn.execute(f'DROP VIEW IF EXISTS "{_right_view}"')
 
     return result
 
