@@ -1930,10 +1930,13 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     return () => { cancelled = true; };
   }, [joinModalOpen, source && source.source_id]);
 
-  // Fetch a right-hand source's columns for step 2 (transformed path deferred —
-  // the flag is accepted and stored, raw columns are returned for now).
-  function fetchJoinRightColumns(rightSourceId) {
-    return fetch("/sources/" + rightSourceId)
+  // Fetch a right-hand source's columns for step 2. Honors the use-transformed
+  // toggle: when on, requests the source's transformed column set from the
+  // join-columns endpoint (which resolves through resolve_frame); when off, the
+  // raw registered columns. (runner-resolution-model slice 2 / #18)
+  function fetchJoinRightColumns(rightSourceId, useTransformed) {
+    const url = "/sources/" + rightSourceId + "/join-columns?transformed=" + (useTransformed ? "true" : "false");
+    return fetch(url)
       .then(r => r.ok ? r.json() : { columns: [] })
       .then(d => (d && Array.isArray(d.columns)) ? d.columns : []);
   }
