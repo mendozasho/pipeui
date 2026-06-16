@@ -107,3 +107,47 @@ overwrites an explicit, user-selected **ordered target column** per `argument bu
 replaces target `i`; target count must equal the bundle count). Distinct from the `results report`,
 which is the transposed validation summary.
 _Avoid_: staging dump, output table.
+
+## Runner resolution model
+
+**Input-source resolution** _(function: `resolve_frame`)_:
+The runner seam that turns a `(source, raw | transformed)` reference into a DataFrame plus a
+provenance `ref`. The single place where "where does this step's input come from" is decided, so
+no executor hardcodes a table.
+_Avoid_: source loading, table lookup.
+
+**Raw source** / **Transformed source**:
+The two input modes a step (today a `Join`) can read another source in. **Raw** = that source's
+instance table (original ingested data); **transformed** = that source's transformed output (its
+latest staging table, or one materialized on demand).
+_Avoid_: original/clean (for raw), output/result (for transformed).
+
+**Materialize-if-absent**:
+The rule for a `transformed` reference — use the source's existing transformed output if present,
+else run its pipeline once to produce it. Snapshot semantics: no automatic refresh (re-running the
+source is the only refresh), guarded against cycles.
+_Avoid_: lazy load, auto-run, refresh.
+
+**StepExecutor**:
+The uniform per-step-type execution contract the runner dispatches through a step-type registry —
+`function step`s and `built-in step`s are resolved and run the same way, replacing inline type
+branching.
+_Avoid_: handler, dispatcher, bare "runner".
+
+**StepContext**:
+The typed object carrying one step's execution properties (the keys the step dict held),
+constructed via factory classmethods from the map tables — `from_builtin()` (`source_builtin_map`),
+`from_function()` / `from_set()` (`source_function_map`).
+_Avoid_: step dict, context dict, run context.
+
+**Function-set adapter**:
+The component that flattens a set into a stream of uniform member executions, so the runner
+processes each member as if it were an individual single-function step (a multi-function run).
+Shaped to accept heterogeneous members (function or built-in).
+_Avoid_: set expander, unpacker.
+
+**Transformed-output result_id**:
+The derived `UUID5` identity for a consumed transformed snapshot (over source + mode + staging
+timestamp), tied into the `RunResult` scheme so the transformed output a step joins against is a
+first-class, traceable result like any run.
+_Avoid_: staging id, snapshot key.

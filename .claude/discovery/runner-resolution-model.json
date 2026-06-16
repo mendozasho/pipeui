@@ -1,0 +1,81 @@
+{
+  "feature_slug": "runner-resolution-model",
+  "discovery_status": "frozen",
+  "stack_context": "data",
+  "intent": "Establish one runner execution model in which step-type (function, built-in) AND input-source (a source's raw instance table vs its transformed output) are both first-class concepts the runner resolves. Migrate the source->builder->runner->results flow onto it as far as needed for a coherent model, remove only the execution code it directly supersedes (behavior-preserved with tests), and prove it by fixing the dead use_transformed join toggle. Nesting built-ins inside function sets and anything this refactor does not reach stay in convergence (#275).",
+  "definition_of_done": "run_pipeline executes function and built-in steps through a uniform StepExecutor contract resolved from a step-type registry; Step/StepContext are typed classes with factory constructors (from_builtin/from_function/from_set) built from existing map tables. A function-set adapter flattens sets into uniform member executions; the contract accepts heterogeneous members so #275 is additive. resolve_frame(source_id, raw|transformed) returns (frame, ref): raw=instance table; transformed=latest staging else materialized on-demand (cycle-guarded, snapshot semantics); ref carries a derived UUID5 result_id tied into the RunResult scheme. _execute_join/_validate_join_config honor use_transformed via resolve_frame; the right-column-fetch endpoint honors ut. run_pipeline-dependent workflows (run/validation/results endpoints, staging) migrate onto the model; only directly-superseded code removed, each deletion behavior-preserved by tests. Verified against messy real-world data. Tested guarantees: join raw vs transformed correctness; never-run right source materialized on demand; transformed-join cycle errors clearly naming sources; transformed-output result_id deterministic and surfaced through results.",
+  "mvp_scope": "(1) A uniform step resolution/dispatch replacing the inline if/elif in run_pipeline so function and built-in steps are resolved the same way. (2) An input-source resolution service: resolve a (source, raw|transformed) reference to a frame \u2014 raw=instance table; transformed=latest staging if present, else run that source's pipeline on-demand to materialize it (cycle-guarded). (3) _execute_join/_validate_join_config honor use_transformed via that service. (4) Migrate run_pipeline-dependent workflows (run endpoints, validation-across-sources, staging, results) onto the model; delete only directly-superseded code with behavior-preserving tests. Verified against messy real-world data.",
+  "explicitly_out_of_scope": [
+    "Built-ins nestable INSIDE function sets \u2014 convergence #275.",
+    "Anything the source->builder->runner->results migration does not reach \u2014 #275.",
+    "rename built-in (#274), joins-at-the-end ordering (#276).",
+    "Automatic staleness detection/refresh of a source's transformed output \u2014 snapshot semantics accepted; refresh = user re-runs that source."
+  ],
+  "affected_components": [
+    "src/pipeui/workflow/run.py (run_pipeline: uniform step resolution; input-source resolution service; on-demand materialize-if-absent with cycle guard; staging helpers)",
+    "src/pipeui/workflow/builtins.py::_execute_join + _validate_join_config (honor use_transformed via the resolution service instead of hardcoded instance_table_name)",
+    "src/pipeui/api/* run/validation/results routes that call run_pipeline (migrate onto the model)",
+    "src/pipeui/frontend/screen-builder.jsx::JoinModal (use_transformed send + transformed column set \u2014 verify)",
+    "Results layer (Transforms tab / transformed report) as the surfaced transformed output"
+  ],
+  "dependencies": [
+    "Branch base: release/pipeline-bugfixes (carries #7 execute_builtin_step in run_pipeline, only there \u2014 NOT in main). Rebase onto main when pipeline-bugfixes merges.",
+    "Built-ins must execute in run_pipeline (#7) \u2014 satisfied on the base branch."
+  ],
+  "terms_resolved": [
+    "Input-source resolution (resolve_frame)",
+    "Raw source / Transformed source",
+    "Materialize-if-absent",
+    "StepExecutor",
+    "StepContext",
+    "Function-set adapter",
+    "Transformed-output result_id"
+  ],
+  "assumptions": [
+    "Today _execute_join always joins the RAW right-source instance table; use_transformed is a dead switch (frontend sends it, backend ignores).",
+    "Staging tables are ephemeral: staging_{id8}_{ts}, dropped before each run, only latest kept; get_staging_rows finds the latest. Transformed output of a source = its latest staging table."
+  ],
+  "resolved_decisions": [
+    {
+      "question": "Why this feature exists / why now (carried from rename-builtin discovery)?",
+      "resolution": "Cross-report rename propagation (and any 'join against another source's transformed output') needs joins to read transformed data. The bug-fix-wave-ui-and-builtins PRD specified the use_transformed toggle but only the frontend half shipped (PR #155); _execute_join never honored it. User wants this fixed NOW and built convergence-aligned so the convergence feature (#275) stays bounded."
+    },
+    {
+      "question": "When a join uses transformed output, what is it and when computed?",
+      "resolution": "Cached-with-on-demand-materialization, snapshot semantics. raw toggle off -> right source's raw instance table. transformed on -> if the right source has a transformed result (latest staging) use it as-is; if it was never run, run its pipeline on-demand to materialize the transformed output, tie it into the join, then continue the left source's remaining builder steps. NO automatic refresh (staleness accepted; user re-runs to refresh). Materialize-if-absent path is cycle-guarded (A->C->A). Verified with messy real-world data."
+    },
+    {
+      "question": "How broad is the refactor, and what about removing old code?",
+      "resolution": "Scope the full source->builder->runner->results flow onto the new unified model where that is the cleaner result (user: 'if it's easier'); do not artificially limit to the runner if it leaves an inconsistent seam. BUT removal is limited to execution code this refactor DIRECTLY supersedes, each deletion guarded by a behavior-preserving test \u2014 not a blanket cleanup. Built-ins-in-function-sets and untouched parts stay in #275."
+    },
+    {
+      "question": "Cross-source run-order coupling (does C need to be run before A)?",
+      "resolution": "RESOLVED by the materialize-if-absent rule: no required ordering. If C's transformed output is absent, A's run materializes it on demand. No cross-source orchestration/dependency layer needed for this feature."
+    },
+    {
+      "question": "Feature slug?",
+      "resolution": "Renamed transformed-join-execution-seam -> runner-resolution-model (broader than a join seam; avoids near-duplicate with the frozen runner-execution feature)."
+    },
+    {
+      "question": "Is the frontend use_transformed half actually wired?",
+      "resolution": "YES. JoinModal tracks transformedBySource, sends use_transformed in builtin_config (screen-builder.jsx:1787), and fetches the right-hand column set WITH the ut flag via fetchRightColumns(rid, ut) (lines 1736,1778). So the picker requests transformed columns. Remaining backend work: _execute_join must honor the flag, and confirm/implement the column-fetch endpoint returning transformed columns when ut=true."
+    },
+    {
+      "question": "Cycle behavior on a transformed-join cycle (A->C->A)?",
+      "resolution": "Error the run with a clear message naming the sources in the cycle; do not loop or silently fall back to raw. Detected via a resolution stack in the materialize-if-absent path."
+    },
+    {
+      "question": "Identity of a resolved transformed output (result id)?",
+      "resolution": "resolve_frame returns (frame, ref). ref carries provenance AND a derived UUID5 result_id built with the same content_hash_id/UUID5 helper as RunResult (e.g. over source_id + mode + staging timestamp), tied INTO the RunResult scheme so a consumed transformed output is a first-class result identity that flows through the results layer like other RunResults. raw mode -> instance table; transformed -> latest staging if present else materialize on-demand (cycle-guarded, snapshot semantics)."
+    },
+    {
+      "question": "Shape of the unified step/context contract?",
+      "resolution": "Heavier class-based (plugin) contract. Step + StepContext are typed classes holding the properties carried today as step dict keys (step_type, source_function_map_id, set_name, builtin_type, builtin_config, position, functions[]). StepContext has factory classmethods constructing from EXISTING map tables: from_builtin() (source_builtin_map), from_function()/from_set() (source_function_map) \u2014 DataFrame-style multi-source instantiation. A StepExecutor plugin per step type, dispatched via a step-type registry, replaces the inline if/elif in run_pipeline."
+    },
+    {
+      "question": "Function sets and built-in members?",
+      "resolution": "A function-set adapter flattens a set into a stream of uniform member executions so the runner processes each member as an individual single-function step (multi-function run), generalizing today's 'set is a transparent container'. The contract/adapter are shaped to accept HETEROGENEOUS members (function or built-in) so #275 adds the built-in-member path additively. BOUNDARY: actually STORING a built-in in a set (function_set_map schema/persistence + UI) stays #275; this feature only makes the execution model ready for it, building context from existing tables."
+    }
+  ],
+  "open_risks_to_resolve": []
+}
