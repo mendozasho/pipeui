@@ -25,29 +25,48 @@ ALLOWED_COLUMN_TYPES: frozenset[str] = frozenset(
     ["INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "VARCHAR", "DATE", "TIMESTAMP"]
 )
 
-# Numeric targets get a thousands-separator-aware cast. US/UK number format is
-# assumed (comma = thousands separator, period = decimal), so a value like
-# "250,000" or "12,345.67" migrates to 250000 / 12345.67 instead of being
-# nullified. Migration-path only — autodetection is unchanged (a comma column is
-# still inferred as VARCHAR; the user converts when ready). See CONTEXT.md
-# "numeric thousands-separator handling".
+# Numeric targets get a formatting-aware cast so US/UK-formatted data survives the
+# migration instead of being nullified. Migration-path only — autodetection is
+# unchanged (a formatted column is still inferred as VARCHAR; the user converts when
+# ready). See CONTEXT.md "numeric formatting cleanup".
 NUMERIC_COLUMN_TYPES: frozenset[str] = frozenset(["INTEGER", "BIGINT", "DOUBLE"])
+
+# Characters stripped from a value before a numeric cast: whitespace, thousands-
+# separator commas, currency symbols, percent signs, and accounting parentheses.
+_NUMERIC_STRIP_CLASS = r"[\s,$%€£¥()]"
+# A value fully wrapped in parentheses is accounting notation for a negative.
+_PAREN_NEGATIVE_RE = r"^\(.*\)$"
 
 
 def numeric_cast_expr(column: str, target_type_upper: str) -> str:
-    """Return the ``TRY_CAST`` SQL for migrating ``column`` to ``target_type_upper``.
+    """Return the SQL that migrates ``column`` to ``target_type_upper``.
 
-    For a numeric target the value is run through ``REPLACE(..., ',', '')`` first so
-    thousands-separator commas do not defeat the cast; for every other target this is
-    a plain ``TRY_CAST``. Used at all three cast sites (pre-check, nullify collection,
+    For a numeric target the raw value is cleaned of common formatting noise before
+    casting (US/UK number format — comma = thousands separator, period = decimal):
+
+    * whitespace, thousands-separator commas, currency symbols ($ € £ ¥) are stripped
+      ("$1,234.50" -> 1234.5, "1 234" -> 1234);
+    * a percent sign divides the value by 100 ("50%" -> 0.5, "12.5%" -> 0.125);
+    * accounting parentheses become a negative ("(1,234)" -> -1234).
+
+    Genuinely non-numeric text ("abc", a lone "$") still yields NULL and follows the
+    existing ``on_uncastable`` path. For every non-numeric target this is a plain
+    ``TRY_CAST``. Used at all three cast sites (pre-check, nullify collection,
     recreate-and-copy) so they agree on what is castable.
     """
-    if target_type_upper in NUMERIC_COLUMN_TYPES:
-        return (
-            f"TRY_CAST(REPLACE(CAST(\"{column}\" AS VARCHAR), ',', '') "
-            f"AS {target_type_upper})"
-        )
-    return f'TRY_CAST("{column}" AS {target_type_upper})'
+    if target_type_upper not in NUMERIC_COLUMN_TYPES:
+        return f'TRY_CAST("{column}" AS {target_type_upper})'
+
+    raw = f'CAST("{column}" AS VARCHAR)'
+    magnitude = (
+        f"TRY_CAST(regexp_replace({raw}, '{_NUMERIC_STRIP_CLASS}', '', 'g') AS DOUBLE)"
+    )
+    cleaned = (
+        f"({magnitude}"
+        f" * CASE WHEN regexp_matches(trim({raw}), '{_PAREN_NEGATIVE_RE}') THEN -1 ELSE 1 END"
+        f" * CASE WHEN contains({raw}, '%') THEN 0.01 ELSE 1 END)"
+    )
+    return f"TRY_CAST({cleaned} AS {target_type_upper})"
 
 
 def migrate_column(

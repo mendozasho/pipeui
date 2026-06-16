@@ -525,3 +525,35 @@ def test_non_numeric_value_still_uncastable_for_numeric_target(db, tmp_path):
     vals = dict(db.execute(f'SELECT policy, premium FROM "{tname}"').fetchall())
     assert vals["A"] == 250000.0
     assert vals["B"] is None
+
+
+@pytest.mark.integration
+def test_numeric_cleaning_currency_percent_parens_whitespace(db, tmp_path):
+    """The numeric cleaner handles currency symbols, percent (÷100), accounting
+    parentheses (negatives), and whitespace — not just commas."""
+    source_id, _ = register_and_ingest(
+        db, tmp_path, "amounts3",
+        ["k", "v"],
+        [
+            ["dollar", "$1,234.50"],
+            ["pct", "50%"],
+            ["pct_dec", "12.5%"],
+            ["paren", "(2,500)"],
+            ["lead_space", "  99  "],
+            ["inner_space", "1 234"],
+        ],
+    )
+    v = next(c for c in get_column_id(db, source_id) if c[1] == "v")
+
+    result = migrate_column(db, source_id, v[0], "DOUBLE", on_uncastable="nullify")
+    assert result["ok"] is True
+    assert result["nullified"] == []
+
+    tname = instance_table_name(source_id)
+    vals = dict(db.execute(f'SELECT k, v FROM "{tname}"').fetchall())
+    assert vals["dollar"] == 1234.5
+    assert vals["pct"] == 0.5          # percent divides by 100
+    assert vals["pct_dec"] == 0.125
+    assert vals["paren"] == -2500.0    # accounting parens → negative
+    assert vals["lead_space"] == 99.0
+    assert vals["inner_space"] == 1234.0

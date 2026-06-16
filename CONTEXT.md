@@ -245,20 +245,28 @@ All pipeline steps on the Builder canvas are editable after attach. Each `StepCa
 
 Scalar parameters (`int`, `float`, `bool`) are included in the dry-run response (`GET /pipelines/{source_id}/steps?dry_run=true`) via a path separate from `_SUGGEST_TYPES`, which governs column-binding suggestions only and is not modified. The attach modal renders a free-text input for each scalar param with a type hint label (e.g. `int`) and a note that the entered value must match the expected type. If left blank, the Python default is used.
 
-## numeric thousands-separator handling (resolved)
+## numeric formatting cleanup (resolved)
 
 When a user converts a column to a numeric type (`INTEGER`, `BIGINT`, `DOUBLE`), the
-migration strips thousands-separator commas before the `TRY_CAST` so US/UK-formatted
-financial values survive: `"250,000"` → `250000`, `"12,345.67"` → `12345.67`. Comma is
-assumed to be the thousands separator and period the decimal point (US/UK format);
-European decimal-comma input is **not** supported in v1. This is **migration-path only** —
-autodetection is unchanged, so a comma-formatted column is still inferred as `VARCHAR`
-on source creation and the user converts it explicitly when ready. The same
-comma-stripping expression (`workflow/migration.py::numeric_cast_expr`) is used at all
-three cast sites (uncastable pre-check, nullify collection, recreate-and-copy) so they
-agree on what is castable; genuinely non-numeric text (e.g. `"abc"`) is still uncastable
-and follows the existing `on_uncastable` (`abort` / `nullify`) path. Aligns with
-Principle 6 (migrate over reject).
+migration cleans common formatting noise before the `TRY_CAST` so US/UK-formatted
+financial values survive instead of being nullified. US/UK number format is assumed —
+comma = thousands separator, period = decimal; European decimal-comma input is **not**
+supported in v1. The cleaning rules (`workflow/migration.py::numeric_cast_expr`):
+
+- **strip** whitespace, thousands-separator commas, and currency symbols `$ € £ ¥` —
+  `"$1,234.50"` → `1234.5`, `"1 234"` → `1234`;
+- **percent** divides by 100 — `"50%"` → `0.5`, `"12.5%"` → `0.125`;
+- **accounting parentheses** become a negative — `"(1,234)"` → `-1234`.
+
+This is **migration-path only** — autodetection is unchanged, so a formatted column is
+still inferred as `VARCHAR` on source creation and the user converts it explicitly when
+ready. The same cleaning expression is used at all three cast sites (uncastable
+pre-check, nullify collection, recreate-and-copy) so they agree on what is castable.
+Genuinely non-numeric text (e.g. `"abc"`, a lone `"$"`) is still uncastable and follows
+the existing `on_uncastable` (`abort` / `nullify`) path. Numeric arithmetic for the
+percent/paren transforms runs through a `DOUBLE` intermediate, so a `BIGINT` value above
+2^53 would lose precision — out of range for this domain. Aligns with Principle 6
+(migrate over reject).
 
 ## five-screen app layout
 
