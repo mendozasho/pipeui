@@ -248,8 +248,8 @@ function MigrationConfirmModal({ uncastable, sharedSources, onConfirm, onCancel 
             }}>
               <div style={{ color: "var(--text-2)", marginBottom: 8 }}>This will also update:</div>
               <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
-                {sharedSources.map(name => (
-                  <li key={name} style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)" }}>{name}</li>
+                {sharedSources.map(s => (
+                  <li key={s.source_id} style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: "var(--text-3)" }}>{s.source_name}</li>
                 ))}
               </ul>
             </div>
@@ -1024,3 +1024,7 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
 }
 
 window.__ScreenData__ = ScreenData;
+
+// Named exports for the dev-time vitest harness only; the app consumes the screen
+// via the window.__ScreenData__ global above.
+export { ScreenData, MigrationConfirmModal, ColumnTypeRow };

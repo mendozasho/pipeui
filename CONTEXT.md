@@ -245,6 +245,21 @@ All pipeline steps on the Builder canvas are editable after attach. Each `StepCa
 
 Scalar parameters (`int`, `float`, `bool`) are included in the dry-run response (`GET /pipelines/{source_id}/steps?dry_run=true`) via a path separate from `_SUGGEST_TYPES`, which governs column-binding suggestions only and is not modified. The attach modal renders a free-text input for each scalar param with a type hint label (e.g. `int`) and a note that the entered value must match the expected type. If left blank, the Python default is used.
 
+## numeric thousands-separator handling (resolved)
+
+When a user converts a column to a numeric type (`INTEGER`, `BIGINT`, `DOUBLE`), the
+migration strips thousands-separator commas before the `TRY_CAST` so US/UK-formatted
+financial values survive: `"250,000"` → `250000`, `"12,345.67"` → `12345.67`. Comma is
+assumed to be the thousands separator and period the decimal point (US/UK format);
+European decimal-comma input is **not** supported in v1. This is **migration-path only** —
+autodetection is unchanged, so a comma-formatted column is still inferred as `VARCHAR`
+on source creation and the user converts it explicitly when ready. The same
+comma-stripping expression (`workflow/migration.py::numeric_cast_expr`) is used at all
+three cast sites (uncastable pre-check, nullify collection, recreate-and-copy) so they
+agree on what is castable; genuinely non-numeric text (e.g. `"abc"`) is still uncastable
+and follows the existing `on_uncastable` (`abort` / `nullify`) path. Aligns with
+Principle 6 (migrate over reject).
+
 ## five-screen app layout
 
 The application has five nav items (post-Phase E2):

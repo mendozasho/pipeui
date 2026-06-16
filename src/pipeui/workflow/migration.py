@@ -25,6 +25,30 @@ ALLOWED_COLUMN_TYPES: frozenset[str] = frozenset(
     ["INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "VARCHAR", "DATE", "TIMESTAMP"]
 )
 
+# Numeric targets get a thousands-separator-aware cast. US/UK number format is
+# assumed (comma = thousands separator, period = decimal), so a value like
+# "250,000" or "12,345.67" migrates to 250000 / 12345.67 instead of being
+# nullified. Migration-path only — autodetection is unchanged (a comma column is
+# still inferred as VARCHAR; the user converts when ready). See CONTEXT.md
+# "numeric thousands-separator handling".
+NUMERIC_COLUMN_TYPES: frozenset[str] = frozenset(["INTEGER", "BIGINT", "DOUBLE"])
+
+
+def numeric_cast_expr(column: str, target_type_upper: str) -> str:
+    """Return the ``TRY_CAST`` SQL for migrating ``column`` to ``target_type_upper``.
+
+    For a numeric target the value is run through ``REPLACE(..., ',', '')`` first so
+    thousands-separator commas do not defeat the cast; for every other target this is
+    a plain ``TRY_CAST``. Used at all three cast sites (pre-check, nullify collection,
+    recreate-and-copy) so they agree on what is castable.
+    """
+    if target_type_upper in NUMERIC_COLUMN_TYPES:
+        return (
+            f"TRY_CAST(REPLACE(CAST(\"{column}\" AS VARCHAR), ',', '') "
+            f"AS {target_type_upper})"
+        )
+    return f'TRY_CAST("{column}" AS {target_type_upper})'
+
 
 def migrate_column(
     conn: duckdb.DuckDBPyConnection,
@@ -121,7 +145,7 @@ def migrate_column(
     if tname in tables:
         uncastable_count: int = conn.execute(
             f'SELECT COUNT(*) FROM "{tname}" '
-            f'WHERE TRY_CAST("{column_name}" AS {new_type_upper}) IS NULL '
+            f'WHERE {numeric_cast_expr(column_name, new_type_upper)} IS NULL '
             f'AND "{column_name}" IS NOT NULL',
         ).fetchone()[0]
         castable_count: int = conn.execute(
@@ -228,7 +252,7 @@ def migrate_column(
                 src_pk = src_pk_row[0]
                 uncastable_pks = conn.execute(
                     f'SELECT "{src_pk}" FROM "{stname}" '
-                    f'WHERE TRY_CAST("{column_name}" AS {new_type_upper}) IS NULL '
+                    f'WHERE {numeric_cast_expr(column_name, new_type_upper)} IS NULL '
                     f'AND "{column_name}" IS NOT NULL',
                 ).fetchall()
                 for pk_row in uncastable_pks:
@@ -309,7 +333,7 @@ def migrate_column(
             for col_n, col_t in new_columns:
                 if col_n == column_name:
                     select_parts.append(
-                        f'TRY_CAST("{col_n}" AS {new_type_upper}) AS "{col_n}"'
+                        f'{numeric_cast_expr(col_n, new_type_upper)} AS "{col_n}"'
                     )
                 else:
                     select_parts.append(f'"{col_n}"')

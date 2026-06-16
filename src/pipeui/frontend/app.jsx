@@ -104,4 +104,15 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// Wrap the app in the shared ErrorBoundary so a render-time exception surfaces a
+// recoverable message instead of unmounting the tree to a blank screen.
+function Root() {
+  const { ErrorBoundary } = window.__UI__;
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
