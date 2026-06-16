@@ -179,3 +179,55 @@ def test_get_source_detail_distinct_pk_count_before_and_after_ingestion(client, 
     assert detail["row_count"] == 4
     assert detail["distinct_pk_count"] == 3
     assert detail["row_count"] > detail["distinct_pk_count"]
+
+
+# ---------------------------------------------------------------------------
+# POST /sources/peek-columns — header-only column read (no client-side parsing)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_peek_columns_csv_returns_headers(client):
+    """peek-columns returns the CSV header row's column names."""
+    name, data, mime = _csv_file()
+    resp = client.post("/sources/peek-columns", files={"file": (name, data, mime)})
+    assert resp.status_code == 200
+    assert resp.json()["columns"] == ["id", "name", "value"]
+
+
+@pytest.mark.integration
+def test_peek_columns_xlsx_returns_headers(client):
+    """peek-columns returns the XLSX header row's column names (openpyxl read-only)."""
+    name, data, mime = _xlsx_file()
+    resp = client.post("/sources/peek-columns", files={"file": (name, data, mime)})
+    assert resp.status_code == 200
+    assert resp.json()["columns"] == ["id", "name", "value"]
+
+
+@pytest.mark.integration
+def test_peek_columns_unsupported_type_returns_422(client):
+    """An unsupported extension returns 422, not 500."""
+    resp = client.post(
+        "/sources/peek-columns",
+        files={"file": ("notes.txt", io.BytesIO(b"id,name\n1,a\n"), "text/plain")},
+    )
+    assert resp.status_code == 422
+
+
+def test_peek_header_columns_helper_reads_header_and_drops_blanks(tmp_path):
+    """The helper returns only the first row and drops blank/whitespace header cells,
+    for both CSV and XLSX — without materializing the rest of the file."""
+    from pipeui.workflow.create import peek_header_columns
+
+    csv_path = tmp_path / "h.csv"
+    csv_path.write_text("id,amount, ,region\n1,10,x,west\n2,20,y,east\n")
+    assert peek_header_columns(str(csv_path)) == ["id", "amount", "region"]
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["id", "amount", None, "region"])
+    for i in range(5000):  # many rows; only the header should be read back
+        ws.append([i, i * 10, "x", "west"])
+    xlsx_path = tmp_path / "h.xlsx"
+    wb.save(str(xlsx_path))
+    assert peek_header_columns(str(xlsx_path)) == ["id", "amount", "region"]

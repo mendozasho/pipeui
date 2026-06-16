@@ -6,7 +6,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { Modal, Switch } from "./ui.jsx";
+import { Modal, Switch, ErrorBoundary } from "./ui.jsx";
 
 afterEach(() => {
   cleanup();
@@ -105,5 +105,35 @@ describe("Switch", () => {
     render(React.createElement(Switch, { checked: false, onChange, disabled: true }));
     fireEvent.click(screen.getByRole("switch"));
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ErrorBoundary — a render-time throw must surface a recoverable message instead
+// of unmounting the tree to a blank screen.
+// ---------------------------------------------------------------------------
+describe("ErrorBoundary", () => {
+  function Boom() {
+    throw new Error("kaboom");
+  }
+
+  it("renders its children when nothing throws", () => {
+    render(
+      React.createElement(
+        ErrorBoundary,
+        null,
+        React.createElement("div", null, "safe content")
+      )
+    );
+    expect(screen.getByText("safe content")).toBeTruthy();
+  });
+
+  it("renders a fallback (not a blank screen) when a child throws", () => {
+    // React logs the caught error to console.error; silence the expected noise.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(React.createElement(ErrorBoundary, null, React.createElement(Boom)));
+    expect(screen.getByText("Something went wrong")).toBeTruthy();
+    expect(screen.getByText(/kaboom/)).toBeTruthy();
+    spy.mockRestore();
   });
 });

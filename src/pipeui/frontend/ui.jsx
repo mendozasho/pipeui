@@ -533,9 +533,54 @@ function Switch({ checked, onChange, disabled, size = "md" }) {
   );
 }
 
-window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch };
+// Top-level error boundary. A render-time exception anywhere in the tree (e.g. a
+// malformed API payload reaching a component) would otherwise unmount the whole
+// app and leave a blank screen. This catches it and shows a recoverable message
+// instead. Class component — getDerivedStateFromError / componentDidCatch have no
+// hook equivalent.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("UI render error caught by ErrorBoundary:", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          margin: 24, padding: "20px 24px", maxWidth: 560,
+          background: "var(--panel)", border: "1px solid var(--danger-line, var(--border))",
+          borderRadius: "var(--radius-lg)", color: "var(--text)",
+        }}>
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8 }}>Something went wrong</div>
+          <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 16 }}>
+            The view hit an unexpected error and stopped rendering. Your data is unaffected.
+          </div>
+          <div style={{
+            fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--text-3)",
+            whiteSpace: "pre-wrap", marginBottom: 16,
+          }}>
+            {String(this.state.error && this.state.error.message || this.state.error)}
+          </div>
+          <Btn onClick={() => this.setState({ error: null })}>Dismiss</Btn>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+window.__UI__ = { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch, ErrorBoundary };
 
 // Named exports for the dev-time vitest harness only. In the browser the file is
 // loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
 // these are valid there too; the app itself consumes primitives via window.__UI__.
-export { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch };
+export { Icon, Btn, KindTag, StatusPill, SourceBadge, DataTable, Flash, Drawer, Spinner, LoadingState, InlineError, GroupHeader, Checkbox, OrderBadge, Modal, Switch, ErrorBoundary };

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeui.db import get_conn
-from pipeui.workflow.create import create_source, find_source_by_pattern
+from pipeui.workflow.create import create_source, find_source_by_pattern, peek_header_columns
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.workflow.migration import migrate_column
 
@@ -127,6 +127,32 @@ async def register_source(
         record = next((r for r in rows if r["source_id"] == str(source_id)), None)
         return {"ok": True, "matched_existing": False, "source": record}
 
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.post("/peek-columns")
+async def peek_columns_route(file: UploadFile):
+    """Return only the header row's column names for the uploaded file.
+
+    Reads just the first row server-side (openpyxl read-only / a single csv row) so
+    the Register modal can populate its column picker without the browser parsing a
+    multi-hundred-thousand-row workbook on the main thread. Works for files too large
+    to round-trip through the JS heap.
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type '{suffix}'. Accepted: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        return {"columns": peek_header_columns(tmp_path)}
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
