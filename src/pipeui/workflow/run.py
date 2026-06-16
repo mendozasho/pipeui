@@ -44,6 +44,7 @@ import pandas as pd
 
 from pipeui.results import RunResult, ValidationRunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
+from pipeui.workflow.builtins import execute_builtin_step, get_builtin_steps
 from pipeui.workflow.bundles import pair_bundles
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.worker import call_function
@@ -634,6 +635,43 @@ def _transform_runresult(
     )
 
 
+def _builtin_result(
+    step: dict,
+    source_id: uuid.UUID | None,
+    *,
+    status: str,
+    error: str | None,
+    rows_affected: int | None,
+) -> dict:
+    """Build a step-results entry for a built-in step (join/pivot/filter).
+
+    Reuses the transform RunResult shape (function_type='transform') so the Results
+    screen renders it like any other transform step; the built-in type is the label.
+    """
+    btype = step["builtin_type"]
+    rr = RunResult(
+        function_name=btype,
+        function_type="transform",
+        source_id=source_id if source_id is not None else uuid.UUID(int=0),
+        bundle_key=step["step_id"],
+        label=normalize_label(btype),
+        status=status,
+        error=error,
+    )
+    entry = {
+        "source_function_map_id": None,
+        "step_id": step["step_id"],
+        "step_type": "builtin",
+        "builtin_type": btype,
+        "set_name": btype,
+        "rows_affected": rows_affected,
+        "rows_passed": None,
+        "rows_failed": None,
+    }
+    entry.update(rr.to_dict())
+    return entry
+
+
 def _execute_validation_step(
     original: pd.DataFrame,
     step: dict,
@@ -978,23 +1016,31 @@ def run_pipeline(
         return None
 
     steps = _fetch_steps(conn, source_id)
+    for s in steps:
+        s.setdefault("step_type", "function")
 
-    # Filter steps based on run_type. #266: a step qualifies when it CONTAINS a function
-    # of the requested type (not by a single dominant type), so a mixed/multi-function
-    # set is never excluded for the functions it does hold.
+    # Filter FUNCTION steps based on run_type. #266: a step qualifies when it CONTAINS a
+    # function of the requested type (not by a single dominant type), so a mixed/multi-
+    # function set is never excluded for the functions it does hold.
     if run_type == "transforms":
-        active_steps = [s for s in steps if _step_has(s, "transform")]
+        fn_steps = [s for s in steps if _step_has(s, "transform")]
     elif run_type == "validations":
-        active_steps = [s for s in steps if _step_has(s, "validation")]
+        fn_steps = [s for s in steps if _step_has(s, "validation")]
     elif run_type == "set":
-        if set_id is None:
-            active_steps = []
-        else:
-            active_steps = [s for s in steps if s["set_id"] == str(set_id)]
+        fn_steps = [s for s in steps if s["set_id"] == str(set_id)] if set_id is not None else []
     elif run_type == "all":
-        active_steps = steps
+        fn_steps = steps
     else:
-        active_steps = steps
+        fn_steps = steps
+
+    # Built-in steps (join/pivot/filter) live in source_builtin_map and share the
+    # position space. They reshape the working table, so they run as part of the
+    # transform chain — on full-pipeline and transforms runs, not on a validations-only
+    # or single-set run. Merge with function steps by position; Python's stable sort
+    # keeps function steps ahead of a built-in that ties the same position.
+    want_builtins = run_type in ("transforms", "all")
+    builtin_steps = get_builtin_steps(conn, source_id) if want_builtins else []
+    active_steps = sorted(fn_steps + builtin_steps, key=lambda s: s["position"])
 
     # Which function types this run processes; each step runs every function of these
     # types that it holds (a set is a transparent container).
@@ -1013,15 +1059,42 @@ def run_pipeline(
 
     working_df = original_df.copy()
 
-    # Drop prior staging tables (only when we'll write transforms)
-    has_transforms = want_transforms and any(_step_has(s, "transform") for s in active_steps)
-    if has_transforms:
+    # Drop prior staging tables when this run writes any (a transform step, or a
+    # built-in step which also reshapes and stages the working table).
+    writes_staging = any(
+        s.get("step_type") == "builtin"
+        or (want_transforms and _step_has(s, "transform"))
+        for s in active_steps
+    )
+    if writes_staging:
         _drop_prior_staging_tables(conn, source_id)
 
     ts = int(time.time())
     step_results = []
 
     for step in active_steps:
+        # Built-in step (join/pivot/filter): reshape the working table in place,
+        # stage it, and record a result. It is not a function set, so handle it
+        # before the function-step fields are read.
+        if step.get("step_type") == "builtin":
+            try:
+                working_df = execute_builtin_step(conn, working_df, step)
+                _write_staging_table(conn, source_id, working_df, ts)
+                step_results.append(
+                    _builtin_result(
+                        step, source_id, status="ok", error=None,
+                        rows_affected=len(working_df),
+                    )
+                )
+            except Exception as exc:
+                step_results.append(
+                    _builtin_result(
+                        step, source_id, status="failed", error=str(exc),
+                        rows_affected=None,
+                    )
+                )
+            continue
+
         sfm_id = step["source_function_map_id"]
         set_name = step["set_name"]
 
