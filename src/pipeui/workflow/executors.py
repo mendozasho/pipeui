@@ -25,7 +25,7 @@ import pandas as pd
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pipeui.workflow.context import StepContext
 
-from pipeui.workflow.context import BUILTIN, FUNCTION
+from pipeui.workflow.context import BUILTIN, FUNCTION, SET
 
 
 @dataclass
@@ -137,6 +137,62 @@ class FunctionStepExecutor:
         return StepExecResult(working=working, entries=entries, wrote_staging=wrote_staging)
 
 
+class FunctionSetExecutor:
+    """The function-set adapter (slice 4 — CONTEXT.md -> Function-set adapter).
+
+    A ``function set`` is flattened into a stream of uniform per-member executions:
+    the adapter expands the set's members into one single-member sub-context each and
+    dispatches it through ``STEP_EXECUTORS`` *by the member's own step type* — not
+    hardcoded to function — so a set behaves exactly like its members placed
+    individually, and a built-in member becomes additive later (#275) without
+    re-plumbing the contract (heterogeneous-member readiness).
+
+    Behavior preservation: a plain function member resolves to the per-member
+    ``FunctionStepExecutor`` (registered under ``FUNCTION``), which runs that one
+    function's transform/validation exactly as the pre-refactor whole-set executor
+    ran each function. The adapter threads the working frame member-to-member and
+    concatenates their entries; members share the run's timestamp, so the final
+    staging table holds the fully chained frame — identical to the single-step write.
+    """
+
+    def execute(self, ctx, working, env):
+        members = ctx.get("functions") or []
+        entries: list[dict] = []
+        wrote_staging = False
+
+        for member in members:
+            member_ctx = self._member_context(ctx, member)
+            executor = STEP_EXECUTORS.get(member_ctx.step_type)
+            if executor is None:
+                # No executor registered for this member's step type — skip it (the
+                # registry is the sole dispatch authority). A future built-in member
+                # registers under its step type to become runnable here.
+                continue
+            outcome = executor.execute(member_ctx, working, env)
+            working = outcome.working
+            entries.extend(outcome.entries)
+            wrote_staging = wrote_staging or outcome.wrote_staging
+
+        return StepExecResult(working=working, entries=entries, wrote_staging=wrote_staging)
+
+    @staticmethod
+    def _member_context(set_ctx: "StepContext", member: dict) -> "StepContext":
+        """Wrap one set member as a single-member step context.
+
+        The sub-context carries the set's step-level keys (``source_function_map_id``,
+        ``set_name``, ``set_id``, ``position``, ``output_targets``) with a one-element
+        ``functions`` list, so the per-member executor sees the exact step shape it saw
+        when the whole set ran. The member's step type (``member['step_type']``,
+        defaulting to ``FUNCTION``) is the registry key — type-agnostic dispatch.
+        """
+        from pipeui.workflow.context import StepContext
+
+        sub = dict(set_ctx.data)
+        sub["functions"] = [member]
+        sub["step_type"] = member.get("step_type", FUNCTION)
+        return StepContext(step_type=sub["step_type"], position=set_ctx.position, data=sub)
+
+
 class BuiltinStepExecutor:
     """Executes a built-in step (join/pivot/filter).
 
@@ -166,10 +222,13 @@ class BuiltinStepExecutor:
             return StepExecResult(working=working, entries=[entry], wrote_staging=False)
 
 
-# The step-type registry the runner dispatches through. Keyed by StepContext
-# step_type; both function and set steps resolve to the function executor (a set is
-# the function-step container — slice 4 expands its members on top of this).
+# The step-type registry the runner dispatches through, keyed by StepContext
+# step_type. A function-map row is a SET -> the function-set adapter, which flattens
+# the set and re-dispatches each member through this same registry by the member's
+# step type: a plain function member -> FUNCTION -> the per-member executor; a
+# built-in step -> BUILTIN. (Slice 4 — heterogeneous-member-ready dispatch.)
 STEP_EXECUTORS: dict[str, StepExecutor] = {
+    SET: FunctionSetExecutor(),
     FUNCTION: FunctionStepExecutor(),
     BUILTIN: BuiltinStepExecutor(),
 }
