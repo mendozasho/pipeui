@@ -35,6 +35,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from pipeui.ids import content_hash_id
@@ -1435,3 +1436,214 @@ def test_mixed_set_all_run_processes_every_function(db, tmp_path):
     ares = run_pipeline(db, source_id, "all")
     names = [s.get("function_name") for s in ares["steps"]]
     assert "gt0" in names and "dbl" in names, f"every function in the set must run: {names}"
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #1 — resolve_frame input-source seam
+#
+# resolve_frame(conn, source_id, mode) -> (frame, ref):
+#   raw         -> the source's instance table contents
+#   transformed -> the source's latest staging table, else materialize-if-absent
+#                  (run the source's pipeline once) — cycle-guarded, snapshot semantics
+#   ref carries a deterministic UUID5 result_id (transformed) tied to the RunResult
+#   identity scheme.  This slice does NOT change the join.
+# ---------------------------------------------------------------------------
+
+def _messy_source_and_ingest(db, tmp_path, name="messy"):
+    """A source with null-containing / type-messy real-world rows.
+
+    'amount' mixes ints with empty cells (NULL); 'region' mixes strings with empty
+    cells.  Ingested as a real instance table so resolve_frame reads true data.
+    """
+    path = make_csv(
+        tmp_path,
+        f"{name}.csv",
+        ["id", "amount", "region"],
+        [
+            ["r1", "10", "north"],
+            ["r2", "", "south"],     # null amount
+            ["r3", "30", ""],        # null region
+            ["r4", "", ""],          # both null
+        ],
+    )
+    source_id, failed = create_source(db, path, name, "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+    return source_id, path
+
+
+@pytest.mark.integration
+def test_resolve_frame_raw_returns_instance_table(db, tmp_path):
+    """AC1: resolve_frame(source, raw) returns the source's instance table contents."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    expected = db.execute(
+        f'SELECT * FROM "{instance_table_name(source_id)}"'
+    ).df()
+
+    frame, ref = resolve_frame(db, source_id, "raw")
+
+    assert list(frame.columns) == list(expected.columns)
+    assert len(frame) == len(expected)
+    # value-level equality (no rows dropped / corrupted)
+    assert frame.sort_values("id").reset_index(drop=True).equals(
+        expected.sort_values("id").reset_index(drop=True)
+    )
+    assert ref.mode == "raw"
+    assert ref.source_id == source_id
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_returns_latest_staging(db, tmp_path):
+    """AC2: resolve_frame(source, transformed) returns the latest staging table
+    contents when one exists (no re-run)."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    # Produce a staging table.
+    run_pipeline(db, source_id, "transforms")
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    expected = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+
+    frame, ref = resolve_frame(db, source_id, "transformed")
+
+    # Latest staging used as-is (the appended transform column is present).
+    assert "doubled_val" in frame.columns
+    assert len(frame) == len(expected)
+    # No new staging table was written (snapshot semantics — used existing).
+    assert _list_staging_tables(db, source_id) == staging
+    assert ref.mode == "transformed"
+    assert ref.result_id is not None
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_materializes_if_absent(db, tmp_path):
+    """AC3: resolve_frame(source, transformed) for a source with NO staging table
+    runs that source's pipeline once and returns its produced output."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    # No staging table exists yet.
+    assert _list_staging_tables(db, source_id) == []
+
+    frame, ref = resolve_frame(db, source_id, "transformed")
+
+    # Materialized on demand: the transform output column is present...
+    assert "doubled_val" in frame.columns
+    # ...and a staging table now exists.
+    assert len(_list_staging_tables(db, source_id)) == 1
+    # produced output reflects the transform (val * 2)
+    assert frame.sort_values("val")["doubled_val"].tolist() == [20, 40, 60]
+    assert ref.mode == "transformed"
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
+    """AC4: a transformed reference forming a cycle (A->C->A) raises an error naming
+    the sources in the cycle and does not loop."""
+    from pipeui.workflow.resolve import resolve_frame, TransformedCycleError
+    from pipeui.workflow.builtins import attach_builtin
+
+    # Two sources, each with a transformed-join pointing at the other.
+    src_a, _ = _register_source_and_ingest(db, tmp_path, name="a_src")
+    src_c, _ = _register_source_and_ingest(db, tmp_path, name="c_src")
+
+    # A joins C's transformed output; C joins A's transformed output.
+    join_a = {
+        "right_source_id": str(src_c), "join_type": "inner",
+        "use_transformed": True,
+        "on": [{"left_col": "id", "right_col": "id"}],
+    }
+    join_c = {
+        "right_source_id": str(src_a), "join_type": "inner",
+        "use_transformed": True,
+        "on": [{"left_col": "id", "right_col": "id"}],
+    }
+    assert attach_builtin(db, src_a, "join", join_a)["ok"]
+    assert attach_builtin(db, src_c, "join", join_c)["ok"]
+
+    with pytest.raises(TransformedCycleError) as exc:
+        resolve_frame(db, src_a, "transformed")
+
+    msg = str(exc.value)
+    assert str(src_a) in msg and str(src_c) in msg
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_result_id_is_deterministic(db, tmp_path):
+    """AC5: the ref returned for a transformed frame carries a deterministic UUID5
+    result_id (equal inputs -> equal id) consistent with the RunResult identity
+    scheme."""
+    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.results import RunResult
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    run_pipeline(db, source_id, "transforms")
+
+    _, ref1 = resolve_frame(db, source_id, "transformed")
+    _, ref2 = resolve_frame(db, source_id, "transformed")
+
+    # Same source + same latest staging snapshot -> same id.
+    assert ref1.result_id == ref2.result_id
+    # Consistent with the RunResult identity scheme (short UUID5 hex).
+    assert isinstance(ref1.result_id, str)
+    assert len(ref1.result_id) == len(
+        RunResult(
+            function_name="x", function_type="transform",
+            source_id=source_id, bundle_key="", label="x", status="ok",
+        ).result_id
+    )
+
+
+@pytest.mark.integration
+def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
+    """AC6: resolve_frame returns correct rows over null-containing / type-messy
+    real-world data without dropping or corrupting rows."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _messy_source_and_ingest(db, tmp_path)
+    expected = db.execute(
+        f'SELECT * FROM "{instance_table_name(source_id)}"'
+    ).df()
+
+    frame, _ = resolve_frame(db, source_id, "raw")
+
+    # All four rows present — nulls not dropped.
+    assert len(frame) == 4
+    assert sorted(frame["id"].tolist()) == ["r1", "r2", "r3", "r4"]
+    # Null cells preserved (not coerced to 0 / "").
+    assert frame.sort_values("id").reset_index(drop=True).equals(
+        expected.sort_values("id").reset_index(drop=True)
+    )
+    # The both-null row r4 still has nulls in amount and region.
+    r4 = frame[frame["id"] == "r4"].iloc[0]
+    assert pd.isna(r4["amount"]) and pd.isna(r4["region"])
