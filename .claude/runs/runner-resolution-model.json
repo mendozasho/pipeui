@@ -2,7 +2,7 @@
   "feature_slug": "runner-resolution-model",
   "ledger_hash": "a0e9c7deda8e77d64aea6fd3e5e07585deb5ffcf73ec1125bdccdbb8c7889eb6",
   "accumulator_branch": "release/pipeline-runner",
-  "current_round": 6,
+  "current_round": "done",
   "slices": {
     "1": {
       "status": "integrated",
@@ -51,5 +51,7 @@
     3,
     4,
     5
-  ]
+  ],
+  "final_pr": 28,
+  "note": "Bug-fix batch landed on main (#10) mid-run; accumulator rebased --onto origin/main (f93ccc3 tree == main tree, clean); bugfix commits dropped. PR #28 release/pipeline-runner->main, feature-only, Closes #11-15."
 }
