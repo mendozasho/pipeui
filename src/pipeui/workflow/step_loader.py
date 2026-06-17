@@ -1,6 +1,6 @@
 """Step loading (L1) — read the map tables into a source's ordered step list.
 
-``_fetch_steps`` reads ``source_function_map`` / ``function_set_map`` / ``parameter``
+``fetch_steps`` reads ``source_function_map`` / ``function_set_map`` / ``parameter``
 (and the per-function output config) into the function-step list; ``get_builtin_steps``
 reads ``source_builtin_map`` into the built-in-step list (CONTEXT.md → Runner module
 responsibilities → ``step_loader.py`` (L1)). Pure read — no dispatch, no execution.
@@ -23,7 +23,7 @@ from pipeui.workflow.step import (
 )
 
 
-def _fetch_steps(
+def fetch_steps(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
 ) -> list[FunctionStepContext]:

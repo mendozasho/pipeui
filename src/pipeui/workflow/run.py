@@ -44,13 +44,13 @@ import pandas as pd
 from pipeui.results import RunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow import executors as _executors
-from pipeui.workflow.executors import StepRunEnv, _step_has
+from pipeui.workflow.executors import StepRunEnv, step_has
 from pipeui.workflow.step import BUILTIN
 from pipeui.workflow.staging import (
-    _drop_prior_staging_tables,
-    _staging_prefix,
+    drop_prior_staging_tables,
+    staging_prefix,
 )
-from pipeui.workflow.step_loader import _fetch_steps, get_builtin_steps
+from pipeui.workflow.step_loader import fetch_steps, get_builtin_steps
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ def get_staging_rows(
     Returns {"columns": [...], "rows": [...]} — empty lists if no staging
     table exists yet (not an error).
     """
-    prefix = _staging_prefix(source_id)
+    prefix = staging_prefix(source_id)
     rows = conn.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
     ).fetchall()
@@ -152,18 +152,18 @@ def run_pipeline(
     if src is None:
         return None
 
-    # _fetch_steps produces the typed FunctionStepContext carrier (with FunctionSpec
+    # fetch_steps produces the typed FunctionStepContext carrier (with FunctionSpec
     # members); get_builtin_steps produces the typed BuiltinStepContext carrier. The
     # runner reads typed fields, never dict keys.
-    steps = _fetch_steps(conn, source_id)
+    steps = fetch_steps(conn, source_id)
 
     # Filter FUNCTION steps based on run_type. #266: a step qualifies when it CONTAINS a
     # function of the requested type (not by a single dominant type), so a mixed/multi-
     # function set is never excluded for the functions it does hold.
     if run_type == "transforms":
-        fn_steps = [s for s in steps if _step_has(s, "transform")]
+        fn_steps = [s for s in steps if step_has(s, "transform")]
     elif run_type == "validations":
-        fn_steps = [s for s in steps if _step_has(s, "validation")]
+        fn_steps = [s for s in steps if step_has(s, "validation")]
     elif run_type == "set":
         fn_steps = [s for s in steps if s.set_id == str(set_id)] if set_id is not None else []
     elif run_type == "all":
@@ -201,11 +201,11 @@ def run_pipeline(
     # built-in step which also reshapes and stages the working table).
     writes_staging = any(
         s.step_type == BUILTIN
-        or (want_transforms and _step_has(s, "transform"))
+        or (want_transforms and step_has(s, "transform"))
         for s in active_steps
     )
     if writes_staging:
-        _drop_prior_staging_tables(conn, source_id)
+        drop_prior_staging_tables(conn, source_id)
 
     ts = int(time.time())
     step_results = []
