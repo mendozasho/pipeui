@@ -151,3 +151,51 @@ The derived `UUID5` identity for a consumed transformed snapshot (over source + 
 timestamp), tied into the `RunResult` scheme so the transformed output a step joins against is a
 first-class, traceable result like any run.
 _Avoid_: staging id, snapshot key.
+
+## Runner module responsibilities (SRP)
+
+The runner is divided so each module has **one reason to change**. Dependencies flow strictly
+**down** the layers; no module imports one above it, and there are **no in-function imports to dodge
+a cycle** (an in-function import means a responsibility is in the wrong layer — move it down or
+inject it). This table is the canonical "where does new code go" map.
+
+| Module (`pipeui/workflow/`) | Single responsibility (its one reason to change) | New code goes here when… |
+| --- | --- | --- |
+| `step.py` *(L0)* | **Step description** — the typed, logic-free description of one step (`StepContext` + variants + `from_*` factories). No DB, no dispatch, no execution. | a step gains a field, or there's a new way to construct a step from a map row (a new `from_*`). |
+| `step_loader.py` *(L1)* | **Step loading** — read the map tables into a source's ordered step list (`_fetch_steps`, `get_builtin_steps`). Pure read. | a new step source or ordering rule. |
+| `staging.py` *(L1)* | **Staging store** — write/read/drop a source's staging tables (its transformed-output store). | anything about how transformed output is stored. |
+| `resolve.py` *(L2)* | **Input resolution** — where a step reads its input: raw instance table vs transformed output, materialize-if-absent, cycle guard (`resolve_frame`, `FrameRef`). Runner **injected** (no orchestrator import). | a new input mode, materialize/cycle rule, or provenance field. |
+| `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter. | a new built-in type (e.g. rename) — its validator + `_execute_*`. |
+| `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into `RunResult`s. | a new **step type** (a new `StepExecutor` registered in `STEP_EXECUTORS`), or new per-function execution mechanics. |
+| `run.py` *(L4)* | **Run orchestration** — drive a source's whole run end-to-end (load → resolve → execute each step via the registry → stage → collect); cross-source runners. Injects `run_pipeline` into `resolve`. | a new run phase, run-type, or cross-source entry point. |
+| `results.py` *(L0, pkg root)* | **Result identity/data** — `RunResult`/`ValidationRunResult`, the single source of truth for result data. | a new result field/shape (never an ad-hoc dict). |
+
+Dependency direction: `step` → `staging`/`step_loader` → `resolve`/`builtins` → `executors` → `run`.
+
+### Module contracts (carriers)
+
+Data crosses a module boundary **only** through a carrier: a **frozen, behavior-free dataclass**
+that is the sole legal shape for that boundary. Modules talk through carriers, never by reaching
+into each other's internals. To change what crosses a boundary, change its carrier (a deliberate,
+tested contract edit) — never an incidental dict key.
+
+| Carrier (defined in) | Contract | Boundary: producer → consumer | Enforcement |
+| --- | --- | --- | --- |
+| `StepContext` + `FunctionStepContext` / `BuiltinStepContext` (`step.py`) | typed, logic-free description of one step | `step_loader` → `step.py` factories → `run` (dispatch) + `executors` | `frozen=True`; typed fields (no `data` dict / `get`); built only via `from_*` factories; the variant returned **is** the contract |
+| `FunctionSpec` (`step.py`) | one member of a function step | `step_loader` → `executors` (set adapter) | `frozen=True`; `params`/`builtin_config` are typed `Mapping` (the declared depth boundary) |
+| `StepRunEnv` (`executors.py`) | the run-scoped inputs an executor needs | `run` → `executors` | `frozen=True`; fully populated by the orchestrator; carries the injected `run_transforms` runner |
+| `StepExecResult` (`executors.py`) | the complete outcome of running one step | `executors` → `run` | `frozen=True`; `entries` are `RunResult`-derived, never ad-hoc dicts |
+| `RunResult` / `ValidationRunResult` (`results.py`) | canonical identity + data of one result | `executors` (mechanics) → `run` + Results/export | `frozen=True`; deterministic `result_id` |
+| `FrameRef` (`resolve.py`) | provenance of a resolved input frame | `resolve` → `builtins` (`_execute_join`) + `api/sources`, then into `RunResult.consumed_result_id` | `frozen=True`; invariant `result_id is None ⟺ mode == RAW` (in `__post_init__`); returned as `(frame, FrameRef)` |
+| `run_transforms` runner *(behavioral port, not data)* (`resolve.py` declares the type) | "produce a source's transformed output by running its transforms" | `run` → `resolve` (DIP) | `resolve` declares the callable signature; orchestrator supplies it; **zero `pipeui.workflow.run` import in `resolve`** |
+
+Enforcement is real, not aspirational: frozen dataclasses block mutation; `__post_init__` invariants
+make illegal carriers unconstructable; one contract test per carrier asserts the producer fills the
+full shape and the consumer reads only declared fields; the hostile-auditor's in-function-import and
+"results use `RunResult`, not dicts" checks guard it at review.
+
+`StepContext` is variant-typed (not a `data` dict): a base `StepContext(step_type, position)` with
+`FunctionStepContext` (`source_function_map_id`, `set_id`, `set_name`, `functions: tuple[FunctionSpec, …]`,
+`output_mode`, `append_name`, `output_targets`) and `BuiltinStepContext` (`step_id`, `builtin_type`,
+`builtin_config`). `from_function`/`from_set` build the function variant; `from_builtin` builds the
+built-in variant; each executor consumes its matching variant.
