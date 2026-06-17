@@ -597,3 +597,109 @@ def test_run_returns_one_runresult_per_bundle(client, db, tmp_path):
     assert labels == ["a", "b", "c"]
     # Distinct per-bundle identity.
     assert len({s["result_id"] for s in steps}) == 3
+
+
+# ---------------------------------------------------------------------------
+# runner-resolution-model slice 5 (#15 / #21 / #22) — behavior-preservation lock.
+#
+# Slices 3+4 moved run_pipeline's dispatch onto the STEP_EXECUTORS registry (the
+# unified resolution model). The run / results / staging API paths already route
+# through run_pipeline, so the migration is "already done" by construction — these
+# tests LOCK that:
+#   * #21[0]: the run endpoint's response equals a direct run_pipeline call (shape
+#     + content preserved across the migration), AND the registry was the execution
+#     path (a spy proves no endpoint bypasses the unified model).
+#   * #21[1]: same for the results-export endpoint (a results/staging path).
+#   * #22[2]: no execution code was left dead by the registry swap to remove (every
+#     run.py helper retains a live caller — see the build record's grep); the only
+#     thing to guard is that the registry stays the sole execution path. The
+#     registry-routing assertion below IS that behavior-preserving guard — if a
+#     future change re-introduced a superseded bypass path, these go red.
+# ---------------------------------------------------------------------------
+
+import pipeui.workflow.executors as _executors_mod  # noqa: E402
+
+
+class _SpyExecutor:
+    """Wraps a real StepExecutor, recording each dispatch through the registry."""
+
+    def __init__(self, inner, log):
+        self._inner = inner
+        self._log = log
+
+    def execute(self, ctx, working, env):
+        self._log.append(ctx.step_type)
+        return self._inner.execute(ctx, working, env)
+
+
+def _spy_registry(monkeypatch):
+    """Replace STEP_EXECUTORS with spies; return the dispatch-log list.
+
+    Patches the module-level dict run_pipeline reads (it imports the module and reads
+    `_executors.STEP_EXECUTORS`), so any execution that does NOT go through the
+    registry produces an empty log — proving a bypass.
+    """
+    log: list[str] = []
+    spied = {k: _SpyExecutor(v, log) for k, v in _executors_mod.STEP_EXECUTORS.items()}
+    monkeypatch.setattr(_executors_mod, "STEP_EXECUTORS", spied)
+    return log
+
+
+@pytest.mark.integration
+def test_run_endpoint_routes_through_registry_and_matches_run_pipeline(client, db, tmp_path, monkeypatch):
+    """#21[0]: the run endpoint produces the same shape/content as a direct run_pipeline
+    call, and dispatches through the STEP_EXECUTORS registry (unified model — no bypass)."""
+    from pipeui.workflow.run import run_pipeline
+
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = write_fn(tmp_path, "lock_double", "data", "return data * 2")
+    seed_transform_step(db, source_id, col_id, "lock_double", fn_path)
+
+    # Direct call to the unified model = the reference output.
+    direct = run_pipeline(db, source_id, "transforms")
+
+    # Endpoint call, with the registry spied.
+    log = _spy_registry(monkeypatch)
+    resp = client.post(f"/pipelines/{source_id}/run?run_type=transforms")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Behavior preserved: same keys, same per-step content (result_id is the UUID5
+    # identity, stable across equal inputs, so equality is meaningful).
+    assert body["run_type"] == direct["run_type"]
+    assert len(body["steps"]) == len(direct["steps"]) == 1
+    e_step, d_step = body["steps"][0], direct["steps"][0]
+    for key in ("status", "function_type", "result_id", "label", "rows_affected"):
+        assert e_step[key] == d_step[key], f"{key}: {e_step.get(key)!r} != {d_step.get(key)!r}"
+
+    # Routed through the unified model: the registry executed the step.
+    assert log, "run endpoint did not dispatch through STEP_EXECUTORS — it bypassed the unified model"
+
+
+@pytest.mark.integration
+def test_results_export_endpoint_routes_through_registry(client, db, tmp_path, monkeypatch):
+    """#21[1] / #22[2]: the results-export endpoint (a results/staging path) runs the
+    pipeline through the STEP_EXECUTORS registry — the unified execution model, with no
+    superseded bypass path surviving."""
+    source_id, _ = register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = write_fn(tmp_path, "lock_gt5", "data", "return data > 5")
+    seed_validation_step(db, source_id, col_id, "lock_gt5", fn_path, position=0)
+
+    log = _spy_registry(monkeypatch)
+    resp = client.get(f"/pipelines/{source_id}/export/results?run_type=validations")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "columns" in body and "rows" in body  # results-report shape preserved
+    assert log, "results-export endpoint bypassed the STEP_EXECUTORS registry"

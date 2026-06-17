@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 
+from pipeui.config import DB_PATH
 from pipeui.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
 from pipeui.schema.queries import DDL as _DDL, SEED_BUILTINS as _SEED_BUILTINS
 
@@ -53,7 +54,7 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
 _REGISTRY_SCHEMA_MIGRATIONS: list[tuple[str, str, str]] = [
     ("function_registry", "is_active", "BOOLEAN DEFAULT TRUE"),
     # runner-execution: columns added to the DDL by slices 2 and 4b. Existing DBs
-    # need them backfilled or get_pipeline/_fetch_steps/attach 500 (see #254).
+    # need them backfilled or get_pipeline/fetch_steps/attach 500 (see #254).
     # NOT NULL is omitted: DuckDB rejects ADD COLUMN with constraints. DEFAULT 0
     # backfills existing rows; inserts always supply position, so no NULL arises.
     ("alias_map", "position", "INTEGER DEFAULT 0"),
@@ -138,8 +139,6 @@ def get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
 
 def get_conn():
     """FastAPI Depends provider — yields a connected, schema-initialised DuckDB connection."""
-    from typing import Generator
-    from pipeui.main import DB_PATH
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
     try:

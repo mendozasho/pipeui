@@ -1087,3 +1087,66 @@ def test_transformed_export_route_returns_empty_payload_for_registered_source(cl
     resp = client.get(f"/pipelines/{source_id}/export/transformed")
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"columns": [], "rows": []}
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 (#17) — right-column-fetch endpoint honors the transformed flag.
+#
+#   AC3. The right-column-fetch endpoint returns the right source's TRANSFORMED
+#        column set when the transformed flag is set, and the RAW columns when not.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def sources_client(db):
+    """TestClient for the sources router wired to the test's DuckDB sandbox."""
+    from pipeui.api.sources import router as sources_router
+    from pipeui.api.sources import get_conn as sources_get_conn
+
+    app = FastAPI()
+    app.include_router(sources_router)
+    app.dependency_overrides[sources_get_conn] = lambda: db
+    yield TestClient(app)
+
+
+@pytest.mark.integration
+def test_join_columns_endpoint_raw_vs_transformed(sources_client, db):
+    """AC3: /sources/{id}/join-columns returns raw columns by default and the
+    transformed column set when transformed=true.
+
+    Raw = the source's registered columns. Transformed = the columns of the source's
+    resolved transformed output (its latest staging table), which here carries an
+    extra column the raw table does not.
+    """
+    from pipeui.sql_user_table import instance_table_name
+
+    source_id, _ = make_registered_source(db, n_columns=2)  # raw cols: col_0, col_1
+
+    # Build the raw instance table and a transformed staging table with an extra column.
+    db.execute(
+        f'CREATE TABLE "{instance_table_name(source_id)}" AS '
+        "SELECT * FROM (VALUES (1, 10)) AS t(col_0, col_1)"
+    )
+    db.execute(
+        f'CREATE TABLE "staging_{source_id.hex[:8]}_2000" AS '
+        "SELECT * FROM (VALUES (1, 10, 'x')) AS t(col_0, col_1, derived)"
+    )
+
+    # Raw (no flag): the registered raw column set, no 'derived'.
+    raw_resp = sources_client.get(f"/sources/{source_id}/join-columns")
+    assert raw_resp.status_code == 200, raw_resp.text
+    raw_names = [c["column_name"] for c in raw_resp.json()["columns"]]
+    assert "derived" not in raw_names
+    assert {"col_0", "col_1"} <= set(raw_names)
+
+    # Transformed flag: the transformed column set, including 'derived'.
+    xf_resp = sources_client.get(f"/sources/{source_id}/join-columns?transformed=true")
+    assert xf_resp.status_code == 200, xf_resp.text
+    xf_names = [c["column_name"] for c in xf_resp.json()["columns"]]
+    assert "derived" in xf_names
+
+
+@pytest.mark.integration
+def test_join_columns_endpoint_404_unknown_source(sources_client):
+    """AC3 guard: an unknown source_id is a 404, never a 500."""
+    resp = sources_client.get(f"/sources/{uuid.uuid4()}/join-columns")
+    assert resp.status_code == 404

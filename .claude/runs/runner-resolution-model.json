@@ -1,0 +1,57 @@
+{
+  "feature_slug": "runner-resolution-model",
+  "ledger_hash": "a0e9c7deda8e77d64aea6fd3e5e07585deb5ffcf73ec1125bdccdbb8c7889eb6",
+  "accumulator_branch": "release/pipeline-runner",
+  "current_round": "done",
+  "slices": {
+    "1": {
+      "status": "integrated",
+      "branch": "feature/runner-resolution-model-1",
+      "workspace": "main-checkout",
+      "pr": 23,
+      "integrated_at": "2026-06-16T20:53:19Z",
+      "note": "merge 56905ee; run.py NOT touched (predicted but unused) \u2014 footprint narrowed"
+    },
+    "2": {
+      "status": "integrated",
+      "branch": "feature/runner-resolution-model-2",
+      "workspace": "main-checkout",
+      "pr": 24,
+      "integrated_at": "a7009bf",
+      "note": "merge a7009bf; api/pipelines.py predicted but unused (endpoint went to sources.py)"
+    },
+    "3": {
+      "status": "integrated",
+      "branch": "feature/runner-resolution-model-3",
+      "workspace": "main-checkout",
+      "pr": 25,
+      "integrated_at": "8bda774",
+      "note": "merge 8bda774; builtins.py predicted but untouched; behavior preserved 479 passed"
+    },
+    "4": {
+      "status": "integrated",
+      "branch": "feature/runner-resolution-model-4",
+      "workspace": "main-checkout",
+      "pr": 26,
+      "integrated_at": "b9b56ee",
+      "note": "merge b9b56ee; edited context.py not predicted run.py (no conflict, serial)"
+    },
+    "5": {
+      "status": "integrated",
+      "branch": "feature/runner-resolution-model-5",
+      "workspace": "main-checkout",
+      "pr": 27,
+      "integrated_at": "2216293",
+      "note": "merge 2216293; migration already done by 3+4 (verify+lock); nothing dead to remove"
+    }
+  },
+  "integration_order": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "final_pr": 28,
+  "note": "Bug-fix batch landed on main (#10) mid-run; accumulator rebased --onto origin/main (f93ccc3 tree == main tree, clean); bugfix commits dropped. PR #28 release/pipeline-runner->main, feature-only, Closes #11-15."
+}

@@ -1,6 +1,6 @@
 import pytest
 
-from pipeui.workflow.staging import CreateFlowCache
+from pipeui.workflow.create import CreateFlowCache
 
 
 @pytest.fixture

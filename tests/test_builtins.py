@@ -37,7 +37,23 @@ from pipeui.workflow.builtins import (
     patch_builtin,
 )
 from pipeui.workflow.run import run_pipeline
+from pipeui.workflow.step import StepContext
 from tests.conftest import make_registered_source
+
+
+def _builtin_step(builtin_type: str, builtin_config: dict, *, step_id="s", position=0):
+    """Build the typed BuiltinStepContext carrier execute_builtin_step now consumes.
+
+    execute_builtin_step's input boundary is the BuiltinStepContext carrier (the
+    loader/executor producer); these tests construct it via the factory exactly as
+    the loader does."""
+    return StepContext.from_builtin({
+        "step_id": step_id,
+        "step_type": "builtin",
+        "builtin_type": builtin_type,
+        "builtin_config": builtin_config,
+        "position": position,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +320,8 @@ def test_execute_builtin_join(db):
         "on": [{"left_col": "id", "right_col": "id"}],
         "keep_columns": "all",
     }
-    step = {"builtin_type": "join", "builtin_config": cfg}
-    result = execute_builtin_step(db, left_df, step)
+    step = _builtin_step("join", cfg)
+    result, _ = execute_builtin_step(db, left_df, step)
 
     assert isinstance(result, pd.DataFrame)
     # Inner join on id: rows 1 and 2 match
@@ -329,8 +345,8 @@ def test_execute_builtin_pivot(db):
         "pivot_column": "category",
         "value_columns": [{"col_name": "sales", "aggregations": ["sum"]}],
     }
-    step = {"builtin_type": "pivot", "builtin_config": cfg}
-    result = execute_builtin_step(db, df, step)
+    step = _builtin_step("pivot", cfg)
+    result, _ = execute_builtin_step(db, df, step)
 
     assert isinstance(result, pd.DataFrame)
     cols = list(result.columns)
@@ -437,7 +453,7 @@ def test_execute_builtin_filter_operators(db):
     df = pd.DataFrame({"k": ["a", "b", "c", None], "n": [1, 5, 10, 7]})
 
     def run(cfg):
-        return execute_builtin_step(db, df, {"builtin_type": "filter", "builtin_config": cfg})
+        return execute_builtin_step(db, df, _builtin_step("filter", cfg))[0]
 
     assert list(run({"column": "n", "operator": "gte", "value": "5"})["n"]) == [5, 10, 7]
     assert list(run({"column": "n", "operator": "eq", "value": "10"})["n"]) == [10]
@@ -481,3 +497,208 @@ def test_run_pipeline_validations_only_skips_builtins(db):
     out = run_pipeline(db, source_id, "validations")
     assert out is not None
     assert [s for s in out["steps"] if s.get("step_type") == "builtin"] == []
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 (#16) — _execute_join honors use_transformed via resolve_frame
+#
+#   J0 (AC0). use_transformed=false joins the right source's RAW instance table
+#             (behavior unchanged).
+#   J1 (AC1). use_transformed=true joins the right source's TRANSFORMED frame
+#             resolved via resolve_frame (its latest staging table).
+#   J2 (AC2). A transformed join against a never-run right source materializes it
+#             on demand; the join output reflects the right source's transforms.
+#   J5 (AC5). A join over null-containing / type-messy keys behaves correctly.
+# ---------------------------------------------------------------------------
+
+def _join_cfg(right_id, *, use_transformed, join_type="inner", on=None):
+    return {
+        "right_source_id": str(right_id),
+        "use_transformed": use_transformed,
+        "join_type": join_type,
+        "on": on or [{"left_col": "id", "right_col": "id"}],
+        "keep_columns": "all",
+    }
+
+
+def test_execute_join_raw_unchanged_when_use_transformed_false(db):
+    """J0 (AC0): use_transformed=false joins the RAW instance table — even when a
+    transformed staging table also exists, raw is what's joined (unchanged behavior)."""
+    left_id, _ = _make_source(db, "jl0")
+    right_id, _ = _make_source(db, "jr0")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]})
+    raw_right = pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # A *different* transformed staging table exists for the right source — must be ignored.
+    db.execute(
+        f'CREATE TABLE "staging_{right_id.hex[:8]}_999" AS '
+        "SELECT * FROM (VALUES (1, 'XFORM')) AS t(id, rtag)"
+    )
+
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=False))
+    result, _ = execute_builtin_step(db, left_df, step)
+
+    # Inner join on id against RAW right: ids 1,2 match; tags are the raw ones.
+    assert len(result) == 2
+    assert set(result["rtag"]) == {"raw1", "raw2"}
+
+
+def test_execute_join_transformed_uses_resolved_frame(db):
+    """J1 (AC1): use_transformed=true joins the right source's latest staging frame
+    (its transformed output), not the raw instance table."""
+    left_id, _ = _make_source(db, "jl1")
+    right_id, _ = _make_source(db, "jr1")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]})
+    raw_right = pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # The right source's transformed output (latest staging): same keys, different values.
+    db.execute(
+        f'CREATE TABLE "staging_{right_id.hex[:8]}_1000" AS '
+        "SELECT * FROM (VALUES (1, 'XF1'), (2, 'XF2'), (3, 'XF3')) AS t(id, rtag)"
+    )
+
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=True))
+    result, _ = execute_builtin_step(
+        db, left_df, step,
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
+
+    # Inner join on id against the TRANSFORMED frame: ids 1,2,3 match; tags are transformed.
+    assert len(result) == 3
+    assert set(result["rtag"]) == {"XF1", "XF2", "XF3"}
+
+
+@pytest.mark.integration
+def test_execute_join_transformed_materializes_never_run_right_source(db):
+    """J2 (AC2): a transformed join against a right source that has never run
+    materializes it on demand; the join output reflects the right source's transforms."""
+    left_id, _ = _make_source(db, "jl2")
+    right_id, _ = _make_source(db, "jr2")
+
+    left_df = pd.DataFrame({"id": [1, 2, 3, 4], "lval": [10, 20, 30, 40]})
+    # Right raw has 4 rows; a filter transform on the right keeps amount > 100.
+    raw_right = pd.DataFrame({"id": [1, 2, 3, 4], "amount": [50, 200, 75, 400]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    # Right source has a transform but has NEVER been run (no staging table yet).
+    assert attach_builtin(
+        db, right_id, "filter", {"column": "amount", "operator": "gt", "value": "100"}
+    )["ok"]
+
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=True))
+    result, _ = execute_builtin_step(
+        db, left_df, step,
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
+
+    # resolve_frame ran the right source's pipeline: only ids 2 and 4 survive the filter,
+    # so the inner join keeps exactly those two rows.
+    assert set(result["id"]) == {2, 4}
+    assert set(result["amount"]) == {200, 400}
+
+
+def test_execute_join_messy_null_keys(db):
+    """J5 (AC5): a join over null-containing / type-messy keys behaves correctly —
+    NULL keys do not match (SQL semantics) and no rows are dropped or corrupted."""
+    left_id, _ = _make_source(db, "jl5")
+    right_id, _ = _make_source(db, "jr5")
+
+    # Mixed-content / NULL-bearing keys on both sides (VARCHAR keys).
+    left_df = pd.DataFrame({"key": ["a", None, "b", "c"], "lval": [1, 2, 3, 4]})
+    raw_right = pd.DataFrame({"key": ["a", "b", None, "z"], "rval": [100, 200, 300, 400]})
+    _make_instance_table(db, left_id, left_df)
+    _make_instance_table(db, right_id, raw_right)
+
+    step = _builtin_step("join", _join_cfg(
+        right_id, use_transformed=False, on=[{"left_col": "key", "right_col": "key"}]
+    ))
+    result, _ = execute_builtin_step(db, left_df, step)
+
+    # Only non-null matching keys join: 'a' and 'b'. NULL=NULL never matches.
+    matched = result[["key", "lval", "rval"]].dropna(subset=["key"])
+    assert set(matched["key"]) == {"a", "b"}
+    assert len(result) == 2
+    # Values are paired correctly, not corrupted.
+    by_key = {r["key"]: (r["lval"], r["rval"]) for _, r in result.iterrows()}
+    assert by_key["a"] == (1, 100)
+    assert by_key["b"] == (3, 200)
+
+
+# ---------------------------------------------------------------------------
+# Consumed transformed-output lineage (PRD User Story 7)
+#
+#   A join that consumes a TRANSFORMED right source records that result's
+#   result_id on its step-result entry; a RAW join records None. The id equals
+#   the one resolve_frame returns for the same (source, transformed) reference.
+# ---------------------------------------------------------------------------
+
+def _attach_join_to_source(conn, left_id, right_id, *, use_transformed, on=None):
+    """Attach a join built-in on left_id against right_id and return its step_id."""
+    cfg = {
+        "right_source_id": str(right_id),
+        "use_transformed": use_transformed,
+        "join_type": "inner",
+        "on": on or [{"left_col": "id", "right_col": "id"}],
+        "keep_columns": "all",
+    }
+    res = attach_builtin(conn, left_id, "join", cfg)
+    assert res["ok"], res
+    return res["step_id"]
+
+
+@pytest.mark.integration
+def test_transformed_join_step_result_carries_consumed_result_id(db):
+    """A TRANSFORMED join's run_pipeline step entry carries consumed_result_id equal
+    to the result_id resolve_frame returns for the same transformed reference."""
+    from pipeui.workflow.resolve import TRANSFORMED, resolve_frame
+
+    left_id, _ = _make_source(db, "cjl")
+    right_id, _ = _make_source(db, "cjr")
+
+    _make_instance_table(db, left_id, pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]}))
+    _make_instance_table(db, right_id, pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]}))
+    # The right source's transformed output (its latest staging table).
+    db.execute(
+        f'CREATE TABLE "staging_{right_id.hex[:8]}_2000" AS '
+        "SELECT * FROM (VALUES (1, 'XF1'), (2, 'XF2'), (3, 'XF3')) AS t(id, rtag)"
+    )
+
+    _attach_join_to_source(db, left_id, right_id, use_transformed=True)
+
+    out = run_pipeline(db, left_id, "all")
+    builtin_results = [s for s in out["steps"] if s.get("step_type") == "builtin"]
+    assert len(builtin_results) == 1
+    entry = builtin_results[0]
+    assert entry["status"] == "ok", entry.get("error")
+
+    # The id the join consumed equals resolve_frame's transformed result_id for the right source.
+    _frame, ref = resolve_frame(db, right_id, TRANSFORMED)
+    assert entry["consumed_result_id"] == ref.result_id
+    assert entry["consumed_result_id"] is not None
+
+
+@pytest.mark.integration
+def test_raw_join_step_result_has_no_consumed_result_id(db):
+    """A RAW join consumes the source's own data, not a produced result — its step
+    entry's consumed_result_id is None."""
+    left_id, _ = _make_source(db, "rjl")
+    right_id, _ = _make_source(db, "rjr")
+
+    _make_instance_table(db, left_id, pd.DataFrame({"id": [1, 2, 3], "lval": [10, 20, 30]}))
+    _make_instance_table(db, right_id, pd.DataFrame({"id": [1, 2, 4], "rtag": ["raw1", "raw2", "raw4"]}))
+
+    _attach_join_to_source(db, left_id, right_id, use_transformed=False)
+
+    out = run_pipeline(db, left_id, "all")
+    builtin_results = [s for s in out["steps"] if s.get("step_type") == "builtin"]
+    assert len(builtin_results) == 1
+    entry = builtin_results[0]
+    assert entry["status"] == "ok", entry.get("error")
+    assert entry["consumed_result_id"] is None

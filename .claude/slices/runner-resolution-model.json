@@ -1,0 +1,271 @@
+{
+  "feature_slug": "runner-resolution-model",
+  "slice_status": "frozen",
+  "source_prd_hash": "e47c3aff62f81e54be47c8652e27bc40d3c79f1175295404411810d650994fe5",
+  "decomposition": [
+    {
+      "slice_id": 1,
+      "slice_name": "resolve_frame input-source seam",
+      "intent": "Introduce the runner-owned input-source resolution seam that turns a (source, raw|transformed) reference into a frame plus a provenance ref, with materialize-if-absent and a transformed-output result_id tied into the RunResult scheme.",
+      "layers": [
+        "data",
+        "business_logic"
+      ],
+      "scope": "New resolve_frame(source, raw|transformed) -> (frame, ref). raw resolves to the instance table; transformed resolves to the latest staging table, else runs the source's pipeline once to materialize it (cycle-guarded, snapshot semantics). ref carries a deterministic UUID5 result_id derived with the RunResult identity helper. Does NOT change the join yet.",
+      "size": "M",
+      "acceptance": [
+        "resolve_frame(source, raw) returns the source's instance table contents.",
+        "resolve_frame(source, transformed) returns the source's latest staging table contents when one exists.",
+        "resolve_frame(source, transformed) for a source with no staging table runs that source's pipeline once and returns its produced output (materialize-if-absent).",
+        "A transformed reference forming a cycle (A->C->A) raises an error naming the sources in the cycle and does not loop.",
+        "The ref returned for a transformed frame carries a deterministic UUID5 result_id (equal inputs -> equal id) consistent with the RunResult identity scheme.",
+        "resolve_frame returns correct rows over null-containing / type-messy real-world data without dropping or corrupting rows."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        "src/pipeui/workflow/resolve.py",
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/results.py",
+        "tests/test_run_workflow.py",
+        ".claude/runs/runner-resolution-model/1.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/workflow/run.py",
+          "shared_with": [
+            3,
+            4,
+            5
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_run_workflow.py",
+          "shared_with": [
+            3,
+            4
+          ],
+          "access": "modifies"
+        }
+      ]
+    },
+    {
+      "slice_id": 2,
+      "slice_name": "Join honors use_transformed",
+      "intent": "Fix the dead use_transformed join toggle by reading the right-hand source through resolve_frame, and make the right-column-fetch endpoint return transformed columns when the flag is set.",
+      "layers": [
+        "business_logic",
+        "api",
+        "ui"
+      ],
+      "scope": "_execute_join and _validate_join_config resolve the right source via resolve_frame per use_transformed (raw -> instance table; transformed -> resolved frame). The column-fetch endpoint the join modal already calls with the transformed flag returns the transformed column set. Frontend is regression-only.",
+      "size": "M",
+      "acceptance": [
+        "A Join with use_transformed=false joins against the right source's raw instance table (behavior unchanged).",
+        "A Join with use_transformed=true joins against the right source's transformed frame resolved via resolve_frame.",
+        "A transformed Join against a never-run right source materializes it on demand and the join output reflects the right source's transforms.",
+        "The right-column-fetch endpoint returns the right source's transformed column set when the transformed flag is set, and the raw columns when not.",
+        "JoinModal still sends use_transformed and requests the transformed column set (frontend regression).",
+        "Join over null-containing / type-messy join keys behaves correctly (messy real-world data)."
+      ],
+      "depends_on": [
+        1
+      ],
+      "touched_files": [
+        "src/pipeui/workflow/builtins.py",
+        "src/pipeui/api/sources.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        "tests/test_builtins.py",
+        "tests/test_api_pipelines.py",
+        ".claude/runs/runner-resolution-model/2.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/workflow/builtins.py",
+          "shared_with": [
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/api/pipelines.py",
+          "shared_with": [
+            5
+          ],
+          "access": "modifies"
+        }
+      ],
+      "reconciliation_note": "Follow-up (commit b6077c8): User Story 7 wiring. resolve_frame's transformed result_id was computed then discarded at the join (_ref). Now _execute_join/execute_builtin_step return (frame, consumed_result_id) and BuiltinStepExecutor ties it into the join's result entry (consumed_result_id) \u2014 a transformed join's result records which produced output it consumed; a raw join carries None. Tied via explicit return threading, no step-dict mutation. Tested."
+    },
+    {
+      "slice_id": 3,
+      "slice_name": "Uniform StepExecutor contract + step-type registry",
+      "intent": "Replace the inline if/elif step dispatch in run_pipeline with a uniform StepExecutor contract resolved from a step-type registry, backed by class-based Step/StepContext with factory constructors over the existing map tables.",
+      "layers": [
+        "business_logic"
+      ],
+      "scope": "StepContext.from_builtin (source_builtin_map) / from_function / from_set (source_function_map); a StepExecutor per step type registered in a step-type registry; run_pipeline dispatches through the registry. Behavior-preserving for existing function and built-in steps.",
+      "size": "L",
+      "acceptance": [
+        "Function and built-in steps dispatched through the StepExecutor registry produce per-result content identical to pre-refactor (each entry's function_type, status, row counts, identity), with transforms and validations preserved as distinct RunResult/ValidationRunResult types; per-member emission ORDER may interleave (a mixed set is no longer grouped transforms-then-validations \u2014 it behaves as if its members were placed individually, per slice 4).",
+        "StepContext.from_builtin constructs a context from a source_builtin_map row; from_function / from_set construct from source_function_map rows, carrying the properties previously passed as step-dict keys.",
+        "The inline if/elif step dispatch is removed from run_pipeline; each result entry's content is unchanged on a mixed function+builtin pipeline (per-member ordering may interleave; the transform/validation split into distinct result types is preserved).",
+        "Each superseded dispatch path removed in this slice is covered by a behavior-preserving test asserting equal output before and after."
+      ],
+      "depends_on": [
+        1,
+        2
+      ],
+      "touched_files": [
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/workflow/executors.py",
+        "src/pipeui/workflow/context.py",
+        "src/pipeui/workflow/builtins.py",
+        "tests/test_run_workflow.py",
+        ".claude/runs/runner-resolution-model/3.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/workflow/run.py",
+          "shared_with": [
+            1,
+            4,
+            5
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/workflow/builtins.py",
+          "shared_with": [
+            2
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/workflow/executors.py",
+          "shared_with": [
+            4
+          ],
+          "access": "creates"
+        },
+        {
+          "surface": "tests/test_run_workflow.py",
+          "shared_with": [
+            1,
+            4
+          ],
+          "access": "modifies"
+        }
+      ],
+      "reconciliation_note": "2026-06-16 (post-to-code, hostile-audit kickback): AC#0/#2 originally said 'results identical to pre-refactor output', which implied step ORDER preservation. The refactor interleaves results by member (slice-4 'as if individual'), so a mixed set's emission order changed from grouped transforms-then-validations. User decision: interleaving is intended; the real invariant is per-result content identical + transform/validation split preserved (resolved via RunResult vs ValidationRunResult, not a new object). AC reworded to match; an order-blindness-is-intentional marker added to the golden test. Conflict between slice-3 (preserve) and slice-4 (individual) resolved in favor of slice 4. | Follow-up (commit b6077c8, hostile-audit dead-code pass): StepContext.from_function was a production orphan \u2014 the adapter built function-member contexts with a bare constructor. Now WIRED: FunctionSetExecutor._member_context routes each member through the factory trio (function -> from_function, built-in -> from_builtin), so from_function is the live per-function-member factory (orphan resolved by use, not deletion). Heterogeneous-member dispatch supports the trio's two real types FUNCTION|BUILTIN (the noop_member test fixture was reconciled to a real BUILTIN member \u2014 assertion strength retained, falsification-verified)."
+    },
+    {
+      "slice_id": 4,
+      "slice_name": "Function-set adapter (heterogeneous-member-ready)",
+      "intent": "Flatten a function set into a stream of uniform member executions through the StepExecutor contract, so a set behaves exactly like its members placed individually, with the member dispatch type-agnostic so built-in members are additive later.",
+      "layers": [
+        "business_logic"
+      ],
+      "scope": "An adapter that expands a set into per-member StepContexts dispatched through the registry by each member's step type. Heterogeneous-member readiness only; storing a built-in inside a set (schema/persistence) is out of scope (#275).",
+      "size": "M",
+      "acceptance": [
+        "A function set is flattened into per-member executions whose results are identical to the same functions placed individually on the source.",
+        "run_pipeline output for a set-containing pipeline is unchanged from pre-refactor.",
+        "The adapter dispatches each member through the StepExecutor registry by the member's step type (not hardcoded to function), proven by a member list containing a non-function member object (no set-membership storage required)."
+      ],
+      "depends_on": [
+        3
+      ],
+      "touched_files": [
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/workflow/executors.py",
+        "tests/test_run_workflow.py",
+        ".claude/runs/runner-resolution-model/4.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/workflow/run.py",
+          "shared_with": [
+            1,
+            3,
+            5
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/workflow/executors.py",
+          "shared_with": [
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_run_workflow.py",
+          "shared_with": [
+            1,
+            3
+          ],
+          "access": "modifies"
+        }
+      ]
+    },
+    {
+      "slice_id": 5,
+      "slice_name": "Migrate runner-dependent workflows + bounded removal",
+      "intent": "Migrate the workflows that route through run_pipeline (run / validation / results endpoints and staging) onto the resolution model, and remove only the execution code this refactor directly supersedes, each removal behavior-preserved by a test.",
+      "layers": [
+        "business_logic",
+        "api"
+      ],
+      "scope": "Point the run / validation / results / staging API paths at the unified model; delete superseded execution code. No new scope; behavior preserved across the migration.",
+      "size": "M",
+      "acceptance": [
+        "The run endpoint produces the same response shape and content as before the migration.",
+        "The validation and results/staging endpoints produce the same response shape and content as before the migration.",
+        "Each piece of superseded execution code removed in this slice is covered by a behavior-preserving test asserting equal endpoint output before and after."
+      ],
+      "depends_on": [
+        3,
+        4
+      ],
+      "touched_files": [
+        "src/pipeui/workflow/run.py",
+        "src/pipeui/api/pipelines.py",
+        "src/pipeui/api/sources.py",
+        "tests/test_api_pipelines_run.py",
+        "tests/test_api_staging.py",
+        "tests/test_api_validations.py",
+        "tests/test_api_run_set.py",
+        "tests/test_api_run_all.py",
+        ".claude/runs/runner-resolution-model/5.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/workflow/run.py",
+          "shared_with": [
+            1,
+            3,
+            4
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/api/pipelines.py",
+          "shared_with": [
+            2
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/api/sources.py",
+          "shared_with": [
+            2
+          ],
+          "access": "modifies"
+        }
+      ]
+    }
+  ]
+}

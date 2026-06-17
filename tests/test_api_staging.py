@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from pipeui.api.pipelines import router, get_conn
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.run import _staging_prefix, _write_staging_table
+from pipeui.workflow.staging import staging_prefix, write_staging_table
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def test_staging_returns_rows_after_transform_run(client, db, tmp_path):
     # Manually write a staging table (simulating what run_pipeline does after a transform)
     df = pd.DataFrame({"id": [1, 2, 3], "val": [10, 20, 30], "doubled": [20, 40, 60]})
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/staging")
     assert resp.status_code == 200, resp.text
@@ -105,7 +105,7 @@ def test_staging_export_scrubs_nan_and_inf_to_null(client, db, tmp_path):
         "name": ["a", None, "c"],                       # object-column null
     })
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/staging")
     assert resp.status_code == 200, resp.text   # was 500: nan not JSON compliant
@@ -142,7 +142,7 @@ def test_transformed_export_returns_table_after_transforms(client, db, tmp_path)
 
     df = pd.DataFrame({"id": [1, 2, 3], "val": [10, 20, 30], "doubled": [20, 40, 60]})
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/export/transformed")
     assert resp.status_code == 200, resp.text
@@ -174,3 +174,73 @@ def test_transformed_export_does_not_fail_for_validation_only_mixed_set(client, 
     resp = client.get(f"/pipelines/{source_id}/export/transformed")
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"columns": [], "rows": []}
+
+
+# ---------------------------------------------------------------------------
+# runner-resolution-model slice 5 (#15 / #21 / #22) — staging path locked to the
+# unified model. A transform run staged via the STEP_EXECUTORS registry (slices 3+4)
+# is what /staging reads back; this proves the staging path is fed by the unified
+# execution model and its response shape is preserved.
+# ---------------------------------------------------------------------------
+
+import pipeui.workflow.executors as _executors_mod  # noqa: E402
+
+
+class _SpyExecutor:
+    def __init__(self, inner, log):
+        self._inner = inner
+        self._log = log
+
+    def execute(self, ctx, working, env):
+        self._log.append(ctx.step_type)
+        return self._inner.execute(ctx, working, env)
+
+
+@pytest.mark.integration
+def test_staging_fed_by_registry_run(client, db, tmp_path, monkeypatch):
+    """#21[1] / #22[2]: a transform run writes its staging table via the STEP_EXECUTORS
+    registry, and /staging reads that result back (shape preserved). Proves the staging
+    path is driven by the unified model — no superseded execution path remains."""
+    source_id = _register_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+
+    fn_path = tmp_path / "stg_double.py"
+    fn_path.write_text("def stg_double(data):\n    return data * 2\n")
+    fn_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, uuid.uuid4(), "pd.series", "stg_double", None, "pd.Series",
+         "data: pd.Series", "transform", str(fn_path), True],
+    )
+    param_id = uuid.uuid4()
+    db.execute("INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
+               [param_id, uuid.uuid4(), "data", "pd.Series", fn_id])
+    set_id = uuid.uuid4()
+    db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, uuid.uuid4(), "stg_double", None])
+    db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
+    sfm_id = uuid.uuid4()
+    db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+               [sfm_id, source_id, set_id, 0, "append"])
+    from pipeui.ids import content_hash_id
+    alias_id = content_hash_id("alias_map", str(param_id), str(col_id), str(source_id))
+    db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+               [alias_id, col_id, param_id, source_id])
+
+    log: list[str] = []
+    spied = {k: _SpyExecutor(v, log) for k, v in _executors_mod.STEP_EXECUTORS.items()}
+    monkeypatch.setattr(_executors_mod, "STEP_EXECUTORS", spied)
+
+    run = client.post(f"/pipelines/{source_id}/run?run_type=transforms")
+    assert run.status_code == 200, run.text
+    assert log, "transform run bypassed the STEP_EXECUTORS registry — staging not fed by the unified model"
+
+    resp = client.get(f"/pipelines/{source_id}/staging")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "columns" in data and "rows" in data           # staging shape preserved
+    assert len(data["rows"]) == 3                          # the registry-run frame

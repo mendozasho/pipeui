@@ -13,9 +13,12 @@ get_builtin_steps(conn, source_id) -> list[dict]
     Returns all source_builtin_map rows for a source ordered by position,
     each with step_type="builtin".
 
-execute_builtin_step(conn, df, step) -> pd.DataFrame
+execute_builtin_step(conn, df, step) -> tuple[pd.DataFrame, str | None]
     Executes a single built-in step against the working DataFrame and returns
-    the result.  Built-ins run as DuckDB SQL, NOT via the worker subprocess.
+    (result_df, consumed_result_id).  consumed_result_id is the resolved
+    transformed-output result_id when a join consumed a transformed source
+    (lineage), else None.  Built-ins run as DuckDB SQL, NOT via the worker
+    subprocess.
 
 get_unified_pipeline(conn, source_id) -> dict | None
     Returns a unified list of function steps and built-in steps ordered by
@@ -25,12 +28,18 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+
+from typing import Callable, Optional
 
 import duckdb
 import pandas as pd
 
 from pipeui.ids import new_id
+from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
+from pipeui.workflow.step import BuiltinStepContext
+# get_builtin_steps lives in step_loader (L1, pure read); re-exported here so
+# ``from pipeui.workflow.builtins import get_builtin_steps`` keeps working.
+from pipeui.workflow.step_loader import get_builtin_steps  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -191,27 +200,6 @@ def patch_builtin(
 # Query
 # ---------------------------------------------------------------------------
 
-def get_builtin_steps(
-    conn: duckdb.DuckDBPyConnection,
-    source_id: uuid.UUID,
-) -> list[dict]:
-    """Return all source_builtin_map rows for a source ordered by position."""
-    rows = conn.execute(
-        "SELECT step_id, builtin_type, builtin_config, position FROM source_builtin_map WHERE source_id = ? ORDER BY position ASC",
-        [source_id],
-    ).fetchall()
-    result = []
-    for step_id, btype, bcfg, pos in rows:
-        result.append({
-            "step_id": str(step_id),
-            "step_type": "builtin",
-            "builtin_type": btype,
-            "builtin_config": json.loads(bcfg) if isinstance(bcfg, str) else bcfg,
-            "position": pos,
-        })
-    return result
-
-
 def get_unified_pipeline(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
@@ -281,9 +269,17 @@ def get_unified_pipeline(
             "output_mode": output_mode,
         })
 
-    # Built-in steps
+    # Built-in steps. get_builtin_steps now produces the typed BuiltinStepContext
+    # carrier; this API-response builder serializes each back to the wire dict shape
+    # the unified-pipeline endpoint returns (the carrier boundary ends at the runner).
     for bstep in get_builtin_steps(conn, source_id):
-        steps.append(bstep)
+        steps.append({
+            "step_id": bstep.step_id,
+            "step_type": "builtin",
+            "builtin_type": bstep.builtin_type,
+            "builtin_config": bstep.builtin_config,
+            "position": bstep.position,
+        })
 
     # Sort unified list by position
     steps.sort(key=lambda s: (s["position"], s.get("set_name") or s.get("builtin_type") or ""))
@@ -305,24 +301,36 @@ def get_unified_pipeline(
 def execute_builtin_step(
     conn: duckdb.DuckDBPyConnection,
     df: pd.DataFrame,
-    step: dict,
-) -> pd.DataFrame:
+    step: "BuiltinStepContext",
+    *,
+    run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
+) -> tuple[pd.DataFrame, str | None]:
     """Execute a single built-in step against the working DataFrame.
+
+    Returns ``(result_df, consumed_result_id)``. ``consumed_result_id`` is the
+    resolved transformed-output ``result_id`` when a join consumed a transformed
+    source (lineage — PRD User Story 7), else ``None`` (pivot/filter never consume
+    another source, and a raw join consumes the source's own data, not a result).
+
+    ``run_transforms`` is the injected runner (DIP) threaded to ``resolve_frame`` so a
+    transformed join can materialize a never-run right source without builtins
+    importing the orchestrator. Required only on the materialize path of a
+    transformed join; ``None`` for raw joins and pivot/filter.
 
     Uses DuckDB directly (no worker subprocess).
     Raises ValueError for bad config; other exceptions propagate.
     """
-    btype = step["builtin_type"]
-    cfg = step["builtin_config"]
+    btype = step.builtin_type
+    cfg = step.builtin_config
     if isinstance(cfg, str):
         cfg = json.loads(cfg)
 
     if btype == "join":
-        return _execute_join(conn, df, cfg)
+        return _execute_join(conn, df, cfg, run_transforms=run_transforms)
     elif btype == "pivot":
-        return _execute_pivot(conn, df, cfg)
+        return _execute_pivot(conn, df, cfg), None
     elif btype == "filter":
-        return _execute_filter(conn, df, cfg)
+        return _execute_filter(conn, df, cfg), None
     else:
         raise ValueError(f"Unknown builtin_type: {btype!r}")
 
@@ -331,48 +339,69 @@ def _execute_join(
     conn: duckdb.DuckDBPyConnection,
     left_df: pd.DataFrame,
     cfg: dict,
-) -> pd.DataFrame:
+    *,
+    run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
+) -> tuple[pd.DataFrame, str | None]:
     """Execute a join built-in step.
 
     Config shape:
       { "right_source_id": "...", "join_type": "inner|left|right|full",
         "on": [{"left_col": "...", "right_col": "..."}],
-        "keep_columns": "all" }
-    """
-    from pipeui.sql_user_table import instance_table_name
+        "use_transformed": bool, "keep_columns": "all" }
 
+    The right-hand source is resolved through ``resolve_frame`` per the
+    ``use_transformed`` flag — raw -> the source's instance table, transformed ->
+    the source's resolved transformed output (latest staging, materialized on demand
+    if never run). This is the single seam that decides where the join's right input
+    comes from, so the toggle is honored instead of always reading raw (PRD
+    Implementation Decisions -> Join honors the toggle).
+
+    Returns ``(result_df, consumed_result_id)``: when the join consumed a
+    transformed source, ``consumed_result_id`` is that resolved transformed-output's
+    ``result_id`` so the join records the result it consumed (lineage — PRD User
+    Story 7); a raw join consumes the source's own data, not a produced result, so
+    it is ``None``.
+    """
     right_source_id = uuid.UUID(cfg["right_source_id"])
     join_type = cfg.get("join_type", "inner").upper()
     on_clauses = cfg["on"]
+    mode = TRANSFORMED if cfg.get("use_transformed") else RAW
 
-    right_tname = instance_table_name(right_source_id)
+    # Resolve the right frame through the seam; register both sides as temp views so
+    # the join shape is uniform regardless of where the right frame came from. The
+    # injected ``run_transforms`` runner lets a transformed join materialize a
+    # never-run right source (DIP — resolve never imports the orchestrator).
+    right_df, ref = resolve_frame(conn, right_source_id, mode, run_transforms=run_transforms)
+    consumed_result_id = ref.result_id if mode == TRANSFORMED else None
 
-    # Register left df as a temporary view
     _left_view = f"_builtin_join_left_{uuid.uuid4().hex[:8]}"
+    _right_view = f"_builtin_join_right_{uuid.uuid4().hex[:8]}"
     conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_left_view}" AS SELECT * FROM left_df')
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_right_view}" AS SELECT * FROM right_df')
 
     on_sql = " AND ".join(
-        f'"{_left_view}"."{c["left_col"]}" = "{right_tname}"."{c["right_col"]}"'
+        f'"{_left_view}"."{c["left_col"]}" = "{_right_view}"."{c["right_col"]}"'
         for c in on_clauses
     )
 
     keep_columns = cfg.get("keep_columns", "all")
     if keep_columns == "all":
-        select_clause = f'"{_left_view}".*, "{right_tname}".*'
+        select_clause = f'"{_left_view}".*, "{_right_view}".*'
     else:
         select_clause = "*"
 
     sql = (
         f'SELECT {select_clause} '
         f'FROM "{_left_view}" '
-        f'{join_type} JOIN "{right_tname}" ON {on_sql}'
+        f'{join_type} JOIN "{_right_view}" ON {on_sql}'
     )
     try:
         result = conn.execute(sql).df()
     finally:
         conn.execute(f'DROP VIEW IF EXISTS "{_left_view}"')
+        conn.execute(f'DROP VIEW IF EXISTS "{_right_view}"')
 
-    return result
+    return result, consumed_result_id
 
 
 def _execute_pivot(

@@ -11,8 +11,66 @@ from pipeui.ids import content_hash_id
 from pipeui.schema.constants import IngestionMethod, DUCKDB_TO_PYTHON
 from pipeui.db import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern
-from pipeui.workflow.staging import CreateFlowCache
 from pipeui.validation import FailedRegistryEntry, SourceRegistryEntry, SourceRegistryUpdate, ColumnRegistryEntry
+
+
+class CreateFlowCache:
+    """The create flow's column-type staging cache (the ``_stage_create_flow`` temp
+    table): holds confirmed column names/types/PK while a source is being created,
+    before it is committed. Part of the create flow (this module) — distinct from the
+    runner's transformed-output staging store in ``staging.py`` (they only share the
+    word "staging")."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+        conn.execute("""
+            CREATE TEMP TABLE IF NOT EXISTS _stage_create_flow (
+                column_name    VARCHAR NOT NULL,
+                column_type    VARCHAR NOT NULL,
+                is_primary_key BOOLEAN NOT NULL DEFAULT false
+            )
+        """)
+
+    def stage_columns(self, columns: list[tuple[str, str]]) -> None:
+        """Replace any staged columns with the given (name, type) pairs."""
+        self._conn.execute("DELETE FROM _stage_create_flow")
+        self._conn.executemany(
+            "INSERT INTO _stage_create_flow (column_name, column_type) VALUES (?, ?)",
+            columns,
+        )
+
+    def set_primary_key(self, column_name: str) -> None:
+        """Mark exactly one staged column as the primary key (clears the others)."""
+        self._conn.execute("UPDATE _stage_create_flow SET is_primary_key = false")
+        self._conn.execute(
+            "UPDATE _stage_create_flow SET is_primary_key = true WHERE column_name = ?",
+            [column_name],
+        )
+
+    def get_staged(self) -> list[dict]:
+        """Return staged columns as dicts (column_name, column_type, is_primary_key)."""
+        rows = self._conn.execute(
+            "SELECT column_name, column_type, is_primary_key FROM _stage_create_flow"
+        ).fetchall()
+        return [
+            {"column_name": r[0], "column_type": r[1], "is_primary_key": r[2]}
+            for r in rows
+        ]
+
+    def get_primary_key(self) -> str | None:
+        """Return the staged primary-key column name, or None."""
+        row = self._conn.execute(
+            "SELECT column_name FROM _stage_create_flow WHERE is_primary_key = true LIMIT 1"
+        ).fetchone()
+        return row[0] if row else None
+
+    def clear(self) -> None:
+        """Remove all staged columns."""
+        self._conn.execute("DELETE FROM _stage_create_flow")
+
+    def drop(self) -> None:
+        """Drop the staging temp table if it exists."""
+        self._conn.execute("DROP TABLE IF EXISTS _stage_create_flow")
 
 
 def find_source_by_pattern(

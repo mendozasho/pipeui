@@ -27,6 +27,7 @@ import duckdb
 from pipeui.ids import content_hash_id, new_id
 from pipeui.results import normalize_label
 from pipeui.workflow.bundles import BundleLengthError, pair_bundles
+from pipeui.workflow.step_loader import get_builtin_steps
 
 
 # ---------------------------------------------------------------------------
@@ -487,8 +488,16 @@ def get_pipeline(
     # 6. Append placed built-in steps (join/pivot/filter) — #209. Each carries
     #    step_type="builtin", builtin_type, builtin_config, position. The canvas
     #    dispatches on step_type; built-in steps interleave by position.
-    from pipeui.workflow.builtins import get_builtin_steps
-    steps.extend(get_builtin_steps(conn, source_id))
+    #    get_builtin_steps now produces the typed BuiltinStepContext carrier; this
+    #    API-response builder serializes each back to the wire dict shape.
+    for bstep in get_builtin_steps(conn, source_id):
+        steps.append({
+            "step_id": bstep.step_id,
+            "step_type": "builtin",
+            "builtin_type": bstep.builtin_type,
+            "builtin_config": bstep.builtin_config,
+            "position": bstep.position,
+        })
 
     # Order the unified list by position; tie-break on set_name/builtin_type for
     # determinism (mirrors get_unified_pipeline's sort key).

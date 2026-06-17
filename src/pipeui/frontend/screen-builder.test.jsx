@@ -553,6 +553,61 @@ describe("JoinModal — Back -> Next preserves key pairs (#214)", () => {
 });
 
 // ===========================================================================
+// JoinModal — use_transformed regression (runner-resolution-model slice 2 / #18)
+//
+// AC4 (frontend regression): JoinModal still sends use_transformed and requests
+// the transformed column set when the toggle is on. Guards the live toggle so the
+// resolve_frame backend (slice 2) actually receives transformed=true.
+// ===========================================================================
+
+describe("JoinModal — use_transformed toggle (slice 2 / #18 regression)", () => {
+  it("requests the transformed column set (fetchRightColumns called with true) when the toggle is on", async () => {
+    const { fetchRightColumns } = renderJoin();
+    // R2 ("targets") has steps=2 -> the use-transformed toggle is rendered.
+    const row = screen.getByTestId("source-row-R2");
+    fireEvent.click(within(row).getByText("targets"));      // select R2
+    fireEvent.click(within(row).getByTestId("switch"));     // flip use-transformed ON
+    fireEvent.click(screen.getByText("Next"));
+    await screen.findByTestId("column-list-right");
+    // The modal must request the right source's TRANSFORMED columns.
+    expect(fetchRightColumns).toHaveBeenCalledWith("R2", true);
+  });
+
+  it("submits use_transformed=true in builtin_config when the toggle is on", async () => {
+    const { onSubmit } = renderJoin();
+    const row = screen.getByTestId("source-row-R2");
+    fireEvent.click(within(row).getByText("targets"));
+    fireEvent.click(within(row).getByTestId("switch"));     // use-transformed ON
+    fireEvent.click(screen.getByText("Next"));
+    const right = await screen.findByTestId("column-list-right");
+    const left = screen.getByTestId("column-list-left");
+    fireEvent.click(within(left).getByText("region"));
+    fireEvent.click(within(right).getByText("region"));
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ right_source_id: "R2", use_transformed: true })
+    );
+  });
+
+  it("still requests raw columns (use_transformed false) when the toggle is off", async () => {
+    const { fetchRightColumns, onSubmit } = renderJoin();
+    fireEvent.click(screen.getByText("regions"));            // R1, no toggle
+    fireEvent.click(screen.getByText("Next"));
+    const right = await screen.findByTestId("column-list-right");
+    const left = screen.getByTestId("column-list-left");
+    expect(fetchRightColumns).toHaveBeenCalledWith("R1", false);
+    fireEvent.click(within(left).getByText("region"));
+    fireEvent.click(within(right).getByText("region"));
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ use_transformed: false })
+    );
+  });
+});
+
+// ===========================================================================
 // PaletteBuiltinCard — visually distinct built-in card (AC9)
 // ===========================================================================
 

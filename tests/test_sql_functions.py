@@ -12,7 +12,7 @@ from pipeui.workflow.functions import (
     scan_functions,
     list_functions,
 )
-from pipeui.workflow.run import _execute_sql_function
+from pipeui.workflow.executors import _execute_sql_function
 from pipeui.sql_user_table import instance_table_name
 from tests.conftest import make_registered_source
 

@@ -35,13 +35,16 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from pipeui.ids import content_hash_id
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.run import _fetch_steps, _staging_prefix, run_pipeline
+from pipeui.workflow.run import run_pipeline
+from pipeui.workflow.staging import staging_prefix
+from pipeui.workflow.step_loader import fetch_steps
 from pipeui.workflow.attach import AttachBinding, attach_function
 from tests.conftest import make_registered_source
 
@@ -209,7 +212,7 @@ def _seed_validation_step(db, source_id, column_id, fn_name, module_path, positi
 
 
 def _list_staging_tables(db, source_id):
-    prefix = _staging_prefix(source_id)
+    prefix = staging_prefix(source_id)
     rows = db.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
     ).fetchall()
@@ -868,7 +871,7 @@ def test_single_column_transform_returns_runresult_unchanged(db, tmp_path):
 
 @pytest.mark.integration
 def test_fetch_steps_reads_bindings_in_position_order(db):
-    """Slice 2 #2: _fetch_steps returns a param's bound columns ORDER BY position,
+    """Slice 2 #2: fetch_steps returns a param's bound columns ORDER BY position,
     not alphabetically by column_name."""
     source_id, col_ids = make_registered_source(db, n_columns=3)
     # Register a multi-column pd.Series function and attach in non-alphabetical order
@@ -890,8 +893,10 @@ def test_fetch_steps_reads_bindings_in_position_order(db):
         function_id=fn_id,
     )
 
-    steps = _fetch_steps(db, source_id)
-    param = steps[0]["functions"][0]["params"][0]
+    steps = fetch_steps(db, source_id)
+    # fetch_steps now returns typed FunctionStepContext carriers with FunctionSpec
+    # members; params stay typed Mapping rows (the depth boundary).
+    param = steps[0].functions[0].params[0]
     assert param["bindings"] == ["col_2", "col_0", "col_1"]
 
 
@@ -1435,3 +1440,750 @@ def test_mixed_set_all_run_processes_every_function(db, tmp_path):
     ares = run_pipeline(db, source_id, "all")
     names = [s.get("function_name") for s in ares["steps"]]
     assert "gt0" in names and "dbl" in names, f"every function in the set must run: {names}"
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #1 — resolve_frame input-source seam
+#
+# resolve_frame(conn, source_id, mode) -> (frame, ref):
+#   raw         -> the source's instance table contents
+#   transformed -> the source's latest staging table, else materialize-if-absent
+#                  (run the source's pipeline once) — cycle-guarded, snapshot semantics
+#   ref carries a deterministic UUID5 result_id (transformed) tied to the RunResult
+#   identity scheme.  This slice does NOT change the join.
+# ---------------------------------------------------------------------------
+
+def _messy_source_and_ingest(db, tmp_path, name="messy"):
+    """A source with null-containing / type-messy real-world rows.
+
+    'amount' mixes ints with empty cells (NULL); 'region' mixes strings with empty
+    cells.  Ingested as a real instance table so resolve_frame reads true data.
+    """
+    path = make_csv(
+        tmp_path,
+        f"{name}.csv",
+        ["id", "amount", "region"],
+        [
+            ["r1", "10", "north"],
+            ["r2", "", "south"],     # null amount
+            ["r3", "30", ""],        # null region
+            ["r4", "", ""],          # both null
+        ],
+    )
+    source_id, failed = create_source(db, path, name, "id", "upsert")
+    assert not failed.has_failures()
+    ingest_source(db, source_id, path)
+    return source_id, path
+
+
+@pytest.mark.integration
+def test_resolve_frame_raw_returns_instance_table(db, tmp_path):
+    """AC1: resolve_frame(source, raw) returns the source's instance table contents."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    expected = db.execute(
+        f'SELECT * FROM "{instance_table_name(source_id)}"'
+    ).df()
+
+    frame, ref = resolve_frame(db, source_id, "raw")
+
+    assert list(frame.columns) == list(expected.columns)
+    assert len(frame) == len(expected)
+    # value-level equality (no rows dropped / corrupted)
+    assert frame.sort_values("id").reset_index(drop=True).equals(
+        expected.sort_values("id").reset_index(drop=True)
+    )
+    assert ref.mode == "raw"
+    assert ref.source_id == source_id
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_returns_latest_staging(db, tmp_path):
+    """AC2: resolve_frame(source, transformed) returns the latest staging table
+    contents when one exists (no re-run)."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    # Produce a staging table.
+    run_pipeline(db, source_id, "transforms")
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    expected = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+
+    frame, ref = resolve_frame(db, source_id, "transformed")
+
+    # Latest staging used as-is (the appended transform column is present).
+    assert "doubled_val" in frame.columns
+    assert len(frame) == len(expected)
+    # No new staging table was written (snapshot semantics — used existing).
+    assert _list_staging_tables(db, source_id) == staging
+    assert ref.mode == "transformed"
+    assert ref.result_id is not None
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_materializes_if_absent(db, tmp_path):
+    """AC3: resolve_frame(source, transformed) for a source with NO staging table
+    runs that source's pipeline once and returns its produced output."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    # No staging table exists yet.
+    assert _list_staging_tables(db, source_id) == []
+
+    frame, ref = resolve_frame(
+        db, source_id, "transformed",
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
+
+    # Materialized on demand: the transform output column is present...
+    assert "doubled_val" in frame.columns
+    # ...and a staging table now exists.
+    assert len(_list_staging_tables(db, source_id)) == 1
+    # produced output reflects the transform (val * 2)
+    assert frame.sort_values("val")["doubled_val"].tolist() == [20, 40, 60]
+    assert ref.mode == "transformed"
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path):
+    """MINOR-2 (hostile-audit): a source with NO transform steps has no transformed
+    output; resolve_frame(transformed) falls back to a staged copy of the RAW instance
+    table so transformed resolution still yields a frame. DECIDED behavior (keep the
+    fallback, not an error) — a source with nothing to transform has its raw data as
+    its 'transformed output'. See resolve._materialize."""
+    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.sql_user_table import instance_table_name
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    # A validations-only pipeline: it has a step, but nothing that produces transformed output.
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    _seed_validation_step(db, source_id, col_id, "gt0", val_path, position=0)
+    assert _list_staging_tables(db, source_id) == []
+
+    frame, ref = resolve_frame(
+        db, source_id, "transformed",
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
+
+    raw = db.execute(f'SELECT * FROM "{instance_table_name(source_id)}"').df()
+    # Fallback: raw content returned as the transformed frame (no transform columns added).
+    assert frame.sort_values("val")["val"].tolist() == raw.sort_values("val")["val"].tolist()
+    assert frame.sort_values("val")["val"].tolist() == [10, 20, 30]
+    # A staged copy was created so the reference resolves to a real table.
+    assert len(_list_staging_tables(db, source_id)) == 1
+    assert ref.mode == "transformed"
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
+    """AC4: a transformed reference forming a cycle (A->C->A) raises an error naming
+    the sources in the cycle and does not loop."""
+    from pipeui.workflow.resolve import resolve_frame, TransformedCycleError
+    from pipeui.workflow.builtins import attach_builtin
+
+    # Two sources, each with a transformed-join pointing at the other.
+    src_a, _ = _register_source_and_ingest(db, tmp_path, name="a_src")
+    src_c, _ = _register_source_and_ingest(db, tmp_path, name="c_src")
+
+    # A joins C's transformed output; C joins A's transformed output.
+    join_a = {
+        "right_source_id": str(src_c), "join_type": "inner",
+        "use_transformed": True,
+        "on": [{"left_col": "id", "right_col": "id"}],
+    }
+    join_c = {
+        "right_source_id": str(src_a), "join_type": "inner",
+        "use_transformed": True,
+        "on": [{"left_col": "id", "right_col": "id"}],
+    }
+    assert attach_builtin(db, src_a, "join", join_a)["ok"]
+    assert attach_builtin(db, src_c, "join", join_c)["ok"]
+
+    with pytest.raises(TransformedCycleError) as exc:
+        resolve_frame(
+            db, src_a, "transformed",
+            run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+        )
+
+    msg = str(exc.value)
+    assert str(src_a) in msg and str(src_c) in msg
+
+
+@pytest.mark.integration
+def test_resolve_frame_transformed_result_id_is_deterministic(db, tmp_path):
+    """AC5: the ref returned for a transformed frame carries a deterministic UUID5
+    result_id (equal inputs -> equal id) consistent with the RunResult identity
+    scheme."""
+    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.results import RunResult
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = db.execute(
+        "SELECT cr.column_id FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'val'",
+        [source_id],
+    ).fetchone()[0]
+    fn_path = _write_fn_file(tmp_path, "doubled", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "doubled", fn_path, output_mode="append")
+
+    run_pipeline(db, source_id, "transforms")
+
+    _, ref1 = resolve_frame(db, source_id, "transformed")
+    _, ref2 = resolve_frame(db, source_id, "transformed")
+
+    # Same source + same latest staging snapshot -> same id.
+    assert ref1.result_id == ref2.result_id
+    # Consistent with the RunResult identity scheme (short UUID5 hex).
+    assert isinstance(ref1.result_id, str)
+    assert len(ref1.result_id) == len(
+        RunResult(
+            function_name="x", function_type="transform",
+            source_id=source_id, bundle_key="", label="x", status="ok",
+        ).result_id
+    )
+
+
+@pytest.mark.integration
+def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
+    """AC6: resolve_frame returns correct rows over null-containing / type-messy
+    real-world data without dropping or corrupting rows."""
+    from pipeui.workflow.resolve import resolve_frame
+
+    source_id, _ = _messy_source_and_ingest(db, tmp_path)
+    expected = db.execute(
+        f'SELECT * FROM "{instance_table_name(source_id)}"'
+    ).df()
+
+    frame, _ = resolve_frame(db, source_id, "raw")
+
+    # All four rows present — nulls not dropped.
+    assert len(frame) == 4
+    assert sorted(frame["id"].tolist()) == ["r1", "r2", "r3", "r4"]
+    # Null cells preserved (not coerced to 0 / "").
+    assert frame.sort_values("id").reset_index(drop=True).equals(
+        expected.sort_values("id").reset_index(drop=True)
+    )
+    # The both-null row r4 still has nulls in amount and region.
+    r4 = frame[frame["id"] == "r4"].iloc[0]
+    assert pd.isna(r4["amount"]) and pd.isna(r4["region"])
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #3 — Uniform StepExecutor contract +
+# step-type registry (sub-issues #19, #20).
+#
+# Behavior-preserving refactor: the inline if/elif step dispatch in run_pipeline
+# is replaced by a StepExecutor resolved from a step-type registry, backed by
+# class-based StepContext factory constructors over the existing map tables.
+# Every test below also relies on the full suite staying green (the pre-existing
+# function/built-in behavioral guarantees above).
+# ---------------------------------------------------------------------------
+
+
+def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator="gte"):
+    """Attach a built-in filter step keeping rows where `column operator value`."""
+    from pipeui.workflow.builtins import attach_builtin
+
+    res = attach_builtin(
+        db, source_id, "filter",
+        {"column": column, "operator": operator, "value": str(value)},
+    )
+    assert res["ok"], res
+    return res["step_id"]
+
+
+# --- #19: StepContext factory constructors -------------------------------
+
+@pytest.mark.unit
+def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
+    """#19: fetch_steps produces the typed FunctionStepContext carrier — its fields
+    (position, set_id, set_name, source_function_map_id, functions) are typed
+    attributes, not dict keys. The loader tags the step SET so it routes to the
+    function-set adapter; from_function (exercised by the adapter and below) is the
+    FUNCTION-tagged sibling — both build the same FunctionStepContext shape."""
+    from pipeui.workflow.step_loader import fetch_steps
+    from pipeui.workflow.step import (
+        FUNCTION,
+        FunctionSpec,
+        FunctionStepContext,
+        StepContext,
+    )
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
+
+    ctx = fetch_steps(db, source_id)[0]
+    assert isinstance(ctx, FunctionStepContext)
+    assert isinstance(ctx.position, int)
+    # Properties the step dict held are all typed attributes on the context.
+    assert ctx.set_id and isinstance(ctx.set_id, str)
+    assert ctx.set_name == "dbl"
+    assert ctx.source_function_map_id and isinstance(ctx.source_function_map_id, str)
+    assert isinstance(ctx.functions, tuple)
+    assert all(isinstance(m, FunctionSpec) for m in ctx.functions)
+    assert ctx.functions[0].function_name == "dbl"
+
+    # from_function builds the same shape, FUNCTION-tagged (the per-member dispatch tag).
+    fn_ctx = StepContext.from_function({
+        "source_function_map_id": ctx.source_function_map_id,
+        "set_id": ctx.set_id, "set_name": ctx.set_name, "position": ctx.position,
+        "output_mode": ctx.output_mode, "append_name": ctx.append_name,
+        "output_targets": ctx.output_targets, "functions": ctx.functions,
+    })
+    assert fn_ctx.step_type == FUNCTION
+    assert fn_ctx.functions == ctx.functions
+
+
+@pytest.mark.unit
+def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
+    """#19: StepContext.from_set builds the FunctionStepContext from a loader row,
+    tagged SET (the set-adapter dispatch tag) but carrying the same typed fields."""
+    from pipeui.workflow.step_loader import fetch_steps
+    from pipeui.workflow.step import SET, StepContext
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
+
+    fn_ctx = fetch_steps(db, source_id)[0]
+    # Rebuild the same row through from_set; the loader is the producer, so reuse its
+    # captured fields to feed the factory exactly as the loader does internally.
+    ctx = StepContext.from_set({
+        "source_function_map_id": fn_ctx.source_function_map_id,
+        "set_id": fn_ctx.set_id,
+        "set_name": fn_ctx.set_name,
+        "position": fn_ctx.position,
+        "output_mode": fn_ctx.output_mode,
+        "append_name": fn_ctx.append_name,
+        "output_targets": fn_ctx.output_targets,
+        "functions": fn_ctx.functions,
+    })
+    assert ctx.step_type == SET
+    assert ctx.set_id == fn_ctx.set_id
+    assert ctx.functions == fn_ctx.functions
+    assert ctx.position == fn_ctx.position
+
+
+@pytest.mark.unit
+def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
+    """#19: get_builtin_steps produces the typed BuiltinStepContext via
+    StepContext.from_builtin — step_id / builtin_type / builtin_config / position
+    are typed attributes."""
+    from pipeui.workflow.builtins import get_builtin_steps
+    from pipeui.workflow.step import BuiltinStepContext
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=0)
+
+    ctx = get_builtin_steps(db, source_id)[0]
+    assert isinstance(ctx, BuiltinStepContext)
+    assert ctx.step_type == "builtin"
+    assert isinstance(ctx.position, int)
+    assert ctx.step_id and isinstance(ctx.step_id, str)
+    assert ctx.builtin_type == "filter"
+    assert ctx.builtin_config["column"] == "val"
+
+
+# --- #20: StepExecutor registry + dispatch swap --------------------------
+
+@pytest.mark.unit
+def test_step_executor_registry_has_function_and_builtin_executors():
+    """#20: the step-type registry resolves an executor for each step type
+    (function/set -> function executor; builtin -> builtin executor)."""
+    from pipeui.workflow.executors import STEP_EXECUTORS, StepExecutor
+
+    assert "function" in STEP_EXECUTORS
+    assert "builtin" in STEP_EXECUTORS
+    for ex in STEP_EXECUTORS.values():
+        assert isinstance(ex, StepExecutor)
+
+
+@pytest.mark.integration
+def test_run_pipeline_dispatches_through_registry(db, tmp_path):
+    """#20: run_pipeline routes every step through the StepExecutor registry — a
+    mixed function+builtin pipeline produces results only if both registry
+    executors are invoked. Patching the registry to drop the builtin executor
+    must make the builtin step vanish from the output (proving dispatch goes
+    through the registry, not an inline branch)."""
+    from pipeui.workflow import executors as ex_mod
+
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path,
+                         output_mode="append", position=0)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=1, operator="gte")
+
+    # Baseline: both the function transform and the builtin filter appear.
+    full = run_pipeline(db, source_id, "all")
+    names = [s.get("function_name") for s in full["steps"]]
+    assert "dbl" in names
+    assert "filter" in names
+
+    # Remove the builtin executor from the registry; the builtin step must drop
+    # out — proof the runner dispatches via the registry and not an inline if.
+    patched = {k: v for k, v in ex_mod.STEP_EXECUTORS.items() if k != "builtin"}
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        partial = run_pipeline(db, source_id, "all")
+    names2 = [s.get("function_name") for s in partial["steps"]]
+    assert "dbl" in names2
+    assert "filter" not in names2
+
+
+@pytest.mark.integration
+def test_run_pipeline_mixed_output_matches_golden(db, tmp_path):
+    """#20 idx0/idx2/idx3: registry dispatch produces results identical to the
+    pre-refactor inline-dispatch output on a mixed function+builtin pipeline.
+
+    The golden values below were captured from the PRE-refactor run_pipeline
+    (inline if/elif dispatch) on this exact fixture; the refactor must reproduce
+    them, proving the superseded path's behavior is preserved before and after.
+    """
+    source_id, _ = _register_source_and_ingest(db, tmp_path)
+    col_id = _val_col(db, source_id, "val")
+    fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_transform_step(db, source_id, col_id, "dbl", fn_path,
+                         output_mode="append", position=0)
+    _seed_builtin_filter_step(db, source_id, "val", 20, position=1, operator="gte")
+
+    result = run_pipeline(db, source_id, "all")
+    steps = result["steps"]
+
+    # Two step-result entries: the function transform, then the builtin filter.
+    by_name = {s.get("function_name"): s for s in steps}
+    assert set(by_name) == {"dbl", "filter"}
+
+    # Function transform: ran ok, appended a column, all 3 rows survive in working.
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+
+    # Builtin filter: ran ok over the (transformed) working table; val>=20 keeps 2.
+    flt = by_name["filter"]
+    assert flt["step_type"] == "builtin"
+    assert flt["builtin_type"] == "filter"
+    assert flt["status"] == "ok"
+    assert flt["rows_affected"] == 2
+
+    # The final staging table reflects BOTH steps: the appended transform column
+    # is present AND only the val>=20 rows remain (filter ran after transform).
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    final = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+    assert "dbl_val" in final.columns
+    assert sorted(final["val"].tolist()) == [20, 30]
+
+
+# ---------------------------------------------------------------------------
+# Slice runner-resolution-model #4 — Function-set adapter
+#   A function set is flattened by an adapter into a stream of per-member
+#   executions dispatched through the StepExecutor registry by each member's
+#   step type, so a set behaves exactly like its members placed individually
+#   and built-in members are additive later (heterogeneous-member readiness).
+# ---------------------------------------------------------------------------
+
+def _comparable_entry(entry):
+    """The behavior-bearing fields of a step-result entry, identity stripped.
+
+    result_id / set_id / set_name / source_function_map_id are identity/origin
+    keys that differ between a set and the same functions placed on separate
+    sources; the *behavior* of a flattened member is its function name, type,
+    status and row counts.
+    """
+    return {
+        "function_name": entry.get("function_name"),
+        "function_type": entry.get("function_type"),
+        "status": entry.get("status"),
+        "rows_affected": entry.get("rows_affected"),
+        "rows_passed": entry.get("rows_passed"),
+        "rows_failed": entry.get("rows_failed"),
+        "error": entry.get("error"),
+    }
+
+
+@pytest.mark.integration
+def test_function_set_flattened_equals_members_placed_individually(db, tmp_path):
+    """#14 idx0: a function set is flattened into per-member executions whose
+    results are identical to the same functions placed individually on a source.
+
+    A two-member set (validation gt0 @0, transform dbl @1) bound to column `a` is
+    run via the adapter; the SAME two functions placed as separate single-function
+    steps (same positions) on a second identical source are run individually. The
+    behavior-bearing result fields must match member-for-member."""
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+
+    # Set source: gt0 + dbl in ONE function_set.
+    set_src, _ = _register_multicol_source_and_ingest(db, tmp_path, name="setsrc", cols=("a",))
+    set_col = _val_col(db, set_src, "a")
+    _seed_mixed_set(db, set_src, set_col, val_path, tfm_path)
+    set_result = run_pipeline(db, set_src, "all")
+
+    # Individual source: gt0 and dbl placed as two separate steps, same positions.
+    ind_src, _ = _register_multicol_source_and_ingest(db, tmp_path, name="indsrc", cols=("a",))
+    ind_col = _val_col(db, ind_src, "a")
+    _seed_validation_step(db, ind_src, ind_col, "gt0", val_path, position=0)
+    _seed_transform_step(db, ind_src, ind_col, "dbl", tfm_path, output_mode="append", position=1)
+    ind_result = run_pipeline(db, ind_src, "all")
+
+    set_by_name = {e["function_name"]: _comparable_entry(e) for e in set_result["steps"]}
+    ind_by_name = {e["function_name"]: _comparable_entry(e) for e in ind_result["steps"]}
+
+    assert set(set_by_name) == {"gt0", "dbl"}
+    assert set_by_name == ind_by_name
+
+
+@pytest.mark.integration
+def test_set_containing_pipeline_output_unchanged_golden(db, tmp_path):
+    """#14 idx1: run_pipeline output for a set-containing pipeline is unchanged.
+
+    Golden values for a mixed set (gt0 validation + dbl transform on column `a`,
+    rows 1,2,3): the transform doubles into an appended column (all 3 rows survive)
+    and the validation passes all 3 rows. These are the pre-refactor emissions the
+    flattening adapter must reproduce."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a",))
+    col_id = _val_col(db, source_id, "a")
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_mixed_set(db, source_id, col_id, val_path, tfm_path)
+
+    steps = run_pipeline(db, source_id, "all")["steps"]
+    # Keyed by name ON PURPOSE: per-member emission ORDER may interleave (a set behaves
+    # as if its members were placed individually; #13 reconciliation note), so a mixed
+    # set is no longer grouped transforms-then-validations. This asserts the real
+    # invariant — each result's CONTENT and the transform/validation SPLIT into distinct
+    # result types — NOT list order. Do not re-add an order assertion.
+    by_name = {e["function_name"]: e for e in steps}
+    assert set(by_name) == {"gt0", "dbl"}
+
+    # The transform/validation split: the transform member yields a transform result
+    # (+ row count), the validation member a validation result (+ pass/fail) — distinct.
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+    assert tfm["rows_passed"] is None and tfm["rows_failed"] is None
+
+    val = by_name["gt0"]
+    assert val["function_type"] == "validation"
+    assert val["status"] == "ok"
+    assert val["rows_passed"] == 3
+    assert val["rows_failed"] == 0
+
+    # The flattened transform still chains into the staging frame (appended column).
+    staging = _list_staging_tables(db, source_id)
+    assert len(staging) == 1
+    final = db.execute(f'SELECT * FROM "{staging[0]}"').df()
+    assert any(c.startswith("dbl") for c in final.columns)
+
+
+@pytest.mark.unit
+def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_path, monkeypatch):
+    """#14 idx2 (reframed for the typed-carrier contract): the adapter builds EACH
+    member through ``StepContext.from_function`` and dispatches it BY the member
+    context's ``step_type`` resolved through the StepExecutor REGISTRY — never by a
+    hardcoded ``FunctionStepExecutor().execute(...)`` call.
+
+    Members are now ``FunctionSpec`` (function members); a built-in member is not yet
+    type-expressible — storing built-ins in a set is #275, which will widen the member
+    type to a union and re-add a genuinely heterogeneous member list here. Until then
+    the falsifiable guarantee against "hardcoded to function" is exercised two ways at
+    once, both of which break if the dispatch is hardcoded:
+      (1) each member context is built via the ``from_function`` factory (spied), and
+      (2) dispatch goes through ``STEP_EXECUTORS[member_ctx.step_type]`` — proven by
+          replacing the registry's FUNCTION slot with a recording executor: a
+          hardcoded direct call would bypass the patched registry and the recorder
+          would never fire (and the spy count would not match the member count)."""
+    from pipeui.workflow import executors as ex_mod
+    from pipeui.workflow import step as step_mod
+    from pipeui.workflow.step import FUNCTION, FunctionSpec, StepContext
+    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+
+    seen = {"types": []}
+
+    class _RecordingExecutor:
+        def execute(self, ctx, working, env):
+            seen["types"].append(ctx.step_type)
+            return StepExecResult(working=working, entries=[{"member_type": ctx.step_type}])
+
+    def _member(name):
+        return FunctionSpec(
+            function_id=name, function_name=name, function_type="transform",
+            function_class="pd.series", function_return_type="pd.Series",
+            module_path="/tmp/x.py", params=(), output_mode=None, append_name=None,
+            output_targets=(), step_type=FUNCTION,
+        )
+
+    # A two-member function set. Each member is a FunctionSpec; the adapter must build
+    # a per-member FunctionStepContext via from_function and dispatch it FUNCTION.
+    set_ctx = StepContext.from_set({
+        "source_function_map_id": "sfm", "set_id": "s", "set_name": "two",
+        "position": 0, "output_mode": None, "append_name": None, "output_targets": (),
+        "functions": [_member("m1"), _member("m2")],
+    })
+    env = StepRunEnv(conn=db, source_id=uuid.uuid4(),
+                     original_df=pd.DataFrame({"a": [1]}), ts=0,
+                     want_transforms=True, want_validations=True, run_transforms=None)
+
+    # Spy on the factory: the adapter must build every member context through it.
+    calls = {"n": 0}
+    real_from_function = step_mod.StepContext.from_function.__func__
+
+    def _spy_from_function(cls, step):
+        calls["n"] += 1
+        return real_from_function(cls, step)
+
+    monkeypatch.setattr(step_mod.StepContext, "from_function",
+                        classmethod(_spy_from_function))
+
+    patched = dict(ex_mod.STEP_EXECUTORS)
+    patched[FUNCTION] = _RecordingExecutor()
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        outcome = FunctionSetExecutor().execute(set_ctx, pd.DataFrame({"a": [1]}), env)
+
+    # (1) each member context built via from_function (one per member).
+    assert calls["n"] == 2
+    # (2) each member dispatched FUNCTION through the patched registry — a hardcoded
+    #     FunctionStepExecutor call would bypass this recorder and leave it empty.
+    assert seen["types"] == [FUNCTION, FUNCTION]
+    assert [e["member_type"] for e in outcome.entries] == [FUNCTION, FUNCTION]
+
+
+def test_adapter_dispatches_non_function_member_to_its_executor(db, monkeypatch):
+    """Slice 4 AC3 (heterogeneous-member readiness): a member whose per-member context
+    resolves to a NON-function ``step_type`` is dispatched to THAT type's executor via
+    ``STEP_EXECUTORS`` — never to the function executor. The real built-in-in-a-set
+    storage path is #275; this proves the dispatch *generality* now by making one
+    member's per-member context a ``BuiltinStepContext`` and asserting it lands on the
+    BUILTIN registry slot.
+
+    Falsifiable: the recorders key on the *registry slot that fired* (not the context's
+    own step_type), so a function-hardcoded dispatch would fire FUNCTION_SLOT and the
+    assertion would read ['FUNCTION_SLOT']."""
+    from pipeui.workflow import executors as ex_mod
+    from pipeui.workflow.step import BUILTIN, FUNCTION, FunctionSpec, StepContext
+    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+
+    seen = {"slots": []}
+
+    class _RecordingExecutor:
+        def __init__(self, slot):
+            self.slot = slot
+
+        def execute(self, ctx, working, env):
+            seen["slots"].append(self.slot)
+            return StepExecResult(working=working, entries=[{"slot": self.slot}])
+
+    member = FunctionSpec(
+        function_id="m1", function_name="m1", function_type="transform",
+        function_class="pd.series", function_return_type="pd.Series",
+        module_path="/tmp/x.py", params=(), output_mode=None, append_name=None,
+        output_targets=(), step_type=FUNCTION,
+    )
+    set_ctx = StepContext.from_set({
+        "source_function_map_id": "sfm", "set_id": "s", "set_name": "het",
+        "position": 0, "output_mode": None, "append_name": None, "output_targets": (),
+        "functions": [member],
+    })
+    env = StepRunEnv(conn=db, source_id=uuid.uuid4(),
+                     original_df=pd.DataFrame({"a": [1]}), ts=0,
+                     want_transforms=True, want_validations=True, run_transforms=None)
+
+    # Simulate a genuinely heterogeneous member: its per-member context is a BUILTIN
+    # step (the #275 storage path will produce this for real). step_type drives dispatch.
+    builtin_ctx = StepContext.from_builtin({
+        "step_id": "b1", "builtin_type": "filter", "builtin_config": {}, "position": 0,
+    })
+    monkeypatch.setattr(FunctionSetExecutor, "_member_context",
+                        staticmethod(lambda set_ctx, member: builtin_ctx))
+
+    patched = dict(ex_mod.STEP_EXECUTORS)
+    patched[FUNCTION] = _RecordingExecutor("FUNCTION_SLOT")
+    patched[BUILTIN] = _RecordingExecutor("BUILTIN_SLOT")
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        FunctionSetExecutor().execute(set_ctx, pd.DataFrame({"a": [1]}), env)
+
+    # Routed to the BUILTIN slot BY member_ctx.step_type — a function-hardcoded
+    # dispatch would have fired FUNCTION_SLOT instead.
+    assert seen["slots"] == ["BUILTIN_SLOT"]
+
+
+@pytest.mark.integration
+def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path, monkeypatch):
+    """The function-set adapter builds each function member's context through the
+    ``StepContext.from_function`` factory (the convergence-model per-member factory),
+    not a bare ``StepContext(...)`` constructor — AND the run's results are unchanged.
+
+    Spy on ``StepContext.from_function`` to record calls during a real ``run_pipeline``
+    over a two-member function set (validation gt0 + transform dbl on column `a`). The
+    factory must be invoked for the function member(s); the result entries must match
+    the golden set behavior member-for-member."""
+    import pipeui.workflow.step as ctx_mod
+
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, name="ffac", cols=("a",))
+    col_id = _val_col(db, source_id, "a")
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_mixed_set(db, source_id, col_id, val_path, tfm_path)
+
+    calls = {"n": 0}
+    real_from_function = ctx_mod.StepContext.from_function.__func__
+
+    def _spy_from_function(cls, step):
+        calls["n"] += 1
+        return real_from_function(cls, step)
+
+    monkeypatch.setattr(
+        ctx_mod.StepContext, "from_function", classmethod(_spy_from_function)
+    )
+
+    steps = run_pipeline(db, source_id, "all")["steps"]
+
+    # The adapter routed each function member through from_function (one per member).
+    assert calls["n"] >= 2
+
+    # Results unchanged: each member's content matches the golden mixed-set behavior.
+    by_name = {e["function_name"]: e for e in steps}
+    assert set(by_name) == {"gt0", "dbl"}
+
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+
+    val = by_name["gt0"]
+    assert val["function_type"] == "validation"
+    assert val["status"] == "ok"
+    assert val["rows_passed"] == 3
+    assert val["rows_failed"] == 0
