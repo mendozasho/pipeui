@@ -19,7 +19,6 @@ moved code is byte-for-byte the inline logic; only its home changed.
 """
 from __future__ import annotations
 
-import math
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path

@@ -7,7 +7,6 @@ Principle 2: collapse on content_hash_id — preserve surrogate function_id, ove
 """
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import re
 import sys
