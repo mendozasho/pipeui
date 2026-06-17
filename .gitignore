@@ -21,3 +21,8 @@ node_modules
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+# editor/OS cruft
+.DS_Store
+**/.DS_Store
+.idea/
