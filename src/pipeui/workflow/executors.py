@@ -177,20 +177,30 @@ class FunctionSetExecutor:
 
     @staticmethod
     def _member_context(set_ctx: "StepContext", member: dict) -> "StepContext":
-        """Wrap one set member as a single-member step context.
+        """Wrap one set member as a single-member step context, via the factory trio.
 
-        The sub-context carries the set's step-level keys (``source_function_map_id``,
-        ``set_name``, ``set_id``, ``position``, ``output_targets``) with a one-element
-        ``functions`` list, so the per-member executor sees the exact step shape it saw
-        when the whole set ran. The member's step type (``member['step_type']``,
-        defaulting to ``FUNCTION``) is the registry key — type-agnostic dispatch.
+        The convergence model builds every context through a ``StepContext`` factory:
+        a function member through ``from_function``, a built-in member through
+        ``from_builtin`` — never a bare constructor. Routing by the member's own step
+        type (``member['step_type']``, defaulting to ``FUNCTION``) keeps dispatch
+        type-agnostic: a function member still resolves to ``FUNCTION`` ->
+        ``FunctionStepExecutor`` (behavior-preserving), and a built-in member becomes
+        runnable additively.
+
+        The sub-context carries the set's step-level keys with a one-element
+        ``functions`` list and the set's ``position``, so the per-member executor sees
+        the exact step shape it saw when the whole set ran.
         """
+        from pipeui.workflow.context import BUILTIN as _BUILTIN
+        from pipeui.workflow.context import FUNCTION as _FUNCTION
         from pipeui.workflow.context import StepContext
 
         sub = dict(set_ctx.data)
         sub["functions"] = [member]
-        sub["step_type"] = member.get("step_type", FUNCTION)
-        return StepContext(step_type=sub["step_type"], position=set_ctx.position, data=sub)
+        sub["position"] = set_ctx.position
+        if member.get("step_type", _FUNCTION) == _BUILTIN:
+            return StepContext.from_builtin(sub)
+        return StepContext.from_function(sub)
 
 
 class BuiltinStepExecutor:
@@ -207,11 +217,12 @@ class BuiltinStepExecutor:
 
         step = ctx.data
         try:
-            working = execute_builtin_step(env.conn, working, step)
+            working, consumed_result_id = execute_builtin_step(env.conn, working, step)
             _write_staging_table(env.conn, env.source_id, working, env.ts)
             entry = _builtin_result(
                 step, env.source_id, status="ok", error=None,
                 rows_affected=len(working),
+                consumed_result_id=consumed_result_id,
             )
             return StepExecResult(working=working, entries=[entry], wrote_staging=True)
         except Exception as exc:  # noqa: BLE001 - preserve inline behavior (record + continue)

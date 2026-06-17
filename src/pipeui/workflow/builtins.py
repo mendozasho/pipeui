@@ -13,9 +13,12 @@ get_builtin_steps(conn, source_id) -> list[dict]
     Returns all source_builtin_map rows for a source ordered by position,
     each with step_type="builtin".
 
-execute_builtin_step(conn, df, step) -> pd.DataFrame
+execute_builtin_step(conn, df, step) -> tuple[pd.DataFrame, str | None]
     Executes a single built-in step against the working DataFrame and returns
-    the result.  Built-ins run as DuckDB SQL, NOT via the worker subprocess.
+    (result_df, consumed_result_id).  consumed_result_id is the resolved
+    transformed-output result_id when a join consumed a transformed source
+    (lineage), else None.  Built-ins run as DuckDB SQL, NOT via the worker
+    subprocess.
 
 get_unified_pipeline(conn, source_id) -> dict | None
     Returns a unified list of function steps and built-in steps ordered by
@@ -306,8 +309,13 @@ def execute_builtin_step(
     conn: duckdb.DuckDBPyConnection,
     df: pd.DataFrame,
     step: dict,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, str | None]:
     """Execute a single built-in step against the working DataFrame.
+
+    Returns ``(result_df, consumed_result_id)``. ``consumed_result_id`` is the
+    resolved transformed-output ``result_id`` when a join consumed a transformed
+    source (lineage — PRD User Story 7), else ``None`` (pivot/filter never consume
+    another source, and a raw join consumes the source's own data, not a result).
 
     Uses DuckDB directly (no worker subprocess).
     Raises ValueError for bad config; other exceptions propagate.
@@ -320,9 +328,9 @@ def execute_builtin_step(
     if btype == "join":
         return _execute_join(conn, df, cfg)
     elif btype == "pivot":
-        return _execute_pivot(conn, df, cfg)
+        return _execute_pivot(conn, df, cfg), None
     elif btype == "filter":
-        return _execute_filter(conn, df, cfg)
+        return _execute_filter(conn, df, cfg), None
     else:
         raise ValueError(f"Unknown builtin_type: {btype!r}")
 
@@ -331,7 +339,7 @@ def _execute_join(
     conn: duckdb.DuckDBPyConnection,
     left_df: pd.DataFrame,
     cfg: dict,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, str | None]:
     """Execute a join built-in step.
 
     Config shape:
@@ -345,6 +353,12 @@ def _execute_join(
     if never run). This is the single seam that decides where the join's right input
     comes from, so the toggle is honored instead of always reading raw (PRD
     Implementation Decisions -> Join honors the toggle).
+
+    Returns ``(result_df, consumed_result_id)``: when the join consumed a
+    transformed source, ``consumed_result_id`` is that resolved transformed-output's
+    ``result_id`` so the join records the result it consumed (lineage — PRD User
+    Story 7); a raw join consumes the source's own data, not a produced result, so
+    it is ``None``.
     """
     from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
 
@@ -355,7 +369,8 @@ def _execute_join(
 
     # Resolve the right frame through the seam; register both sides as temp views so
     # the join shape is uniform regardless of where the right frame came from.
-    right_df, _ref = resolve_frame(conn, right_source_id, mode)
+    right_df, ref = resolve_frame(conn, right_source_id, mode)
+    consumed_result_id = ref.result_id if mode == TRANSFORMED else None
 
     _left_view = f"_builtin_join_left_{uuid.uuid4().hex[:8]}"
     _right_view = f"_builtin_join_right_{uuid.uuid4().hex[:8]}"
@@ -384,7 +399,7 @@ def _execute_join(
         conn.execute(f'DROP VIEW IF EXISTS "{_left_view}"')
         conn.execute(f'DROP VIEW IF EXISTS "{_right_view}"')
 
-    return result
+    return result, consumed_result_id
 
 
 def _execute_pivot(

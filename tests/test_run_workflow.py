@@ -1973,10 +1973,13 @@ def test_set_containing_pipeline_output_unchanged_golden(db, tmp_path):
 def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_path):
     """#14 idx2: the adapter dispatches each member through the StepExecutor
     registry BY the member's step type — not hardcoded to function. Proven with a
-    member list containing a NON-function member object routed to a fake executor
-    registered under its step type. In-memory only; no set-membership storage."""
+    heterogeneous member list (a function member + a built-in member) each routed to
+    a fake executor registered under its own step type. The convergence model builds
+    every member context through a StepContext factory (function -> from_function,
+    built-in -> from_builtin), so the two supported member types — FUNCTION and
+    BUILTIN — are the ones exercised here. In-memory only; no set-membership storage."""
     from pipeui.workflow import executors as ex_mod
-    from pipeui.workflow.context import StepContext
+    from pipeui.workflow.context import BUILTIN, FUNCTION, StepContext
     from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"types": []}
@@ -1987,16 +1990,16 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
             return StepExecResult(working=working, entries=[{"member_type": ctx.step_type}])
 
     # A set step carrying a heterogeneous member list: one ordinary function member
-    # and one non-function member whose step_type routes to a different executor.
+    # and one built-in member whose step_type routes to a different executor.
     set_step = {
         "step_type": "function",
         "position": 0,
         "set_id": "s", "set_name": "het", "source_function_map_id": "sfm",
         "functions": [
             {"function_id": "f1", "function_name": "fn_member",
-             "function_type": "transform", "step_type": "function"},
-            {"function_id": "x1", "function_name": "weird_member",
-             "function_type": "transform", "step_type": "noop_member"},
+             "function_type": "transform", "step_type": FUNCTION},
+            {"step_id": "b1", "builtin_type": "filter",
+             "builtin_config": {}, "step_type": BUILTIN},
         ],
     }
     ctx = StepContext.for_step(set_step)
@@ -2005,11 +2008,62 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
                      want_transforms=True, want_validations=True)
 
     patched = dict(ex_mod.STEP_EXECUTORS)
-    patched["function"] = _RecordingExecutor()
-    patched["noop_member"] = _RecordingExecutor()
+    patched[FUNCTION] = _RecordingExecutor()
+    patched[BUILTIN] = _RecordingExecutor()
     with patch.object(ex_mod, "STEP_EXECUTORS", patched):
         outcome = FunctionSetExecutor().execute(ctx, pd.DataFrame({"a": [1]}), env)
 
-    # Both members dispatched, each resolved by its OWN step type via the registry.
-    assert seen["types"] == ["function", "noop_member"]
-    assert [e["member_type"] for e in outcome.entries] == ["function", "noop_member"]
+    # Both members dispatched, each resolved by its OWN step type via the registry —
+    # NOT both routed to "function" (which is the bug this guards against).
+    assert seen["types"] == [FUNCTION, BUILTIN]
+    assert [e["member_type"] for e in outcome.entries] == [FUNCTION, BUILTIN]
+
+
+@pytest.mark.integration
+def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path, monkeypatch):
+    """The function-set adapter builds each function member's context through the
+    ``StepContext.from_function`` factory (the convergence-model per-member factory),
+    not a bare ``StepContext(...)`` constructor — AND the run's results are unchanged.
+
+    Spy on ``StepContext.from_function`` to record calls during a real ``run_pipeline``
+    over a two-member function set (validation gt0 + transform dbl on column `a`). The
+    factory must be invoked for the function member(s); the result entries must match
+    the golden set behavior member-for-member."""
+    import pipeui.workflow.context as ctx_mod
+
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, name="ffac", cols=("a",))
+    col_id = _val_col(db, source_id, "a")
+    val_path = _write_fn_file(tmp_path, "gt0", "return data > 0")
+    tfm_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
+    _seed_mixed_set(db, source_id, col_id, val_path, tfm_path)
+
+    calls = {"n": 0}
+    real_from_function = ctx_mod.StepContext.from_function.__func__
+
+    def _spy_from_function(cls, step):
+        calls["n"] += 1
+        return real_from_function(cls, step)
+
+    monkeypatch.setattr(
+        ctx_mod.StepContext, "from_function", classmethod(_spy_from_function)
+    )
+
+    steps = run_pipeline(db, source_id, "all")["steps"]
+
+    # The adapter routed each function member through from_function (one per member).
+    assert calls["n"] >= 2
+
+    # Results unchanged: each member's content matches the golden mixed-set behavior.
+    by_name = {e["function_name"]: e for e in steps}
+    assert set(by_name) == {"gt0", "dbl"}
+
+    tfm = by_name["dbl"]
+    assert tfm["function_type"] == "transform"
+    assert tfm["status"] == "ok"
+    assert tfm["rows_affected"] == 3
+
+    val = by_name["gt0"]
+    assert val["function_type"] == "validation"
+    assert val["status"] == "ok"
+    assert val["rows_passed"] == 3
+    assert val["rows_failed"] == 0

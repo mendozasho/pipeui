@@ -645,11 +645,15 @@ def _builtin_result(
     status: str,
     error: str | None,
     rows_affected: int | None,
+    consumed_result_id: str | None = None,
 ) -> dict:
     """Build a step-results entry for a built-in step (join/pivot/filter).
 
     Reuses the transform RunResult shape (function_type='transform') so the Results
     screen renders it like any other transform step; the built-in type is the label.
+
+    ``consumed_result_id`` is the resolved transformed-output ``result_id`` a join
+    consumed (lineage — PRD User Story 7); None for raw joins and for pivot/filter.
     """
     btype = step["builtin_type"]
     rr = RunResult(
@@ -670,6 +674,7 @@ def _builtin_result(
         "rows_affected": rows_affected,
         "rows_passed": None,
         "rows_failed": None,
+        "consumed_result_id": consumed_result_id,
     }
     entry.update(rr.to_dict())
     return entry
