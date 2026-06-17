@@ -32,6 +32,25 @@ ticket map — derives from it, so the slug is the single key that correlates th
   branches then suffix the session branch the same way (`<session-branch>-<slice_id>`), so
   the suffix rule survives even in the fallback.
 
+### Release umbrella (work that rides an active accumulator)
+
+The accumulator `release/<feature_slug>` is a staging line that merges to `main` as **one
+unit**. While it is open it carries commits that are not yet on `main`, so:
+
+- **If your change depends on the accumulator's unmerged content, it rides the umbrella.**
+  Branch off the accumulator tip — slices as `feature/<feature_slug>-<slice_id>`, a one-off
+  fix as `fix/<short-slug>` — and open its PR with **base = the accumulator**, never `main`.
+  It then rebases along with the accumulator and reaches `main` when the accumulator does.
+  (Example: a fix to code that exists only on the accumulator must target the accumulator,
+  or the PR diff is polluted by every unmerged accumulator commit.)
+- **If your change is independent of the accumulator, keep it off `main`.** Branch
+  `fix/<short-slug>` from `main`, PR base `main` — don't entangle it with a release that may
+  be far from merging.
+
+Decide by one question: *does this change build on commits that live only on the
+accumulator?* Yes → off the accumulator, into the accumulator. No → off `main`, into `main`.
+When unsure, verify the PR's real base before merging.
+
 ## File-write discipline (all durable artifacts)
 
 All machine-readable ledgers (discovery, slice, ticket, plan caches) and projected docs
