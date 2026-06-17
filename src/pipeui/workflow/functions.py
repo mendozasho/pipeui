@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import re
 import sys
+import types
 import uuid
 from pathlib import Path
 from typing import Any
@@ -121,7 +122,6 @@ def _load_module(file_path: Path):
     that was modified within the same process (e.g. during tests or after a
     user edits the file before re-scanning).
     """
-    import types
     source = file_path.read_text(encoding="utf-8")
     code = compile(source, str(file_path), "exec")
     mod = types.ModuleType(f"_pipeui_scan_{file_path.stem}")

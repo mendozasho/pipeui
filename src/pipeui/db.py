@@ -94,7 +94,7 @@ def infer_column_types(
             ).fetchall()
         except Exception as exc:
             # Fall back to pandas for xlsx when read_xlsx is unavailable.
-            import pandas as pd  # noqa: PLC0415
+            import pandas as pd  # lazy: xlsx-fallback path only, when DuckDB read_xlsx is unavailable  # noqa: PLC0415
 
             df = pd.read_excel(file_path, nrows=0)
             print(exc)

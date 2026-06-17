@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import datetime
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -78,7 +80,6 @@ def find_source_by_pattern(
     filename: str,
 ) -> uuid.UUID | None:
     """Return the source_id of an existing source whose pattern matches filename's stem, or None."""
-    import re
     stem = Path(filename).stem
     rows = conn.execute(
         "SELECT source_id, pattern FROM source_registry WHERE pattern IS NOT NULL"
@@ -113,7 +114,6 @@ def peek_header_columns(file_path: str) -> list[str]:
             wb.close()  # read-only workbooks must be closed to release the file
         return [str(c).strip() for c in header if c is not None and str(c).strip()]
     if ext in (".csv", ".tsv"):
-        import csv
         delimiter = "\t" if ext == ".tsv" else ","
         with open(file_path, newline="", encoding="utf-8-sig") as fh:
             row = next(csv.reader(fh, delimiter=delimiter), [])

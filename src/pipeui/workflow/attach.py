@@ -18,6 +18,7 @@ detach_function(conn, source_id, source_function_map_id)
 """
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -651,8 +652,7 @@ def suggest_bindings(
         ).fetchall()
         seen_col_ids = {c["column_id"] for c in available_columns}
         for (config,) in join_step_rows:
-            import json as _json
-            cfg = _json.loads(config) if isinstance(config, str) else config
+            cfg = json.loads(config) if isinstance(config, str) else config
             right_source_id = cfg.get("right_source_id")
             keep = cfg.get("keep_columns", "all")
             if right_source_id and keep != "none":
