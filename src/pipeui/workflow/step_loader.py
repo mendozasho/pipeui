@@ -16,20 +16,25 @@ import uuid
 
 import duckdb
 
+from pipeui.workflow.step import (
+    BuiltinStepContext,
+    FunctionStepContext,
+    StepContext,
+)
+
 
 def _fetch_steps(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
-) -> list[dict]:
+) -> list[FunctionStepContext]:
     """Return pipeline steps for a source, ordered by position.
 
-    Each step dict has:
-      source_function_map_id, set_id, set_name, position, output_mode, append_name,
-      function_type (dominant type for the step),
-      functions: [{ function_id, function_name, function_type,
-                    function_class, function_return_type, module_path,
-                    params: [{ param_id, param_name, param_type,
-                               bindings: [column_name, ...] }] }]
+    The loader is the producer of the ``StepContext`` carrier: each fetched
+    ``source_function_map`` row is built into a typed ``FunctionStepContext`` (with
+    ``FunctionSpec`` members) via ``StepContext.from_function`` — never returned as a
+    raw dict. Each member carries: function_id, function_name, function_type,
+    function_class, function_return_type, module_path, params (typed Mapping rows),
+    output_mode, append_name, output_targets.
     """
     set_rows = conn.execute(
         """
@@ -162,7 +167,10 @@ def _fetch_steps(
         ).fetchall()
         output_targets = [r[0] for r in target_rows]
 
-        steps.append({
+        # Tag SET so the runner routes the step to the function-set adapter (slice 4),
+        # which flattens it into per-member FUNCTION dispatch — the pre-refactor
+        # for_step(...) -> from_set behavior the runner relied on.
+        steps.append(StepContext.from_set({
             "source_function_map_id": str(sfm_id),
             "set_id": str(set_id),
             "set_name": set_name,
@@ -172,7 +180,7 @@ def _fetch_steps(
             "function_type": step_function_type,
             "output_targets": output_targets,
             "functions": functions,
-        })
+        }))
 
     return steps
 
@@ -180,19 +188,22 @@ def _fetch_steps(
 def get_builtin_steps(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
-) -> list[dict]:
-    """Return all source_builtin_map rows for a source ordered by position."""
+) -> list[BuiltinStepContext]:
+    """Return all source_builtin_map rows for a source as typed ``BuiltinStepContext``,
+    ordered by position. The loader is the producer of the carrier — each row is built
+    via ``StepContext.from_builtin`` (never a raw dict). ``builtin_config`` is decoded
+    from its stored JSON to the typed ``Mapping`` depth boundary."""
     rows = conn.execute(
         "SELECT step_id, builtin_type, builtin_config, position FROM source_builtin_map WHERE source_id = ? ORDER BY position ASC",
         [source_id],
     ).fetchall()
     result = []
     for step_id, btype, bcfg, pos in rows:
-        result.append({
+        result.append(StepContext.from_builtin({
             "step_id": str(step_id),
             "step_type": "builtin",
             "builtin_type": btype,
             "builtin_config": json.loads(bcfg) if isinstance(bcfg, str) else bcfg,
             "position": pos,
-        })
+        }))
     return result

@@ -37,7 +37,23 @@ from pipeui.workflow.builtins import (
     patch_builtin,
 )
 from pipeui.workflow.run import run_pipeline
+from pipeui.workflow.step import StepContext
 from tests.conftest import make_registered_source
+
+
+def _builtin_step(builtin_type: str, builtin_config: dict, *, step_id="s", position=0):
+    """Build the typed BuiltinStepContext carrier execute_builtin_step now consumes.
+
+    execute_builtin_step's input boundary is the BuiltinStepContext carrier (the
+    loader/executor producer); these tests construct it via the factory exactly as
+    the loader does."""
+    return StepContext.from_builtin({
+        "step_id": step_id,
+        "step_type": "builtin",
+        "builtin_type": builtin_type,
+        "builtin_config": builtin_config,
+        "position": position,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +320,7 @@ def test_execute_builtin_join(db):
         "on": [{"left_col": "id", "right_col": "id"}],
         "keep_columns": "all",
     }
-    step = {"builtin_type": "join", "builtin_config": cfg}
+    step = _builtin_step("join", cfg)
     result, _ = execute_builtin_step(db, left_df, step)
 
     assert isinstance(result, pd.DataFrame)
@@ -329,7 +345,7 @@ def test_execute_builtin_pivot(db):
         "pivot_column": "category",
         "value_columns": [{"col_name": "sales", "aggregations": ["sum"]}],
     }
-    step = {"builtin_type": "pivot", "builtin_config": cfg}
+    step = _builtin_step("pivot", cfg)
     result, _ = execute_builtin_step(db, df, step)
 
     assert isinstance(result, pd.DataFrame)
@@ -437,7 +453,7 @@ def test_execute_builtin_filter_operators(db):
     df = pd.DataFrame({"k": ["a", "b", "c", None], "n": [1, 5, 10, 7]})
 
     def run(cfg):
-        return execute_builtin_step(db, df, {"builtin_type": "filter", "builtin_config": cfg})[0]
+        return execute_builtin_step(db, df, _builtin_step("filter", cfg))[0]
 
     assert list(run({"column": "n", "operator": "gte", "value": "5"})["n"]) == [5, 10, 7]
     assert list(run({"column": "n", "operator": "eq", "value": "10"})["n"]) == [10]
@@ -522,7 +538,7 @@ def test_execute_join_raw_unchanged_when_use_transformed_false(db):
         "SELECT * FROM (VALUES (1, 'XFORM')) AS t(id, rtag)"
     )
 
-    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=False)}
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=False))
     result, _ = execute_builtin_step(db, left_df, step)
 
     # Inner join on id against RAW right: ids 1,2 match; tags are the raw ones.
@@ -547,7 +563,7 @@ def test_execute_join_transformed_uses_resolved_frame(db):
         "SELECT * FROM (VALUES (1, 'XF1'), (2, 'XF2'), (3, 'XF3')) AS t(id, rtag)"
     )
 
-    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=True))
     result, _ = execute_builtin_step(
         db, left_df, step,
         run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
@@ -576,7 +592,7 @@ def test_execute_join_transformed_materializes_never_run_right_source(db):
         db, right_id, "filter", {"column": "amount", "operator": "gt", "value": "100"}
     )["ok"]
 
-    step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
+    step = _builtin_step("join", _join_cfg(right_id, use_transformed=True))
     result, _ = execute_builtin_step(
         db, left_df, step,
         run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
@@ -600,12 +616,9 @@ def test_execute_join_messy_null_keys(db):
     _make_instance_table(db, left_id, left_df)
     _make_instance_table(db, right_id, raw_right)
 
-    step = {
-        "builtin_type": "join",
-        "builtin_config": _join_cfg(
-            right_id, use_transformed=False, on=[{"left_col": "key", "right_col": "key"}]
-        ),
-    }
+    step = _builtin_step("join", _join_cfg(
+        right_id, use_transformed=False, on=[{"left_col": "key", "right_col": "key"}]
+    ))
     result, _ = execute_builtin_step(db, left_df, step)
 
     # Only non-null matching keys join: 'a' and 'b'. NULL=NULL never matches.

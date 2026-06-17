@@ -37,6 +37,7 @@ import pandas as pd
 
 from pipeui.ids import new_id
 from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
+from pipeui.workflow.step import BuiltinStepContext
 # get_builtin_steps lives in step_loader (L1, pure read); re-exported here so
 # ``from pipeui.workflow.builtins import get_builtin_steps`` keeps working.
 from pipeui.workflow.step_loader import get_builtin_steps  # noqa: F401
@@ -269,9 +270,17 @@ def get_unified_pipeline(
             "output_mode": output_mode,
         })
 
-    # Built-in steps
+    # Built-in steps. get_builtin_steps now produces the typed BuiltinStepContext
+    # carrier; this API-response builder serializes each back to the wire dict shape
+    # the unified-pipeline endpoint returns (the carrier boundary ends at the runner).
     for bstep in get_builtin_steps(conn, source_id):
-        steps.append(bstep)
+        steps.append({
+            "step_id": bstep.step_id,
+            "step_type": "builtin",
+            "builtin_type": bstep.builtin_type,
+            "builtin_config": bstep.builtin_config,
+            "position": bstep.position,
+        })
 
     # Sort unified list by position
     steps.sort(key=lambda s: (s["position"], s.get("set_name") or s.get("builtin_type") or ""))
@@ -293,7 +302,7 @@ def get_unified_pipeline(
 def execute_builtin_step(
     conn: duckdb.DuckDBPyConnection,
     df: pd.DataFrame,
-    step: dict,
+    step: "BuiltinStepContext",
     *,
     run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
 ) -> tuple[pd.DataFrame, str | None]:
@@ -312,8 +321,8 @@ def execute_builtin_step(
     Uses DuckDB directly (no worker subprocess).
     Raises ValueError for bad config; other exceptions propagate.
     """
-    btype = step["builtin_type"]
-    cfg = step["builtin_config"]
+    btype = step.builtin_type
+    cfg = step.builtin_config
     if isinstance(cfg, str):
         cfg = json.loads(cfg)
 

@@ -33,8 +33,16 @@ from pipeui.sql_user_table import instance_table_name
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.builtins import execute_builtin_step
 from pipeui.workflow.bundles import pair_bundles
-from pipeui.workflow.context import BUILTIN, FUNCTION, SET, StepContext
 from pipeui.workflow.staging import _write_staging_table
+from pipeui.workflow.step import (
+    BUILTIN,
+    FUNCTION,
+    SET,
+    BuiltinStepContext,
+    FunctionSpec,
+    FunctionStepContext,
+    StepContext,
+)
 from pipeui.workflow.worker import call_function
 
 
@@ -156,11 +164,13 @@ def _normalize_to_series(result, n_rows: int) -> pd.Series:
     return pd.Series([result] * n_rows)
 
 
-def _step_has(step: dict, function_type: str) -> bool:
+def _step_has(step: "FunctionStepContext", function_type: str) -> bool:
     """#266: a function set is a transparent container — a step 'has' a type when ANY
     of its functions is of that type. Routing reads this, not a single dominant type,
-    so a mixed set runs both its transforms and its validations."""
-    return any(f.get("function_type") == function_type for f in step.get("functions", []))
+    so a mixed set runs both its transforms and its validations.
+
+    Built-in steps have no ``functions`` member; treat them as holding neither type."""
+    return any(f.function_type == function_type for f in getattr(step, "functions", ()))
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +179,7 @@ def _step_has(step: dict, function_type: str) -> bool:
 
 def _execute_transform_step(
     working: pd.DataFrame,
-    step: dict,
+    step: "FunctionStepContext",
     conn: duckdb.DuckDBPyConnection | None = None,
     source_id: uuid.UUID | None = None,
 ) -> tuple[pd.DataFrame, str | None, list[dict]]:
@@ -182,8 +192,8 @@ def _execute_transform_step(
       - **append** → each bundle adds a NEW column, named by the user-provided append
         name (collision-suffixed) or a cleaned auto-label of the varying column.
       - **replace** → bundle i overwrites the i-th output-target column
-        (`step["output_targets"]`, in position order); with no explicit targets a
-        single-varying step defaults to its input column.
+        (the function's ``output_targets``, in position order); with no explicit
+        targets a single-varying step defaults to its input column.
     A `pd.DataFrame` transform runs once over the whole table regardless of
     output_mode (no bundle expansion). Each run yields one RunResult dict.
     On error the original working table is returned unchanged.
@@ -192,8 +202,8 @@ def _execute_transform_step(
     current = working
     run_results: list[dict] = []
     # #264: output config (output_mode / append_name / output_targets) is per-FUNCTION,
-    # resolved inside the loop from each fn dict; the step-level value is the legacy fallback.
-    step_output_mode = step["output_mode"]
+    # resolved inside the loop from each FunctionSpec; the step-level value is the legacy fallback.
+    step_output_mode = step.output_mode
 
     def _emit(*, fn_name, bound_col, status, error):
         bundle_key = bound_col or ""
@@ -209,17 +219,17 @@ def _execute_transform_step(
         )
         run_results.append(rr.to_dict())
 
-    for fn in step["functions"]:
-        if fn["function_type"] != "transform":
+    for fn in step.functions:
+        if fn.function_type != "transform":
             continue
 
-        module_path = fn["module_path"]
-        fn_name = fn["function_name"]
-        fn_class = fn["function_class"]
+        module_path = fn.module_path
+        fn_name = fn.function_name
+        fn_class = fn.function_class
         # #264: this function's own output config (per-function, legacy step fallback).
-        output_mode = fn.get("output_mode", step_output_mode)
-        append_name = fn.get("append_name")
-        output_targets = fn.get("output_targets") or []
+        output_mode = fn.output_mode if fn.output_mode is not None else step_output_mode
+        append_name = fn.append_name
+        output_targets = list(fn.output_targets) or []
 
         # SQL functions: execute directly on DuckDB connection (whole-table, one run).
         if module_path and module_path.endswith(".sql"):
@@ -241,7 +251,7 @@ def _execute_transform_step(
         # #258: resolve scalar params once; broadcast into every call/bundle. A
         # required param with no value/default fails this function cleanly (the step
         # continues so other functions still run).
-        params = fn["params"]
+        params = list(fn.params)
         try:
             extra_kwargs = resolve_scalar_kwargs(params)
         except RequiredParamError as exc:
@@ -398,26 +408,26 @@ def _validation_runresult(
     )
 
 
-def _step_transform_function(step: dict) -> dict | None:
+def _step_transform_function(step: "FunctionStepContext") -> "FunctionSpec | None":
     """Return the first transform function in a step (the N=1 step's function)."""
-    for fn in step.get("functions", []):
-        if fn.get("function_type") == "transform":
+    for fn in getattr(step, "functions", ()):
+        if fn.function_type == "transform":
             return fn
     return None
 
 
-def _first_bound_column(fn: dict | None) -> str | None:
+def _first_bound_column(fn: "FunctionSpec | None") -> str | None:
     """Return the first bound column across a function's params (N=1 bundle key)."""
     if not fn:
         return None
-    for p in fn.get("params", []):
+    for p in fn.params:
         if p.get("bindings"):
             return p["bindings"][0]
     return None
 
 
 def _transform_runresult(
-    step: dict,
+    step: "FunctionStepContext",
     source_id: uuid.UUID | None,
     *,
     status: str,
@@ -429,7 +439,7 @@ def _transform_runresult(
     binds no column, e.g. a pd.DataFrame transform). The label is normalized.
     """
     fn = _step_transform_function(step)
-    fn_name = fn["function_name"] if fn else (step.get("set_name") or "transform")
+    fn_name = fn.function_name if fn else (step.set_name or "transform")
     bound_col = _first_bound_column(fn)
     bundle_key = bound_col or ""
     label_seed = bound_col if bound_col else fn_name
@@ -445,7 +455,7 @@ def _transform_runresult(
 
 
 def _builtin_result(
-    step: dict,
+    step: "BuiltinStepContext",
     source_id: uuid.UUID | None,
     *,
     status: str,
@@ -461,19 +471,19 @@ def _builtin_result(
     ``consumed_result_id`` is the resolved transformed-output ``result_id`` a join
     consumed (lineage — PRD User Story 7); None for raw joins and for pivot/filter.
     """
-    btype = step["builtin_type"]
+    btype = step.builtin_type
     rr = RunResult(
         function_name=btype,
         function_type="transform",
         source_id=source_id if source_id is not None else uuid.UUID(int=0),
-        bundle_key=step["step_id"],
+        bundle_key=step.step_id,
         label=normalize_label(btype),
         status=status,
         error=error,
     )
     entry = {
         "source_function_map_id": None,
-        "step_id": step["step_id"],
+        "step_id": step.step_id,
         "step_type": "builtin",
         "builtin_type": btype,
         "set_name": btype,
@@ -492,7 +502,7 @@ def _builtin_result(
 
 def _execute_validation_step(
     original: pd.DataFrame,
-    step: dict,
+    step: "FunctionStepContext",
     conn: duckdb.DuckDBPyConnection | None = None,
     source_id: uuid.UUID | None = None,
 ) -> list[dict]:
@@ -506,8 +516,8 @@ def _execute_validation_step(
     conn and source_id are required for SQL function execution.
     """
     results = []
-    set_name = step["set_name"]
-    set_id = step["set_id"]
+    set_name = step.set_name
+    set_id = step.set_id
 
     def _emit(*, fn_id, fn_name, bound_col, status, rows_passed, rows_failed,
               failing_rows, error):
@@ -526,14 +536,14 @@ def _execute_validation_step(
         entry.update(rr.to_dict())
         return entry
 
-    for fn in step["functions"]:
-        if fn["function_type"] != "validation":
+    for fn in step.functions:
+        if fn.function_type != "validation":
             continue
 
-        fn_id = fn["function_id"]
-        fn_name = fn["function_name"]
-        fn_class = fn["function_class"]
-        module_path = fn["module_path"]
+        fn_id = fn.function_id
+        fn_name = fn.function_name
+        fn_class = fn.function_class
+        module_path = fn.module_path
 
         # SQL functions: execute directly on DuckDB connection (no column expansion).
         if module_path and module_path.endswith(".sql"):
@@ -561,7 +571,7 @@ def _execute_validation_step(
             ))
             continue
 
-        params = fn["params"]
+        params = list(fn.params)
 
         # #258: resolve scalar params once and broadcast them into every call/bundle.
         # A required param with no value and no default fails the function cleanly.
@@ -741,7 +751,7 @@ def _interpret_validation_result(result, original, *, fn_id, fn_name, bound_col,
 # StepExecutor registry + per-type executors
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class StepExecResult:
     """The uniform result an executor returns to the runner.
 
@@ -756,7 +766,7 @@ class StepExecResult:
     wrote_staging: bool = False
 
 
-@dataclass
+@dataclass(frozen=True)
 class StepRunEnv:
     """Per-run inputs an executor needs that are not part of the step itself.
 
@@ -794,9 +804,9 @@ class FunctionStepExecutor:
     """
 
     def execute(self, ctx, working, env):
-        step = ctx.data
-        sfm_id = step["source_function_map_id"]
-        set_name = step["set_name"]
+        step = ctx
+        sfm_id = step.source_function_map_id
+        set_name = step.set_name
         entries: list[dict] = []
         wrote_staging = False
 
@@ -862,7 +872,7 @@ class FunctionSetExecutor:
     """
 
     def execute(self, ctx, working, env):
-        members = ctx.get("functions") or []
+        members = ctx.functions or ()
         entries: list[dict] = []
         wrote_staging = False
 
@@ -882,27 +892,28 @@ class FunctionSetExecutor:
         return StepExecResult(working=working, entries=entries, wrote_staging=wrote_staging)
 
     @staticmethod
-    def _member_context(set_ctx: "StepContext", member: dict) -> "StepContext":
-        """Wrap one set member as a single-member step context, via the factory trio.
+    def _member_context(set_ctx: "FunctionStepContext", member: "FunctionSpec") -> "FunctionStepContext":
+        """Wrap one set member as a single-member ``FunctionStepContext`` via the
+        ``StepContext.from_function`` factory — never a bare constructor.
 
-        The convergence model builds every context through a ``StepContext`` factory:
-        a function member through ``from_function``, a built-in member through
-        ``from_builtin`` — never a bare constructor. Routing by the member's own step
-        type (``member['step_type']``, defaulting to ``FUNCTION``) keeps dispatch
-        type-agnostic: a function member still resolves to ``FUNCTION`` ->
-        ``FunctionStepExecutor`` (behavior-preserving), and a built-in member becomes
-        runnable additively.
-
-        The sub-context carries the set's step-level keys with a one-element
-        ``functions`` list and the set's ``position``, so the per-member executor sees
-        the exact step shape it saw when the whole set ran.
+        Members are ``FunctionSpec`` (function members). A built-in member is not
+        type-expressible yet (storing built-ins in a set is #275, which will widen the
+        member type to a union); until then every member routes to ``FUNCTION`` ->
+        ``FunctionStepExecutor`` (behavior-preserving). The sub-context reuses the
+        set's step-level fields with a one-element ``functions`` tuple and the set's
+        ``position``, so the per-member executor sees the exact step shape it saw when
+        the whole set ran.
         """
-        sub = dict(set_ctx.data)
-        sub["functions"] = [member]
-        sub["position"] = set_ctx.position
-        if member.get("step_type", FUNCTION) == BUILTIN:
-            return StepContext.from_builtin(sub)
-        return StepContext.from_function(sub)
+        return StepContext.from_function({
+            "source_function_map_id": set_ctx.source_function_map_id,
+            "set_id": set_ctx.set_id,
+            "set_name": set_ctx.set_name,
+            "position": set_ctx.position,
+            "output_mode": set_ctx.output_mode,
+            "append_name": set_ctx.append_name,
+            "output_targets": set_ctx.output_targets,
+            "functions": (member,),
+        })
 
 
 class BuiltinStepExecutor:
@@ -916,7 +927,7 @@ class BuiltinStepExecutor:
     """
 
     def execute(self, ctx, working, env):
-        step = ctx.data
+        step = ctx
         try:
             working, consumed_result_id = execute_builtin_step(
                 env.conn, working, step, run_transforms=env.run_transforms

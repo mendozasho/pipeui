@@ -44,8 +44,8 @@ import pandas as pd
 from pipeui.results import RunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow import executors as _executors
-from pipeui.workflow.context import StepContext
 from pipeui.workflow.executors import StepRunEnv, _execute_sql_function, _step_has
+from pipeui.workflow.step import BUILTIN
 from pipeui.workflow.staging import (
     _drop_prior_staging_tables,
     _staging_prefix,
@@ -171,9 +171,10 @@ def run_pipeline(
     if src is None:
         return None
 
+    # _fetch_steps produces the typed FunctionStepContext carrier (with FunctionSpec
+    # members); get_builtin_steps produces the typed BuiltinStepContext carrier. The
+    # runner reads typed fields, never dict keys.
     steps = _fetch_steps(conn, source_id)
-    for s in steps:
-        s.setdefault("step_type", "function")
 
     # Filter FUNCTION steps based on run_type. #266: a step qualifies when it CONTAINS a
     # function of the requested type (not by a single dominant type), so a mixed/multi-
@@ -183,7 +184,7 @@ def run_pipeline(
     elif run_type == "validations":
         fn_steps = [s for s in steps if _step_has(s, "validation")]
     elif run_type == "set":
-        fn_steps = [s for s in steps if s["set_id"] == str(set_id)] if set_id is not None else []
+        fn_steps = [s for s in steps if s.set_id == str(set_id)] if set_id is not None else []
     elif run_type == "all":
         fn_steps = steps
     else:
@@ -196,7 +197,7 @@ def run_pipeline(
     # keeps function steps ahead of a built-in that ties the same position.
     want_builtins = run_type in ("transforms", "all")
     builtin_steps = get_builtin_steps(conn, source_id) if want_builtins else []
-    active_steps = sorted(fn_steps + builtin_steps, key=lambda s: s["position"])
+    active_steps = sorted(fn_steps + builtin_steps, key=lambda s: s.position)
 
     # Which function types this run processes; each step runs every function of these
     # types that it holds (a set is a transparent container).
@@ -218,7 +219,7 @@ def run_pipeline(
     # Drop prior staging tables when this run writes any (a transform step, or a
     # built-in step which also reshapes and stages the working table).
     writes_staging = any(
-        s.get("step_type") == "builtin"
+        s.step_type == BUILTIN
         or (want_transforms and _step_has(s, "transform"))
         for s in active_steps
     )
@@ -245,8 +246,7 @@ def run_pipeline(
         want_validations=want_validations,
         run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
     )
-    for step in active_steps:
-        ctx = StepContext.for_step(step)
+    for ctx in active_steps:
         executor = _executors.STEP_EXECUTORS.get(ctx.step_type)
         if executor is None:
             # No registered executor for this step type — skip it (the registry is

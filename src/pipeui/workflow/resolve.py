@@ -68,6 +68,16 @@ class FrameRef:
     result_id: Optional[str] = None
     staging_table: Optional[str] = None
 
+    def __post_init__(self):
+        """Enforce the carrier invariant: a raw frame is the source's own data (no
+        produced ``result_id``); a transformed frame is a produced result (must carry
+        one). ``result_id is None ⟺ mode == RAW`` — any other combination is an
+        illegal carrier and is unconstructable (CONTEXT.md → carriers → FrameRef)."""
+        if self.mode == RAW and self.result_id is not None:
+            raise ValueError("FrameRef raw frame must not carry a result_id")
+        if self.mode == TRANSFORMED and self.result_id is None:
+            raise ValueError("FrameRef transformed frame must carry a result_id")
+
 
 def _transformed_source_refs(
     conn: duckdb.DuckDBPyConnection, source_id: uuid.UUID
@@ -80,9 +90,9 @@ def _transformed_source_refs(
     """
     refs: list[uuid.UUID] = []
     for step in get_builtin_steps(conn, source_id):
-        if step.get("builtin_type") != "join":
+        if step.builtin_type != "join":
             continue
-        cfg = step.get("builtin_config") or {}
+        cfg = step.builtin_config or {}
         if not cfg.get("use_transformed"):
             continue
         rsid = cfg.get("right_source_id")

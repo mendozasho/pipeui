@@ -892,7 +892,9 @@ def test_fetch_steps_reads_bindings_in_position_order(db):
     )
 
     steps = _fetch_steps(db, source_id)
-    param = steps[0]["functions"][0]["params"][0]
+    # _fetch_steps now returns typed FunctionStepContext carriers with FunctionSpec
+    # members; params stay typed Mapping rows (the depth boundary).
+    param = steps[0].functions[0].params[0]
     assert param["bindings"] == ["col_2", "col_0", "col_1"]
 
 
@@ -1719,69 +1721,95 @@ def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator
 
 @pytest.mark.unit
 def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
-    """#19: StepContext.from_function builds a context from a source_function_map
-    (function) step dict, carrying the properties previously passed as step-dict
-    keys (set_id, set_name, source_function_map_id, position, functions)."""
+    """#19: _fetch_steps produces the typed FunctionStepContext carrier — its fields
+    (position, set_id, set_name, source_function_map_id, functions) are typed
+    attributes, not dict keys. The loader tags the step SET so it routes to the
+    function-set adapter; from_function (exercised by the adapter and below) is the
+    FUNCTION-tagged sibling — both build the same FunctionStepContext shape."""
     from pipeui.workflow.run import _fetch_steps
-    from pipeui.workflow.context import StepContext
+    from pipeui.workflow.step import (
+        FUNCTION,
+        FunctionSpec,
+        FunctionStepContext,
+        StepContext,
+    )
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = _val_col(db, source_id, "val")
     fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
     _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
 
-    step = _fetch_steps(db, source_id)[0]
-    step.setdefault("step_type", "function")
+    ctx = _fetch_steps(db, source_id)[0]
+    assert isinstance(ctx, FunctionStepContext)
+    assert isinstance(ctx.position, int)
+    # Properties the step dict held are all typed attributes on the context.
+    assert ctx.set_id and isinstance(ctx.set_id, str)
+    assert ctx.set_name == "dbl"
+    assert ctx.source_function_map_id and isinstance(ctx.source_function_map_id, str)
+    assert isinstance(ctx.functions, tuple)
+    assert all(isinstance(m, FunctionSpec) for m in ctx.functions)
+    assert ctx.functions[0].function_name == "dbl"
 
-    ctx = StepContext.from_function(step)
-    assert ctx.step_type == "function"
-    assert ctx.position == step["position"]
-    # Properties the step dict held are all reachable from the context.
-    assert ctx.get("set_id") == step["set_id"]
-    assert ctx.get("set_name") == step["set_name"]
-    assert ctx.get("source_function_map_id") == step["source_function_map_id"]
-    assert ctx.get("functions") == step["functions"]
+    # from_function builds the same shape, FUNCTION-tagged (the per-member dispatch tag).
+    fn_ctx = StepContext.from_function({
+        "source_function_map_id": ctx.source_function_map_id,
+        "set_id": ctx.set_id, "set_name": ctx.set_name, "position": ctx.position,
+        "output_mode": ctx.output_mode, "append_name": ctx.append_name,
+        "output_targets": ctx.output_targets, "functions": ctx.functions,
+    })
+    assert fn_ctx.step_type == FUNCTION
+    assert fn_ctx.functions == ctx.functions
 
 
 @pytest.mark.unit
 def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
-    """#19: StepContext.from_set builds a context from a source_function_map row
-    (the set-origin name for the function step path), carrying the same keys."""
+    """#19: StepContext.from_set builds the FunctionStepContext from a loader row,
+    tagged SET (the set-adapter dispatch tag) but carrying the same typed fields."""
     from pipeui.workflow.run import _fetch_steps
-    from pipeui.workflow.context import StepContext
+    from pipeui.workflow.step import SET, StepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = _val_col(db, source_id, "val")
     fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
     _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
 
-    step = _fetch_steps(db, source_id)[0]
-    step.setdefault("step_type", "function")
-
-    ctx = StepContext.from_set(step)
-    assert ctx.get("set_id") == step["set_id"]
-    assert ctx.get("functions") == step["functions"]
-    assert ctx.position == step["position"]
+    fn_ctx = _fetch_steps(db, source_id)[0]
+    # Rebuild the same row through from_set; the loader is the producer, so reuse its
+    # captured fields to feed the factory exactly as the loader does internally.
+    ctx = StepContext.from_set({
+        "source_function_map_id": fn_ctx.source_function_map_id,
+        "set_id": fn_ctx.set_id,
+        "set_name": fn_ctx.set_name,
+        "position": fn_ctx.position,
+        "output_mode": fn_ctx.output_mode,
+        "append_name": fn_ctx.append_name,
+        "output_targets": fn_ctx.output_targets,
+        "functions": fn_ctx.functions,
+    })
+    assert ctx.step_type == SET
+    assert ctx.set_id == fn_ctx.set_id
+    assert ctx.functions == fn_ctx.functions
+    assert ctx.position == fn_ctx.position
 
 
 @pytest.mark.unit
 def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
-    """#19: StepContext.from_builtin builds a context from a source_builtin_map
-    row, carrying step_id / builtin_type / builtin_config / position."""
+    """#19: get_builtin_steps produces the typed BuiltinStepContext via
+    StepContext.from_builtin — step_id / builtin_type / builtin_config / position
+    are typed attributes."""
     from pipeui.workflow.builtins import get_builtin_steps
-    from pipeui.workflow.context import StepContext
+    from pipeui.workflow.step import BuiltinStepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     _seed_builtin_filter_step(db, source_id, "val", 20, position=0)
 
-    bstep = get_builtin_steps(db, source_id)[0]
-    ctx = StepContext.from_builtin(bstep)
-
+    ctx = get_builtin_steps(db, source_id)[0]
+    assert isinstance(ctx, BuiltinStepContext)
     assert ctx.step_type == "builtin"
-    assert ctx.position == bstep["position"]
-    assert ctx.get("step_id") == bstep["step_id"]
-    assert ctx.get("builtin_type") == "filter"
-    assert ctx.get("builtin_config") == bstep["builtin_config"]
+    assert isinstance(ctx.position, int)
+    assert ctx.step_id and isinstance(ctx.step_id, str)
+    assert ctx.builtin_type == "filter"
+    assert ctx.builtin_config["column"] == "val"
 
 
 # --- #20: StepExecutor registry + dispatch swap --------------------------
@@ -1979,16 +2007,25 @@ def test_set_containing_pipeline_output_unchanged_golden(db, tmp_path):
 
 
 @pytest.mark.unit
-def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_path):
-    """#14 idx2: the adapter dispatches each member through the StepExecutor
-    registry BY the member's step type — not hardcoded to function. Proven with a
-    heterogeneous member list (a function member + a built-in member) each routed to
-    a fake executor registered under its own step type. The convergence model builds
-    every member context through a StepContext factory (function -> from_function,
-    built-in -> from_builtin), so the two supported member types — FUNCTION and
-    BUILTIN — are the ones exercised here. In-memory only; no set-membership storage."""
+def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_path, monkeypatch):
+    """#14 idx2 (reframed for the typed-carrier contract): the adapter builds EACH
+    member through ``StepContext.from_function`` and dispatches it BY the member
+    context's ``step_type`` resolved through the StepExecutor REGISTRY — never by a
+    hardcoded ``FunctionStepExecutor().execute(...)`` call.
+
+    Members are now ``FunctionSpec`` (function members); a built-in member is not yet
+    type-expressible — storing built-ins in a set is #275, which will widen the member
+    type to a union and re-add a genuinely heterogeneous member list here. Until then
+    the falsifiable guarantee against "hardcoded to function" is exercised two ways at
+    once, both of which break if the dispatch is hardcoded:
+      (1) each member context is built via the ``from_function`` factory (spied), and
+      (2) dispatch goes through ``STEP_EXECUTORS[member_ctx.step_type]`` — proven by
+          replacing the registry's FUNCTION slot with a recording executor: a
+          hardcoded direct call would bypass the patched registry and the recorder
+          would never fire (and the spy count would not match the member count)."""
     from pipeui.workflow import executors as ex_mod
-    from pipeui.workflow.context import BUILTIN, FUNCTION, StepContext
+    from pipeui.workflow import step as step_mod
+    from pipeui.workflow.step import FUNCTION, FunctionSpec, StepContext
     from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"types": []}
@@ -1998,34 +2035,47 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
             seen["types"].append(ctx.step_type)
             return StepExecResult(working=working, entries=[{"member_type": ctx.step_type}])
 
-    # A set step carrying a heterogeneous member list: one ordinary function member
-    # and one built-in member whose step_type routes to a different executor.
-    set_step = {
-        "step_type": "function",
-        "position": 0,
-        "set_id": "s", "set_name": "het", "source_function_map_id": "sfm",
-        "functions": [
-            {"function_id": "f1", "function_name": "fn_member",
-             "function_type": "transform", "step_type": FUNCTION},
-            {"step_id": "b1", "builtin_type": "filter",
-             "builtin_config": {}, "step_type": BUILTIN},
-        ],
-    }
-    ctx = StepContext.for_step(set_step)
+    def _member(name):
+        return FunctionSpec(
+            function_id=name, function_name=name, function_type="transform",
+            function_class="pd.series", function_return_type="pd.Series",
+            module_path="/tmp/x.py", params=(), output_mode=None, append_name=None,
+            output_targets=(), step_type=FUNCTION,
+        )
+
+    # A two-member function set. Each member is a FunctionSpec; the adapter must build
+    # a per-member FunctionStepContext via from_function and dispatch it FUNCTION.
+    set_ctx = StepContext.from_set({
+        "source_function_map_id": "sfm", "set_id": "s", "set_name": "two",
+        "position": 0, "output_mode": None, "append_name": None, "output_targets": (),
+        "functions": [_member("m1"), _member("m2")],
+    })
     env = StepRunEnv(conn=db, source_id=uuid.uuid4(),
                      original_df=pd.DataFrame({"a": [1]}), ts=0,
-                     want_transforms=True, want_validations=True)
+                     want_transforms=True, want_validations=True, run_transforms=None)
+
+    # Spy on the factory: the adapter must build every member context through it.
+    calls = {"n": 0}
+    real_from_function = step_mod.StepContext.from_function.__func__
+
+    def _spy_from_function(cls, step):
+        calls["n"] += 1
+        return real_from_function(cls, step)
+
+    monkeypatch.setattr(step_mod.StepContext, "from_function",
+                        classmethod(_spy_from_function))
 
     patched = dict(ex_mod.STEP_EXECUTORS)
     patched[FUNCTION] = _RecordingExecutor()
-    patched[BUILTIN] = _RecordingExecutor()
     with patch.object(ex_mod, "STEP_EXECUTORS", patched):
-        outcome = FunctionSetExecutor().execute(ctx, pd.DataFrame({"a": [1]}), env)
+        outcome = FunctionSetExecutor().execute(set_ctx, pd.DataFrame({"a": [1]}), env)
 
-    # Both members dispatched, each resolved by its OWN step type via the registry —
-    # NOT both routed to "function" (which is the bug this guards against).
-    assert seen["types"] == [FUNCTION, BUILTIN]
-    assert [e["member_type"] for e in outcome.entries] == [FUNCTION, BUILTIN]
+    # (1) each member context built via from_function (one per member).
+    assert calls["n"] == 2
+    # (2) each member dispatched FUNCTION through the patched registry — a hardcoded
+    #     FunctionStepExecutor call would bypass this recorder and leave it empty.
+    assert seen["types"] == [FUNCTION, FUNCTION]
+    assert [e["member_type"] for e in outcome.entries] == [FUNCTION, FUNCTION]
 
 
 @pytest.mark.integration
@@ -2038,7 +2088,7 @@ def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path,
     over a two-member function set (validation gt0 + transform dbl on column `a`). The
     factory must be invoked for the function member(s); the result entries must match
     the golden set behavior member-for-member."""
-    import pipeui.workflow.context as ctx_mod
+    import pipeui.workflow.step as ctx_mod
 
     source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, name="ffac", cols=("a",))
     col_id = _val_col(db, source_id, "a")
