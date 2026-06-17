@@ -9,12 +9,12 @@ DEFAULT_DB = Path("pipeui.db")
 def cmd_init():
     created = []
     if not CONFIG_PATH.exists():
-        from pipeui.validation.settings import AppSettings
+        from pipeui.validation.settings import AppSettings  # lazy: only when scaffolding a missing config
         settings = AppSettings()
         CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
         created.append(str(CONFIG_PATH))
     if not DEFAULT_DB.exists():
-        import duckdb
+        import duckdb  # lazy: only when creating a missing DB file
         conn = duckdb.connect(str(DEFAULT_DB))
         conn.close()
         created.append(str(DEFAULT_DB))
@@ -25,7 +25,7 @@ def cmd_init():
 
 
 def cmd_start():
-    import uvicorn
+    import uvicorn  # lazy: heavy server dep — deferred until 'start' runs
     config = {}
     if CONFIG_PATH.exists():
         config = json.loads(CONFIG_PATH.read_text())

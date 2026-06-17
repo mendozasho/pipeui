@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Optional
 
 import duckdb
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -48,7 +48,6 @@ def get_function_set_detail(
     conn: duckdb.DuckDBPyConnection = Depends(get_conn),
 ):
     """Return full detail for one function set including ordered members. 404 if not found."""
-    from fastapi import HTTPException
     detail = get_function_set(conn, set_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Function set not found")
@@ -67,7 +66,6 @@ def patch_function_set(
     Returns 404 if set_id not found.
     Returns 422 structured failure on duplicate set_name.
     """
-    from fastapi import HTTPException
     result = update_function_set(
         conn,
         set_id=set_id,
@@ -115,7 +113,6 @@ def delete_function_set_route(
 
     Member functions in function_registry are never removed.
     """
-    from fastapi import HTTPException
     result = delete_function_set(conn, set_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Function set not found")
