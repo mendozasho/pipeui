@@ -2080,6 +2080,65 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
     assert [e["member_type"] for e in outcome.entries] == [FUNCTION, FUNCTION]
 
 
+def test_adapter_dispatches_non_function_member_to_its_executor(db, monkeypatch):
+    """Slice 4 AC3 (heterogeneous-member readiness): a member whose per-member context
+    resolves to a NON-function ``step_type`` is dispatched to THAT type's executor via
+    ``STEP_EXECUTORS`` — never to the function executor. The real built-in-in-a-set
+    storage path is #275; this proves the dispatch *generality* now by making one
+    member's per-member context a ``BuiltinStepContext`` and asserting it lands on the
+    BUILTIN registry slot.
+
+    Falsifiable: the recorders key on the *registry slot that fired* (not the context's
+    own step_type), so a function-hardcoded dispatch would fire FUNCTION_SLOT and the
+    assertion would read ['FUNCTION_SLOT']."""
+    from pipeui.workflow import executors as ex_mod
+    from pipeui.workflow.step import BUILTIN, FUNCTION, FunctionSpec, StepContext
+    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+
+    seen = {"slots": []}
+
+    class _RecordingExecutor:
+        def __init__(self, slot):
+            self.slot = slot
+
+        def execute(self, ctx, working, env):
+            seen["slots"].append(self.slot)
+            return StepExecResult(working=working, entries=[{"slot": self.slot}])
+
+    member = FunctionSpec(
+        function_id="m1", function_name="m1", function_type="transform",
+        function_class="pd.series", function_return_type="pd.Series",
+        module_path="/tmp/x.py", params=(), output_mode=None, append_name=None,
+        output_targets=(), step_type=FUNCTION,
+    )
+    set_ctx = StepContext.from_set({
+        "source_function_map_id": "sfm", "set_id": "s", "set_name": "het",
+        "position": 0, "output_mode": None, "append_name": None, "output_targets": (),
+        "functions": [member],
+    })
+    env = StepRunEnv(conn=db, source_id=uuid.uuid4(),
+                     original_df=pd.DataFrame({"a": [1]}), ts=0,
+                     want_transforms=True, want_validations=True, run_transforms=None)
+
+    # Simulate a genuinely heterogeneous member: its per-member context is a BUILTIN
+    # step (the #275 storage path will produce this for real). step_type drives dispatch.
+    builtin_ctx = StepContext.from_builtin({
+        "step_id": "b1", "builtin_type": "filter", "builtin_config": {}, "position": 0,
+    })
+    monkeypatch.setattr(FunctionSetExecutor, "_member_context",
+                        staticmethod(lambda set_ctx, member: builtin_ctx))
+
+    patched = dict(ex_mod.STEP_EXECUTORS)
+    patched[FUNCTION] = _RecordingExecutor("FUNCTION_SLOT")
+    patched[BUILTIN] = _RecordingExecutor("BUILTIN_SLOT")
+    with patch.object(ex_mod, "STEP_EXECUTORS", patched):
+        FunctionSetExecutor().execute(set_ctx, pd.DataFrame({"a": [1]}), env)
+
+    # Routed to the BUILTIN slot BY member_ctx.step_type — a function-hardcoded
+    # dispatch would have fired FUNCTION_SLOT instead.
+    assert seen["slots"] == ["BUILTIN_SLOT"]
+
+
 @pytest.mark.integration
 def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path, monkeypatch):
     """The function-set adapter builds each function member's context through the
