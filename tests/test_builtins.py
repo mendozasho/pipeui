@@ -548,7 +548,10 @@ def test_execute_join_transformed_uses_resolved_frame(db):
     )
 
     step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
-    result, _ = execute_builtin_step(db, left_df, step)
+    result, _ = execute_builtin_step(
+        db, left_df, step,
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
 
     # Inner join on id against the TRANSFORMED frame: ids 1,2,3 match; tags are transformed.
     assert len(result) == 3
@@ -574,7 +577,10 @@ def test_execute_join_transformed_materializes_never_run_right_source(db):
     )["ok"]
 
     step = {"builtin_type": "join", "builtin_config": _join_cfg(right_id, use_transformed=True)}
-    result, _ = execute_builtin_step(db, left_df, step)
+    result, _ = execute_builtin_step(
+        db, left_df, step,
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
 
     # resolve_frame ran the right source's pipeline: only ids 2 and 4 survive the filter,
     # so the inner join keeps exactly those two rows.

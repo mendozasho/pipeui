@@ -1546,7 +1546,10 @@ def test_resolve_frame_transformed_materializes_if_absent(db, tmp_path):
     # No staging table exists yet.
     assert _list_staging_tables(db, source_id) == []
 
-    frame, ref = resolve_frame(db, source_id, "transformed")
+    frame, ref = resolve_frame(
+        db, source_id, "transformed",
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
 
     # Materialized on demand: the transform output column is present...
     assert "doubled_val" in frame.columns
@@ -1579,7 +1582,10 @@ def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path)
     _seed_validation_step(db, source_id, col_id, "gt0", val_path, position=0)
     assert _list_staging_tables(db, source_id) == []
 
-    frame, ref = resolve_frame(db, source_id, "transformed")
+    frame, ref = resolve_frame(
+        db, source_id, "transformed",
+        run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+    )
 
     raw = db.execute(f'SELECT * FROM "{instance_table_name(source_id)}"').df()
     # Fallback: raw content returned as the transformed frame (no transform columns added).
@@ -1616,7 +1622,10 @@ def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
     assert attach_builtin(db, src_c, "join", join_c)["ok"]
 
     with pytest.raises(TransformedCycleError) as exc:
-        resolve_frame(db, src_a, "transformed")
+        resolve_frame(
+            db, src_a, "transformed",
+            run_transforms=lambda c, sid: run_pipeline(c, sid, "transforms"),
+        )
 
     msg = str(exc.value)
     assert str(src_a) in msg and str(src_c) in msg

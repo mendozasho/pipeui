@@ -30,10 +30,16 @@ import json
 import uuid
 from typing import Any
 
+from typing import Callable, Optional
+
 import duckdb
 import pandas as pd
 
 from pipeui.ids import new_id
+from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
+# get_builtin_steps lives in step_loader (L1, pure read); re-exported here so
+# ``from pipeui.workflow.builtins import get_builtin_steps`` keeps working.
+from pipeui.workflow.step_loader import get_builtin_steps  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -194,27 +200,6 @@ def patch_builtin(
 # Query
 # ---------------------------------------------------------------------------
 
-def get_builtin_steps(
-    conn: duckdb.DuckDBPyConnection,
-    source_id: uuid.UUID,
-) -> list[dict]:
-    """Return all source_builtin_map rows for a source ordered by position."""
-    rows = conn.execute(
-        "SELECT step_id, builtin_type, builtin_config, position FROM source_builtin_map WHERE source_id = ? ORDER BY position ASC",
-        [source_id],
-    ).fetchall()
-    result = []
-    for step_id, btype, bcfg, pos in rows:
-        result.append({
-            "step_id": str(step_id),
-            "step_type": "builtin",
-            "builtin_type": btype,
-            "builtin_config": json.loads(bcfg) if isinstance(bcfg, str) else bcfg,
-            "position": pos,
-        })
-    return result
-
-
 def get_unified_pipeline(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
@@ -309,6 +294,8 @@ def execute_builtin_step(
     conn: duckdb.DuckDBPyConnection,
     df: pd.DataFrame,
     step: dict,
+    *,
+    run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Execute a single built-in step against the working DataFrame.
 
@@ -316,6 +303,11 @@ def execute_builtin_step(
     resolved transformed-output ``result_id`` when a join consumed a transformed
     source (lineage — PRD User Story 7), else ``None`` (pivot/filter never consume
     another source, and a raw join consumes the source's own data, not a result).
+
+    ``run_transforms`` is the injected runner (DIP) threaded to ``resolve_frame`` so a
+    transformed join can materialize a never-run right source without builtins
+    importing the orchestrator. Required only on the materialize path of a
+    transformed join; ``None`` for raw joins and pivot/filter.
 
     Uses DuckDB directly (no worker subprocess).
     Raises ValueError for bad config; other exceptions propagate.
@@ -326,7 +318,7 @@ def execute_builtin_step(
         cfg = json.loads(cfg)
 
     if btype == "join":
-        return _execute_join(conn, df, cfg)
+        return _execute_join(conn, df, cfg, run_transforms=run_transforms)
     elif btype == "pivot":
         return _execute_pivot(conn, df, cfg), None
     elif btype == "filter":
@@ -339,6 +331,8 @@ def _execute_join(
     conn: duckdb.DuckDBPyConnection,
     left_df: pd.DataFrame,
     cfg: dict,
+    *,
+    run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Execute a join built-in step.
 
@@ -360,16 +354,16 @@ def _execute_join(
     Story 7); a raw join consumes the source's own data, not a produced result, so
     it is ``None``.
     """
-    from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
-
     right_source_id = uuid.UUID(cfg["right_source_id"])
     join_type = cfg.get("join_type", "inner").upper()
     on_clauses = cfg["on"]
     mode = TRANSFORMED if cfg.get("use_transformed") else RAW
 
     # Resolve the right frame through the seam; register both sides as temp views so
-    # the join shape is uniform regardless of where the right frame came from.
-    right_df, ref = resolve_frame(conn, right_source_id, mode)
+    # the join shape is uniform regardless of where the right frame came from. The
+    # injected ``run_transforms`` runner lets a transformed join materialize a
+    # never-run right source (DIP — resolve never imports the orchestrator).
+    right_df, ref = resolve_frame(conn, right_source_id, mode, run_transforms=run_transforms)
     consumed_result_id = ref.result_id if mode == TRANSFORMED else None
 
     _left_view = f"_builtin_join_left_{uuid.uuid4().hex[:8]}"

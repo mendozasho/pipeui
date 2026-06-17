@@ -23,16 +23,23 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import duckdb
 import pandas as pd
 
 from pipeui.results import transformed_result_id
 from pipeui.sql_user_table import instance_table_name
+from pipeui.workflow.staging import _latest_staging, _staging_prefix
+from pipeui.workflow.step_loader import get_builtin_steps
 
 RAW = "raw"
 TRANSFORMED = "transformed"
+
+# The injected "produce a source's transformed output" runner (DIP). resolve declares
+# the callable signature; the orchestrator (run.py) supplies it — resolve never imports
+# ``pipeui.workflow.run`` (CONTEXT.md → carriers → ``run_transforms`` behavioral port).
+RunTransforms = Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]
 
 
 class TransformedCycleError(Exception):
@@ -62,33 +69,6 @@ class FrameRef:
     staging_table: Optional[str] = None
 
 
-def _staging_prefix(source_id: uuid.UUID) -> str:
-    return f"staging_{source_id.hex[:8]}_"
-
-
-def _latest_staging(
-    conn: duckdb.DuckDBPyConnection, source_id: uuid.UUID
-) -> Optional[tuple[str, int]]:
-    """Return (table_name, timestamp) of the source's latest staging table, or None."""
-    prefix = _staging_prefix(source_id)
-    rows = conn.execute(
-        "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
-    ).fetchall()
-    candidates: list[tuple[int, str]] = []
-    for (tname,) in rows:
-        if tname.startswith(prefix):
-            suffix = tname[len(prefix):]
-            try:
-                candidates.append((int(suffix), tname))
-            except ValueError:
-                pass
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    ts, tname = candidates[-1]
-    return tname, ts
-
-
 def _transformed_source_refs(
     conn: duckdb.DuckDBPyConnection, source_id: uuid.UUID
 ) -> list[uuid.UUID]:
@@ -98,9 +78,6 @@ def _transformed_source_refs(
     ``use_transformed`` against another source. This is the path a transformed-join
     cycle forms through, and is forward-compatible with slice 2 wiring the join.
     """
-    # Imported lazily to avoid a circular import (builtins imports from run/results).
-    from pipeui.workflow.builtins import get_builtin_steps
-
     refs: list[uuid.UUID] = []
     for step in get_builtin_steps(conn, source_id):
         if step.get("builtin_type") != "join":
@@ -119,6 +96,7 @@ def resolve_frame(
     source_id: uuid.UUID,
     mode: str,
     *,
+    run_transforms: Optional[RunTransforms] = None,
     _in_progress: frozenset[uuid.UUID] = frozenset(),
 ) -> tuple[pd.DataFrame, FrameRef]:
     """Resolve a ``(source, raw | transformed)`` reference to ``(frame, ref)``.
@@ -126,6 +104,10 @@ def resolve_frame(
     raw -> the source's instance table. transformed -> the latest staging table if
     present, else the source's pipeline is run once to materialize it. The
     materialize path is cycle-guarded (``TransformedCycleError``).
+
+    ``run_transforms`` is the injected runner (DIP) used only on the materialize path
+    — when a transformed reference has no staging table yet. It is required there;
+    a raw reference or a transformed reference with existing staging never needs it.
     """
     if mode not in (RAW, TRANSFORMED):
         raise ValueError(f"mode must be {RAW!r} or {TRANSFORMED!r}; got {mode!r}")
@@ -138,7 +120,9 @@ def resolve_frame(
     # transformed: snapshot-if-present, else materialize-if-absent.
     latest = _latest_staging(conn, source_id)
     if latest is None:
-        latest = _materialize(conn, source_id, _in_progress=_in_progress)
+        latest = _materialize(
+            conn, source_id, run_transforms=run_transforms, _in_progress=_in_progress
+        )
 
     tname, ts = latest
     frame = conn.execute(f'SELECT * FROM "{tname}"').df()
@@ -155,6 +139,7 @@ def _materialize(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
     *,
+    run_transforms: Optional[RunTransforms],
     _in_progress: frozenset[uuid.UUID],
 ) -> tuple[str, int]:
     """Run the source's pipeline once to produce its transformed output.
@@ -163,7 +148,17 @@ def _materialize(
     ``TransformedCycleError`` naming the cycle. Transformed-join dependencies are
     resolved first (recursing through ``resolve_frame``) so a cycle is caught
     before the producing run, never as a hang.
+
+    The producing run is the injected ``run_transforms`` (DIP) — resolve never imports
+    the orchestrator. If it is needed (a transformed reference with no staging table)
+    but not supplied, raise a clear error rather than silently failing.
     """
+    if run_transforms is None:
+        raise RuntimeError(
+            f"transformed output for source {source_id} must be materialized but no "
+            "run_transforms runner was injected — pass run_transforms to resolve_frame"
+        )
+
     if source_id in _in_progress:
         # Build the cycle path: the in-progress frontier plus the re-entered source.
         cycle = list(_in_progress) + [source_id]
@@ -173,12 +168,13 @@ def _materialize(
 
     # Resolve transformed dependencies first — this is where a cycle surfaces.
     for dep in _transformed_source_refs(conn, source_id):
-        resolve_frame(conn, dep, TRANSFORMED, _in_progress=next_in_progress)
+        resolve_frame(
+            conn, dep, TRANSFORMED,
+            run_transforms=run_transforms, _in_progress=next_in_progress,
+        )
 
     # Produce this source's transformed output (snapshot). Transforms write staging.
-    from pipeui.workflow.run import run_pipeline
-
-    run_pipeline(conn, source_id, "transforms")
+    run_transforms(conn, source_id)
 
     latest = _latest_staging(conn, source_id)
     if latest is None:

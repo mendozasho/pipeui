@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from pipeui.helpers import load_settings, save_settings
 from pipeui.validation.settings import AppSettings  # noqa: F401 – re-exported for import compat
+from pipeui.workflow.functions import scan_functions
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -80,7 +81,6 @@ def patch_settings(patch: SettingsPatch):
         # Trigger immediate rescan when functions_paths changes (CONTEXT.md § function scanning)
         from pipeui.main import DB_PATH
         from pipeui.db import create_schema, get_connection
-        from pipeui.workflow.functions import scan_functions
         conn = get_connection(str(DB_PATH))
         create_schema(conn)
         try:
