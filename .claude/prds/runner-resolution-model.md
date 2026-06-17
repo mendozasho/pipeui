@@ -116,12 +116,23 @@ unchanged.
 - **Transformed-output identity.** `ref` carries a derived `UUID5` `result_id`,
   computed with the same identity helper as `RunResult` (over source + mode +
   staging timestamp), and tied into the `RunResult` scheme so a consumed
-  transformed output is a first-class, traceable result like any run.
+  transformed output is a first-class, traceable result like any run. **The
+  consuming join surfaces it:** when a join reads a transformed right source, its
+  step result carries that `consumed_result_id`, so the result is tied to the
+  produced output it consumed as the runner steps the source (User Story 7). A raw
+  join carries no `consumed_result_id`.
 - **Join honors the toggle.** `_execute_join` reads the right-hand source through
   `resolve_frame` per `use_transformed` instead of hardcoding the raw instance
   table (`_validate_join_config` validates config shape only — it does not resolve
-  frames). The right-column-fetch endpoint that the join modal already calls with
-  the transformed flag returns the transformed column set.
+  frames), and returns the consumed transformed `result_id` alongside the frame so
+  the executor can tie it into the join's result entry. The right-column-fetch
+  endpoint that the join modal already calls with the transformed flag returns the
+  transformed column set.
+- **One factory per member type.** The function-set adapter builds each member's
+  `StepContext` through the factory trio — a function member via `from_function`,
+  a built-in member via `from_builtin` — so step-type handling is uniform and the
+  two supported member types (FUNCTION, BUILTIN) route through their own factory.
+  This is what makes a built-in-in-a-set additive for `#275` (no new dispatch path).
 - **Migration + bounded removal.** Migrate the workflows that route through
   `run_pipeline` (run / validation / results endpoints and staging) onto the
   model. Remove only execution code this refactor directly supersedes, each

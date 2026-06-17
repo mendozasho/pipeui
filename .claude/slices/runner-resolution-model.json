@@ -96,7 +96,8 @@
           ],
           "access": "modifies"
         }
-      ]
+      ],
+      "reconciliation_note": "Follow-up (commit b6077c8): User Story 7 wiring. resolve_frame's transformed result_id was computed then discarded at the join (_ref). Now _execute_join/execute_builtin_step return (frame, consumed_result_id) and BuiltinStepExecutor ties it into the join's result entry (consumed_result_id) \u2014 a transformed join's result records which produced output it consumed; a raw join carries None. Tied via explicit return threading, no step-dict mutation. Tested."
     },
     {
       "slice_id": 3,
@@ -158,7 +159,7 @@
           "access": "modifies"
         }
       ],
-      "reconciliation_note": "2026-06-16 (post-to-code, hostile-audit kickback): AC#0/#2 originally said 'results identical to pre-refactor output', which implied step ORDER preservation. The refactor interleaves results by member (slice-4 'as if individual'), so a mixed set's emission order changed from grouped transforms-then-validations. User decision: interleaving is intended; the real invariant is per-result content identical + transform/validation split preserved (resolved via RunResult vs ValidationRunResult, not a new object). AC reworded to match; an order-blindness-is-intentional marker added to the golden test. Conflict between slice-3 (preserve) and slice-4 (individual) resolved in favor of slice 4."
+      "reconciliation_note": "2026-06-16 (post-to-code, hostile-audit kickback): AC#0/#2 originally said 'results identical to pre-refactor output', which implied step ORDER preservation. The refactor interleaves results by member (slice-4 'as if individual'), so a mixed set's emission order changed from grouped transforms-then-validations. User decision: interleaving is intended; the real invariant is per-result content identical + transform/validation split preserved (resolved via RunResult vs ValidationRunResult, not a new object). AC reworded to match; an order-blindness-is-intentional marker added to the golden test. Conflict between slice-3 (preserve) and slice-4 (individual) resolved in favor of slice 4. | Follow-up (commit b6077c8, hostile-audit dead-code pass): StepContext.from_function was a production orphan \u2014 the adapter built function-member contexts with a bare constructor. Now WIRED: FunctionSetExecutor._member_context routes each member through the factory trio (function -> from_function, built-in -> from_builtin), so from_function is the live per-function-member factory (orphan resolved by use, not deletion). Heterogeneous-member dispatch supports the trio's two real types FUNCTION|BUILTIN (the noop_member test fixture was reconciled to a real BUILTIN member \u2014 assertion strength retained, falsification-verified)."
     },
     {
       "slice_id": 4,
