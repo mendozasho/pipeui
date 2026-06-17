@@ -27,7 +27,7 @@ def _load_to_temp(conn: duckdb.DuckDBPyConnection, file_path: str, temp_name: st
                 f"CREATE TEMP TABLE {temp_name} AS SELECT * FROM read_xlsx('{file_path}')"
             )
         except Exception:
-            import pandas as pd  # noqa: PLC0415
+            import pandas as pd  # noqa: PLC0415  # lazy: xlsx fallback — pandas only when DuckDB read_xlsx fails
             df = pd.read_excel(file_path)
             conn.register(f"_df_{temp_name}", df)
             conn.execute(f"CREATE TEMP TABLE {temp_name} AS SELECT * FROM _df_{temp_name}")
