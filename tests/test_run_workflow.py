@@ -42,7 +42,9 @@ from pipeui.ids import content_hash_id
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.run import _fetch_steps, _staging_prefix, run_pipeline
+from pipeui.workflow.run import run_pipeline
+from pipeui.workflow.staging import _staging_prefix
+from pipeui.workflow.step_loader import _fetch_steps
 from pipeui.workflow.attach import AttachBinding, attach_function
 from tests.conftest import make_registered_source
 
@@ -1726,7 +1728,7 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
     attributes, not dict keys. The loader tags the step SET so it routes to the
     function-set adapter; from_function (exercised by the adapter and below) is the
     FUNCTION-tagged sibling — both build the same FunctionStepContext shape."""
-    from pipeui.workflow.run import _fetch_steps
+    from pipeui.workflow.step_loader import _fetch_steps
     from pipeui.workflow.step import (
         FUNCTION,
         FunctionSpec,
@@ -1765,7 +1767,7 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
 def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
     """#19: StepContext.from_set builds the FunctionStepContext from a loader row,
     tagged SET (the set-adapter dispatch tag) but carrying the same typed fields."""
-    from pipeui.workflow.run import _fetch_steps
+    from pipeui.workflow.step_loader import _fetch_steps
     from pipeui.workflow.step import SET, StepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)

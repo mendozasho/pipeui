@@ -44,32 +44,13 @@ import pandas as pd
 from pipeui.results import RunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow import executors as _executors
-from pipeui.workflow.executors import StepRunEnv, _execute_sql_function, _step_has
+from pipeui.workflow.executors import StepRunEnv, _step_has
 from pipeui.workflow.step import BUILTIN
 from pipeui.workflow.staging import (
     _drop_prior_staging_tables,
     _staging_prefix,
-    _write_staging_table,
 )
 from pipeui.workflow.step_loader import _fetch_steps, get_builtin_steps
-
-# Symbols whose home moved out of run.py during the L1/L3 split but which external
-# code (tests, api) still imports as ``from pipeui.workflow.run import ...``. Re-export
-# them so import paths stay stable (the run module is the orchestrator's public surface).
-# - staging store (L1 → staging.py): _staging_prefix, _write_staging_table
-# - step loading (L1 → step_loader.py): _fetch_steps, get_builtin_steps
-# - per-function mechanics (L3 → executors.py): _execute_sql_function
-__all__ = [
-    "run_pipeline",
-    "run_validation_across_sources",
-    "run_set_across_sources",
-    "get_staging_rows",
-    "_fetch_steps",
-    "_staging_prefix",
-    "_write_staging_table",
-    "_execute_sql_function",
-    "get_builtin_steps",
-]
 
 
 # ---------------------------------------------------------------------------
