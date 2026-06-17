@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 
+from pipeui.config import DB_PATH
 from pipeui.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
 from pipeui.schema.queries import DDL as _DDL, SEED_BUILTINS as _SEED_BUILTINS
 
@@ -138,8 +139,6 @@ def get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
 
 def get_conn():
     """FastAPI Depends provider — yields a connected, schema-initialised DuckDB connection."""
-    from typing import Generator
-    from pipeui.main import DB_PATH
     conn = get_connection(str(DB_PATH))
     create_schema(conn)
     try:
