@@ -167,9 +167,9 @@ def _fetch_steps(
         ).fetchall()
         output_targets = [r[0] for r in target_rows]
 
-        # Tag SET so the runner routes the step to the function-set adapter (slice 4),
-        # which flattens it into per-member FUNCTION dispatch — the pre-refactor
-        # for_step(...) -> from_set behavior the runner relied on.
+        # from_set tags SET so the runner routes the step to the function-set adapter
+        # (slice 4), which flattens it into per-member FUNCTION dispatch. The loader is
+        # the sole producer of the carrier — it calls the matching factory per table.
         steps.append(StepContext.from_set({
             "source_function_map_id": str(sfm_id),
             "set_id": str(set_id),

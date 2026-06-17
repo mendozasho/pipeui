@@ -101,14 +101,6 @@ def test_builtin_step_context_is_frozen_typed_and_built_via_factory():
 
 
 @pytest.mark.unit
-def test_for_step_picks_variant_by_step_type():
-    """for_step dispatches to from_builtin for a built-in row, from_set otherwise —
-    the variant returned IS the contract."""
-    assert isinstance(StepContext.for_step(_builtin_row()), BuiltinStepContext)
-    assert isinstance(StepContext.for_step(_function_row()), FunctionStepContext)
-
-
-@pytest.mark.unit
 def test_function_spec_is_frozen_and_typed():
     """FunctionSpec is frozen and typed; params is the typed Mapping depth boundary."""
     spec = StepContext.from_set(_function_row()).functions[0]

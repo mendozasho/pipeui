@@ -21,6 +21,7 @@ This slice introduces the seam only; it does NOT change the join (slice 2).
 """
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -193,8 +194,6 @@ def _materialize(
         # still yields a frame. DECIDED behavior (keep, not error): a source with
         # nothing to transform has its raw data as its "transformed output". Tested:
         # test_resolve_frame_transformed_no_transforms_falls_back_to_raw.
-        import time
-
         tname = instance_table_name(source_id)
         ts = int(time.time())
         staged = f"{_staging_prefix(source_id)}{ts}"

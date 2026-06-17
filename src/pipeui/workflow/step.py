@@ -20,8 +20,9 @@ stay typed ``Mapping`` — the agreed depth boundary. Inner ``param["…"]`` /
 
 Factories are the only legal constructors (the variant returned **is** the
 contract): ``from_function`` / ``from_set`` → ``FunctionStepContext``;
-``from_builtin`` → ``BuiltinStepContext``; ``for_step`` picks by the row's
-``step_type`` (a built-in row → ``from_builtin``, else → ``from_set``).
+``from_builtin`` → ``BuiltinStepContext``. ``step_loader`` is the sole producer —
+it reads each map table and calls the matching factory directly (function-map rows
+→ ``from_set``; built-in-map rows → ``from_builtin``).
 """
 from __future__ import annotations
 
@@ -96,16 +97,6 @@ class StepContext:
             builtin_type=step["builtin_type"],
             builtin_config=step["builtin_config"],
         )
-
-    @classmethod
-    def for_step(cls, step: Mapping[str, Any]) -> "StepContext":
-        """Pick the factory by the row's ``step_type`` — the single entry the runner
-        calls so no ``if/elif`` on step type survives in the loop. A built-in row
-        routes to ``from_builtin``; any other (function-map) row is a set and routes
-        to ``from_set`` (which tags ``SET`` for the adapter)."""
-        if step.get("step_type") == BUILTIN:
-            return cls.from_builtin(step)
-        return cls.from_set(step)
 
 
 @dataclass(frozen=True)
