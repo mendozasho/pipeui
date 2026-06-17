@@ -43,8 +43,8 @@ from pipeui.sql_user_table import instance_table_name
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
 from pipeui.workflow.run import run_pipeline
-from pipeui.workflow.staging import _staging_prefix
-from pipeui.workflow.step_loader import _fetch_steps
+from pipeui.workflow.staging import staging_prefix
+from pipeui.workflow.step_loader import fetch_steps
 from pipeui.workflow.attach import AttachBinding, attach_function
 from tests.conftest import make_registered_source
 
@@ -212,7 +212,7 @@ def _seed_validation_step(db, source_id, column_id, fn_name, module_path, positi
 
 
 def _list_staging_tables(db, source_id):
-    prefix = _staging_prefix(source_id)
+    prefix = staging_prefix(source_id)
     rows = db.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
     ).fetchall()
@@ -871,7 +871,7 @@ def test_single_column_transform_returns_runresult_unchanged(db, tmp_path):
 
 @pytest.mark.integration
 def test_fetch_steps_reads_bindings_in_position_order(db):
-    """Slice 2 #2: _fetch_steps returns a param's bound columns ORDER BY position,
+    """Slice 2 #2: fetch_steps returns a param's bound columns ORDER BY position,
     not alphabetically by column_name."""
     source_id, col_ids = make_registered_source(db, n_columns=3)
     # Register a multi-column pd.Series function and attach in non-alphabetical order
@@ -893,8 +893,8 @@ def test_fetch_steps_reads_bindings_in_position_order(db):
         function_id=fn_id,
     )
 
-    steps = _fetch_steps(db, source_id)
-    # _fetch_steps now returns typed FunctionStepContext carriers with FunctionSpec
+    steps = fetch_steps(db, source_id)
+    # fetch_steps now returns typed FunctionStepContext carriers with FunctionSpec
     # members; params stay typed Mapping rows (the depth boundary).
     param = steps[0].functions[0].params[0]
     assert param["bindings"] == ["col_2", "col_0", "col_1"]
@@ -1723,12 +1723,12 @@ def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator
 
 @pytest.mark.unit
 def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
-    """#19: _fetch_steps produces the typed FunctionStepContext carrier — its fields
+    """#19: fetch_steps produces the typed FunctionStepContext carrier — its fields
     (position, set_id, set_name, source_function_map_id, functions) are typed
     attributes, not dict keys. The loader tags the step SET so it routes to the
     function-set adapter; from_function (exercised by the adapter and below) is the
     FUNCTION-tagged sibling — both build the same FunctionStepContext shape."""
-    from pipeui.workflow.step_loader import _fetch_steps
+    from pipeui.workflow.step_loader import fetch_steps
     from pipeui.workflow.step import (
         FUNCTION,
         FunctionSpec,
@@ -1741,7 +1741,7 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
     fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
     _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
 
-    ctx = _fetch_steps(db, source_id)[0]
+    ctx = fetch_steps(db, source_id)[0]
     assert isinstance(ctx, FunctionStepContext)
     assert isinstance(ctx.position, int)
     # Properties the step dict held are all typed attributes on the context.
@@ -1767,7 +1767,7 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
 def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
     """#19: StepContext.from_set builds the FunctionStepContext from a loader row,
     tagged SET (the set-adapter dispatch tag) but carrying the same typed fields."""
-    from pipeui.workflow.step_loader import _fetch_steps
+    from pipeui.workflow.step_loader import fetch_steps
     from pipeui.workflow.step import SET, StepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
@@ -1775,7 +1775,7 @@ def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
     fn_path = _write_fn_file(tmp_path, "dbl", "return data * 2")
     _seed_transform_step(db, source_id, col_id, "dbl", fn_path, output_mode="append")
 
-    fn_ctx = _fetch_steps(db, source_id)[0]
+    fn_ctx = fetch_steps(db, source_id)[0]
     # Rebuild the same row through from_set; the loader is the producer, so reuse its
     # captured fields to feed the factory exactly as the loader does internally.
     ctx = StepContext.from_set({

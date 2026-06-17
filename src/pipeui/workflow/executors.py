@@ -32,7 +32,7 @@ from pipeui.sql_user_table import instance_table_name
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.builtins import execute_builtin_step
 from pipeui.workflow.bundles import pair_bundles
-from pipeui.workflow.staging import _write_staging_table
+from pipeui.workflow.staging import write_staging_table
 from pipeui.workflow.step import (
     BUILTIN,
     FUNCTION,
@@ -163,7 +163,7 @@ def _normalize_to_series(result, n_rows: int) -> pd.Series:
     return pd.Series([result] * n_rows)
 
 
-def _step_has(step: "FunctionStepContext", function_type: str) -> bool:
+def step_has(step: "FunctionStepContext", function_type: str) -> bool:
     """#266: a function set is a transparent container — a step 'has' a type when ANY
     of its functions is of that type. Routing reads this, not a single dominant type,
     so a mixed set runs both its transforms and its validations.
@@ -809,7 +809,7 @@ class FunctionStepExecutor:
         entries: list[dict] = []
         wrote_staging = False
 
-        if env.want_transforms and _step_has(step, "transform"):
+        if env.want_transforms and step_has(step, "transform"):
             new_working, error, run_results = _execute_transform_step(
                 working, step, conn=env.conn, source_id=env.source_id
             )
@@ -826,7 +826,7 @@ class FunctionStepExecutor:
                 entries.append(entry)
             else:
                 working = new_working
-                _write_staging_table(env.conn, env.source_id, working, env.ts)
+                write_staging_table(env.conn, env.source_id, working, env.ts)
                 wrote_staging = True
                 emitted = run_results or [
                     _transform_runresult(step, env.source_id, status="ok", error=None).to_dict()
@@ -842,7 +842,7 @@ class FunctionStepExecutor:
                     entry.update(rr)
                     entries.append(entry)
 
-        if env.want_validations and _step_has(step, "validation"):
+        if env.want_validations and step_has(step, "validation"):
             entries.extend(
                 _execute_validation_step(
                     env.original_df, step, conn=env.conn, source_id=env.source_id
@@ -931,7 +931,7 @@ class BuiltinStepExecutor:
             working, consumed_result_id = execute_builtin_step(
                 env.conn, working, step, run_transforms=env.run_transforms
             )
-            _write_staging_table(env.conn, env.source_id, working, env.ts)
+            write_staging_table(env.conn, env.source_id, working, env.ts)
             entry = _builtin_result(
                 step, env.source_id, status="ok", error=None,
                 rows_affected=len(working),

@@ -31,7 +31,7 @@ import pandas as pd
 
 from pipeui.results import transformed_result_id
 from pipeui.sql_user_table import instance_table_name
-from pipeui.workflow.staging import _latest_staging, _staging_prefix
+from pipeui.workflow.staging import latest_staging, staging_prefix
 from pipeui.workflow.step_loader import get_builtin_steps
 
 RAW = "raw"
@@ -129,7 +129,7 @@ def resolve_frame(
         return frame, FrameRef(source_id=source_id, mode=RAW)
 
     # transformed: snapshot-if-present, else materialize-if-absent.
-    latest = _latest_staging(conn, source_id)
+    latest = latest_staging(conn, source_id)
     if latest is None:
         latest = _materialize(
             conn, source_id, run_transforms=run_transforms, _in_progress=_in_progress
@@ -187,7 +187,7 @@ def _materialize(
     # Produce this source's transformed output (snapshot). Transforms write staging.
     run_transforms(conn, source_id)
 
-    latest = _latest_staging(conn, source_id)
+    latest = latest_staging(conn, source_id)
     if latest is None:
         # No transform steps produced output (e.g. a validations-only pipeline);
         # fall back to a staged copy of the instance table so transformed resolution
@@ -196,7 +196,7 @@ def _materialize(
         # test_resolve_frame_transformed_no_transforms_falls_back_to_raw.
         tname = instance_table_name(source_id)
         ts = int(time.time())
-        staged = f"{_staging_prefix(source_id)}{ts}"
+        staged = f"{staging_prefix(source_id)}{ts}"
         conn.execute(f'DROP TABLE IF EXISTS "{staged}"')
         conn.execute(f'CREATE TABLE "{staged}" AS SELECT * FROM "{tname}"')
         return staged, ts

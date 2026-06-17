@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from pipeui.api.pipelines import router, get_conn
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.staging import _staging_prefix, _write_staging_table
+from pipeui.workflow.staging import staging_prefix, write_staging_table
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def test_staging_returns_rows_after_transform_run(client, db, tmp_path):
     # Manually write a staging table (simulating what run_pipeline does after a transform)
     df = pd.DataFrame({"id": [1, 2, 3], "val": [10, 20, 30], "doubled": [20, 40, 60]})
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/staging")
     assert resp.status_code == 200, resp.text
@@ -105,7 +105,7 @@ def test_staging_export_scrubs_nan_and_inf_to_null(client, db, tmp_path):
         "name": ["a", None, "c"],                       # object-column null
     })
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/staging")
     assert resp.status_code == 200, resp.text   # was 500: nan not JSON compliant
@@ -142,7 +142,7 @@ def test_transformed_export_returns_table_after_transforms(client, db, tmp_path)
 
     df = pd.DataFrame({"id": [1, 2, 3], "val": [10, 20, 30], "doubled": [20, 40, 60]})
     ts = int(time.time())
-    _write_staging_table(db, source_id, df, ts)
+    write_staging_table(db, source_id, df, ts)
 
     resp = client.get(f"/pipelines/{source_id}/export/transformed")
     assert resp.status_code == 200, resp.text

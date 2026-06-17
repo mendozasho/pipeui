@@ -1,6 +1,6 @@
 """StepContext (L0) — the typed, logic-free description of one pipeline step.
 
-A step's execution shape is assembled by the loader (``step_loader._fetch_steps``
+A step's execution shape is assembled by the loader (``step_loader.fetch_steps``
 over ``source_function_map`` / ``function_set_map`` / ``parameter`` …, and
 ``get_builtin_steps`` over ``source_builtin_map``). This module turns each fetched
 row into a **frozen, typed** carrier — the sole legal shape crossing the
