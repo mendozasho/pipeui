@@ -112,6 +112,11 @@ These cover this project's governance and design discipline. The *mechanics* of 
 
 ## Architecture
 
+> **Project-wide layer map → [`.claude/ARCHITECTURE.md`](./ARCHITECTURE.md)** (frontend /
+> middleware / backend; backend = `domain` over `data`, per feature; one fractal "imports flow
+> down, never up" rule). The module-boundary notes below are the current, pre-migration rules;
+> ARCHITECTURE.md is the target the project is migrating onto.
+
 - **One DuckDB database for everything.** Registry tables, relational map tables,
   and every per-source (JIT) data table live as tables inside a single DuckDB
   file. Cross-source joins (the "join with other reports" feature) are therefore
