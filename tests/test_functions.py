@@ -440,13 +440,13 @@ def fn_client(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     import importlib
-    import pipeui.api.settings as settings_mod
+    import pipeui.middleware.settings as settings_mod
     importlib.reload(settings_mod)
 
     import duckdb
     from fastapi import FastAPI
     from pipeui.backend.data.base.db import create_schema
-    import pipeui.api.functions as fn_mod
+    import pipeui.middleware.functions as fn_mod
     importlib.reload(fn_mod)
 
     mem_conn = duckdb.connect(":memory:")
@@ -526,9 +526,9 @@ class TestPostScan:
         """))
 
         # Patch load_settings to return our tmp dir
-        import pipeui.api.functions as fn_mod
-        import pipeui.api.settings as sm
-        from pipeui.api.settings import AppSettings
+        import pipeui.middleware.functions as fn_mod
+        import pipeui.middleware.settings as sm
+        from pipeui.middleware.settings import AppSettings
 
         monkeypatch.setattr(fn_mod, "scan_functions", lambda conn, paths: scan_functions(conn, [str(py_dir)]))
 

@@ -396,7 +396,7 @@ def test_create_schema_idempotent_no_duplicates(db):
 def test_get_builtins_endpoint(db):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from pipeui.api.builtins import catalog_router, get_conn
+    from pipeui.middleware.builtins import catalog_router, get_conn
     app = FastAPI()
     app.include_router(catalog_router)
     app.dependency_overrides[get_conn] = lambda: db

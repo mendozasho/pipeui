@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pipeui.api.pipelines import router, get_conn
+from pipeui.middleware.pipelines import router, get_conn
 from pipeui.backend.domain.sources.create import create_source
 from pipeui.backend.domain.sources.ingestion import ingest_source
 from pipeui.backend.data.runner.staging import staging_prefix, write_staging_table

@@ -5,13 +5,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from pipeui.api.builtins import router as builtins_router, catalog_router as builtins_catalog_router
-from pipeui.api.function_sets import router as function_sets_router
-from pipeui.api.functions import router as functions_router
-from pipeui.api.pipelines import router as pipelines_router
-from pipeui.api.settings import router as settings_router
-from pipeui.api.sources import router as sources_router
-from pipeui.api.validations import router as validations_router
+from pipeui.middleware.builtins import router as builtins_router, catalog_router as builtins_catalog_router
+from pipeui.middleware.function_sets import router as function_sets_router
+from pipeui.middleware.functions import router as functions_router
+from pipeui.middleware.pipelines import router as pipelines_router
+from pipeui.middleware.settings import router as settings_router
+from pipeui.middleware.sources import router as sources_router
+from pipeui.middleware.validations import router as validations_router
 
 # frontend/ is bundled as package data inside the pipeui package directory
 FRONTEND_DIR = Path(__file__).parent / "frontend"
