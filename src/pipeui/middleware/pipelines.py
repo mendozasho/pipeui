@@ -19,7 +19,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from pipeui.backend.data.base.db import get_conn
-from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, detach_function, get_pipeline, patch_pipeline_step, suggest_bindings
+from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, detach_function
+from pipeui.backend.domain.functions.pipeline_read import get_pipeline
+from pipeui.backend.domain.functions.suggest import suggest_bindings
+from pipeui.backend.domain.functions.step_edit import patch_pipeline_step
 from pipeui.backend.domain.runner.export import build_results_report, build_transformed_report
 from pipeui.backend.domain.runner.run import get_staging_rows, run_pipeline, run_set_across_sources
 

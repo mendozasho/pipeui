@@ -35,7 +35,10 @@ import pytest
 import datetime
 
 from pipeui.backend.data.base.ids import content_hash_id
-from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, get_pipeline, patch_pipeline_step, suggest_bindings
+from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, detach_function
+from pipeui.backend.domain.functions.pipeline_read import get_pipeline
+from pipeui.backend.domain.functions.suggest import suggest_bindings
+from pipeui.backend.domain.functions.step_edit import patch_pipeline_step
 from tests.conftest import make_registered_source
 
 
@@ -358,6 +361,90 @@ def test_function_id_reuses_existing_single_function_set(db):
     rows = db.execute("SELECT set_id FROM source_function_map").fetchall()
     set_ids = {str(r[0]) for r in rows}
     assert len(set_ids) == 1
+
+
+@pytest.mark.integration
+def test_attach_does_not_reuse_custom_named_single_function_set(db):
+    """#46 single-owner auto-set rule: attaching a bare function does NOT hijack a
+    user's custom-named single-function set. Because the set's name != the function's
+    name it is not a genuine auto-set (_is_auto_created_set is False), so attach leaves
+    it untouched and creates a fresh auto-set named after the function instead."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_custom", [("col", "str")])
+
+    # A hand-built set: exactly one member (the function) but a CUSTOM name.
+    custom_set_id = _make_named_set(db, "My Email Tools", fn_id)
+
+    result = attach_function(
+        db, source_id,
+        [AttachBinding(param_id=param_id, column_ids=[col_ids[0]])],
+        function_id=fn_id,
+    )
+    assert result["ok"] is True
+
+    # The step does NOT reference the user's custom set.
+    used_set_id = db.execute(
+        "SELECT set_id FROM source_function_map WHERE source_function_map_id = ?",
+        [result["source_function_map_id"]],
+    ).fetchone()[0]
+    assert str(used_set_id) != str(custom_set_id)
+
+    # A fresh auto-set named after the function was created; the custom set survives.
+    assert db.execute(
+        "SELECT set_name FROM function_set WHERE set_id = ?", [used_set_id]
+    ).fetchone()[0] == "fn_custom"
+    assert db.execute(
+        "SELECT set_name FROM function_set WHERE set_id = ?", [custom_set_id]
+    ).fetchone()[0] == "My Email Tools"
+
+
+@pytest.mark.integration
+def test_detach_removes_auto_created_set(db):
+    """#46 single-owner auto-set rule (detach side): detaching the last step that uses
+    an auto-created set cleans up its function_set + function_set_map rows."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_auto", [("col", "str")])
+
+    result = attach_function(
+        db, source_id,
+        [AttachBinding(param_id=param_id, column_ids=[col_ids[0]])],
+        function_id=fn_id,
+    )
+    sfm_id = result["source_function_map_id"]
+    auto_set_id = db.execute(
+        "SELECT set_id FROM source_function_map WHERE source_function_map_id = ?", [sfm_id]
+    ).fetchone()[0]
+
+    assert detach_function(db, source_id, uuid.UUID(sfm_id)) is True
+
+    # The auto-set is gone (set + member row), and so is the step.
+    assert db.execute("SELECT COUNT(*) FROM function_set WHERE set_id = ?", [auto_set_id]).fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM function_set_map WHERE set_id = ?", [auto_set_id]).fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM source_function_map WHERE source_function_map_id = ?", [sfm_id]).fetchone()[0] == 0
+
+
+@pytest.mark.integration
+def test_detach_preserves_user_named_set(db):
+    """#46 single-owner auto-set rule (detach side): detaching a step that uses a user's
+    custom-named single-function set leaves the set intact — it is not an auto-set, so
+    the cleanup is skipped (an orphan is safer than deleting a user-built set)."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    fn_id, (param_id,) = _make_function(db, "fn_keep", [("col", "str")])
+    custom_set_id = _make_named_set(db, "My Email Tools", fn_id)
+
+    result = attach_function(
+        db, source_id,
+        [AttachBinding(param_id=param_id, column_ids=[col_ids[0]])],
+        set_id=custom_set_id,
+    )
+    sfm_id = result["source_function_map_id"]
+
+    assert detach_function(db, source_id, uuid.UUID(sfm_id)) is True
+
+    # The custom set survives the detach; only the step is gone.
+    assert db.execute("SELECT COUNT(*) FROM function_set WHERE set_id = ?", [custom_set_id]).fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM function_set_map WHERE set_id = ?", [custom_set_id]).fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM source_function_map WHERE source_function_map_id = ?", [sfm_id]).fetchone()[0] == 0
 
 
 @pytest.mark.integration
