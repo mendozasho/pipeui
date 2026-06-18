@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 from pipeui.ids import content_hash_id
 
@@ -76,6 +76,12 @@ class RunResult:
     label: str
     status: str  # "ok" | "failed"
     error: Optional[str] = None
+    # Result-data fields (not identity): rows the step's frame holds after a
+    # transform/built-in run, and — for a built-in join — the transformed-output
+    # result_id it consumed (lineage; CONTEXT.md → Module contracts: FrameRef flows
+    # into RunResult.consumed_result_id). None for runs to which they don't apply.
+    rows_affected: Optional[int] = None
+    consumed_result_id: Optional[str] = None
 
     @property
     def full_id(self) -> uuid.UUID:
@@ -133,24 +139,84 @@ class ValidationRunResult(RunResult):
 
 
 @dataclass(frozen=True)
-class StepResultEntry:
-    """One step-result row an executor produces: a ``RunResult`` plus the step
-    routing/wire metadata that ``RunResult`` deliberately does not hold — ids
-    (``source_function_map_id``, ``function_id``, ``set_id``, ``step_id``), names
-    (``set_name``), and the built-in/transform extras (``step_type``,
-    ``builtin_type``, ``rows_affected``, ``consumed_result_id``).
+class StepResultRef:
+    """Result provenance — *which* step/function produced a result.
 
-    This is the frozen carrier that replaces the raw result dicts executors used to
-    append to ``StepExecResult.entries`` — keeping the executor→runner boundary typed
-    rather than dict-by-string-key (ARCHITECTURE §2/§5). It is serialized to the wire
-    dict only at ``run_pipeline``'s published return (the api/export seam):
-    ``to_dict`` lays ``routing`` down first and overlays the ``RunResult`` fields,
-    reproducing the exact legacy ``entry.update(rr.to_dict())`` shape so the external
-    ``{"steps": [...]}` contract is unchanged.
+    This is the typed identity carrier that owns the step/function routing metadata
+    a step result carries to the wire (the keys the frontend uses to correlate a
+    result to its pipeline card). It is a distinct responsibility from ``RunResult``
+    (the result *data*) and from ``StepContext`` (the step's own *description* in
+    ``step.py``); a ``StepResultEntry`` composes a ``RunResult`` with one of these.
+
+    Fields are optional because the three result kinds reference different identity:
+    a **validation** result carries ``function_id``/``function_name``/``set_id``; a
+    **transform** result carries ``source_function_map_id``; a **built-in** result
+    carries ``step_id``/``builtin_type``. ``step_type`` ("function" | "builtin") plus
+    the result's ``function_type`` discriminate the kind at serialization time.
+    """
+
+    step_type: str  # "function" | "builtin"
+    source_function_map_id: Optional[Any] = None
+    set_id: Optional[Any] = None
+    set_name: Optional[str] = None
+    function_id: Optional[Any] = None
+    function_name: Optional[str] = None
+    step_id: Optional[Any] = None
+    builtin_type: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StepResultEntry:
+    """One step-result row an executor produces: a ``RunResult`` (the result data)
+    paired with a ``StepResultRef`` (the result's provenance/identity).
+
+    Replaces the raw result dicts executors used to append to
+    ``StepExecResult.entries`` — keeping the executor→runner boundary typed end to
+    end (no ad-hoc dict, per the ``StepExecResult`` carrier contract: "entries are
+    RunResult-derived, never ad-hoc dicts"). Both halves are typed carriers; the only
+    place a dict appears is ``to_dict`` at ``run_pipeline``'s published return (the
+    api/export seam).
+
+    ``to_dict`` is the **single owner of the wire shape**. The three result kinds
+    have irregular key sets, so it assembles each kind's exact dict from typed
+    ``ref``/``run_result`` fields — byte-identical to the pre-refactor emissions, so
+    the external ``{"steps": [...]}`` contract is unchanged.
     """
 
     run_result: RunResult
-    routing: Mapping[str, Any] = field(default_factory=dict)
+    ref: StepResultRef
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.routing, **self.run_result.to_dict()}
+        ref = self.ref
+        rr = self.run_result
+        if ref.step_type == "builtin":
+            routing: dict[str, Any] = {
+                "source_function_map_id": ref.source_function_map_id,
+                "step_id": ref.step_id,
+                "step_type": "builtin",
+                "builtin_type": ref.builtin_type,
+                "set_name": ref.set_name,
+                "rows_affected": rr.rows_affected,
+                "rows_passed": None,
+                "rows_failed": None,
+                "consumed_result_id": rr.consumed_result_id,
+            }
+        elif rr.function_type == "validation":
+            routing = {
+                "function_id": ref.function_id,
+                "function_name": ref.function_name,
+                "set_name": ref.set_name,
+                "set_id": ref.set_id,
+            }
+        else:  # transform
+            routing = {
+                "source_function_map_id": ref.source_function_map_id,
+                "set_name": ref.set_name,
+                "rows_affected": rr.rows_affected,
+                "rows_passed": None,
+                "rows_failed": None,
+            }
+        # RunResult fields overlay routing (identical to the legacy
+        # entry.update(rr.to_dict())): on the one shared key, function_name, both
+        # carry the same value, so overlay direction is invisible.
+        return {**routing, **rr.to_dict()}

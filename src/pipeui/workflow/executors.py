@@ -20,14 +20,14 @@ moved code is byte-for-byte the inline logic; only its home changed.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 import duckdb
 import pandas as pd
 
-from pipeui.results import RunResult, StepResultEntry, ValidationRunResult, normalize_label
+from pipeui.results import RunResult, StepResultEntry, StepResultRef, ValidationRunResult, normalize_label
 from pipeui.sql_user_table import instance_table_name
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.builtins import execute_builtin_step
@@ -479,18 +479,16 @@ def _builtin_result(
         label=normalize_label(btype),
         status=status,
         error=error,
+        rows_affected=rows_affected,
+        consumed_result_id=consumed_result_id,
     )
-    return StepResultEntry(run_result=rr, routing={
-        "source_function_map_id": None,
-        "step_id": step.step_id,
-        "step_type": "builtin",
-        "builtin_type": btype,
-        "set_name": btype,
-        "rows_affected": rows_affected,
-        "rows_passed": None,
-        "rows_failed": None,
-        "consumed_result_id": consumed_result_id,
-    })
+    return StepResultEntry(run_result=rr, ref=StepResultRef(
+        step_type="builtin",
+        source_function_map_id=None,
+        step_id=step.step_id,
+        builtin_type=btype,
+        set_name=btype,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +522,14 @@ def _execute_validation_step(
             failing_rows=failing_rows, error=error,
         )
         # RunResult is the source of truth for type/status/counts/identity/label;
-        # the routing dict carries the wire keys RunResult does not hold.
-        return StepResultEntry(run_result=rr, routing={
-            "function_id": fn_id,
-            "function_name": fn_name,
-            "set_name": set_name,
-            "set_id": set_id,
-        })
+        # the typed StepResultRef carries the validation step's provenance.
+        return StepResultEntry(run_result=rr, ref=StepResultRef(
+            step_type="function",
+            function_id=fn_id,
+            function_name=fn_name,
+            set_name=set_name,
+            set_id=set_id,
+        ))
 
     for fn in step.functions:
         if fn.function_type != "validation":
@@ -811,15 +810,15 @@ class FunctionStepExecutor:
             new_working, error, run_results = _execute_transform_step(
                 working, step, conn=env.conn, source_id=env.source_id
             )
+            ref = StepResultRef(
+                step_type="function",
+                source_function_map_id=sfm_id,
+                set_name=set_name,
+            )
             if error:
                 tr = _transform_runresult(step, env.source_id, status="failed", error=error)
-                entries.append(StepResultEntry(run_result=tr, routing={
-                    "source_function_map_id": sfm_id,
-                    "set_name": set_name,
-                    "rows_affected": None,
-                    "rows_passed": None,
-                    "rows_failed": None,
-                }))
+                # rows_affected stays None on a failed transform (frame unchanged).
+                entries.append(StepResultEntry(run_result=tr, ref=ref))
             else:
                 working = new_working
                 write_staging_table(env.conn, env.source_id, working, env.ts)
@@ -827,14 +826,11 @@ class FunctionStepExecutor:
                 emitted = run_results or [
                     _transform_runresult(step, env.source_id, status="ok", error=None)
                 ]
+                rows = len(working)
                 for rr in emitted:
-                    entries.append(StepResultEntry(run_result=rr, routing={
-                        "source_function_map_id": sfm_id,
-                        "set_name": set_name,
-                        "rows_affected": len(working),
-                        "rows_passed": None,
-                        "rows_failed": None,
-                    }))
+                    entries.append(StepResultEntry(
+                        run_result=replace(rr, rows_affected=rows), ref=ref
+                    ))
 
         if env.want_validations and step_has(step, "validation"):
             entries.extend(

@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 from dataclasses import FrozenInstanceError
 
-from pipeui.results import RunResult, StepResultEntry, ValidationRunResult
+from pipeui.results import RunResult, StepResultEntry, StepResultRef, ValidationRunResult
 from pipeui.workflow.executors import StepExecResult, StepRunEnv
 from pipeui.workflow.resolve import RAW, TRANSFORMED, FrameRef
 from pipeui.workflow.step import (
@@ -170,41 +170,76 @@ def test_step_exec_result_is_frozen():
 
 
 # ---------------------------------------------------------------------------
-# (e) StepResultEntry — frozen carrier; to_dict reproduces the legacy entry shape
+# (e) StepResultRef / StepResultEntry — typed identity + data; to_dict owns the
+#     (kind-aware) wire shape, byte-identical to the pre-refactor entry dicts.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-def test_step_result_entry_is_frozen():
+def test_step_result_ref_and_entry_are_frozen():
     rr = RunResult(
         function_name="f", function_type="transform", source_id=uuid.UUID(int=0),
         bundle_key="", label="f", status="ok", error=None,
     )
-    entry = StepResultEntry(run_result=rr, routing={"set_name": "s"})
+    ref = StepResultRef(step_type="function", source_function_map_id="sfm", set_name="s")
+    with pytest.raises(FrozenInstanceError):
+        ref.set_name = "other"
+    entry = StepResultEntry(run_result=rr, ref=ref)
     with pytest.raises(FrozenInstanceError):
         entry.run_result = rr
 
 
 @pytest.mark.unit
-def test_step_result_entry_to_dict_lays_routing_then_runresult():
-    """to_dict() == {**routing, **run_result.to_dict()} — routing first, RunResult
-    fields overlay (the exact legacy ``entry.update(rr.to_dict())`` shape), so the
-    external {"steps": [...]} wire contract is unchanged."""
+def test_validation_entry_wire_shape():
+    """Validation entry: function identity from the ref; counts/identity from the
+    ValidationRunResult. No rows_affected/consumed_result_id keys."""
     rr = ValidationRunResult(
         function_name="check_x", function_type="validation", source_id=uuid.UUID(int=0),
         bundle_key="amount", label="amount", status="ok", error=None,
         rows_passed=3, rows_failed=1, failing_rows=[{"amount": -1}],
     )
-    routing = {"function_id": "fid", "function_name": "STALE", "set_name": "s", "set_id": "sid"}
-    entry = StepResultEntry(run_result=rr, routing=routing)
-    d = entry.to_dict()
-    # routing keys present...
-    assert d["function_id"] == "fid"
-    assert d["set_id"] == "sid"
-    # ...but RunResult's value wins on overlap (function_name), and identity/counts come from rr
-    assert d["function_name"] == "check_x"
-    assert d["result_id"] == rr.result_id
-    assert d["rows_passed"] == 3 and d["rows_failed"] == 1
-    assert d == {**routing, **rr.to_dict()}
+    ref = StepResultRef(
+        step_type="function", function_id="fid", function_name="check_x",
+        set_id="sid", set_name="s",
+    )
+    d = StepResultEntry(run_result=rr, ref=ref).to_dict()
+    assert d["function_id"] == "fid" and d["set_id"] == "sid" and d["set_name"] == "s"
+    assert d["function_name"] == "check_x" and d["result_id"] == rr.result_id
+    assert d["rows_passed"] == 3 and d["rows_failed"] == 1 and d["pass_rate"] == 0.75
+    assert "rows_affected" not in d and "consumed_result_id" not in d
+
+
+@pytest.mark.unit
+def test_transform_entry_wire_shape():
+    """Transform entry: source_function_map_id from the ref; rows_affected from the
+    RunResult; rows_passed/rows_failed padded None; no consumed_result_id/set_id."""
+    rr = RunResult(
+        function_name="upper", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="email", label="email", status="ok", error=None, rows_affected=42,
+    )
+    ref = StepResultRef(step_type="function", source_function_map_id="sfm", set_name="s")
+    d = StepResultEntry(run_result=rr, ref=ref).to_dict()
+    assert d["source_function_map_id"] == "sfm" and d["set_name"] == "s"
+    assert d["rows_affected"] == 42 and d["rows_passed"] is None and d["rows_failed"] is None
+    assert "consumed_result_id" not in d and "set_id" not in d and "function_id" not in d
+
+
+@pytest.mark.unit
+def test_builtin_entry_wire_shape():
+    """Built-in entry: step_id/builtin_type from the ref; rows_affected and
+    consumed_result_id (join lineage) from the RunResult."""
+    rr = RunResult(
+        function_name="join", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="step-1", label="join", status="ok", error=None,
+        rows_affected=10, consumed_result_id="abc12345",
+    )
+    ref = StepResultRef(
+        step_type="builtin", source_function_map_id=None, step_id="step-1",
+        builtin_type="join", set_name="join",
+    )
+    d = StepResultEntry(run_result=rr, ref=ref).to_dict()
+    assert d["step_type"] == "builtin" and d["step_id"] == "step-1"
+    assert d["builtin_type"] == "join" and d["consumed_result_id"] == "abc12345"
+    assert d["rows_affected"] == 10 and d["rows_passed"] is None
 
 
 # ---------------------------------------------------------------------------
