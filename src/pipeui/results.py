@@ -76,6 +76,12 @@ class RunResult:
     label: str
     status: str  # "ok" | "failed"
     error: Optional[str] = None
+    # Result-data fields (not identity): rows the step's frame holds after a
+    # transform/built-in run, and — for a built-in join — the transformed-output
+    # result_id it consumed (lineage; CONTEXT.md → Module contracts: FrameRef flows
+    # into RunResult.consumed_result_id). None for runs to which they don't apply.
+    rows_affected: Optional[int] = None
+    consumed_result_id: Optional[str] = None
 
     @property
     def full_id(self) -> uuid.UUID:
@@ -130,3 +136,97 @@ class ValidationRunResult(RunResult):
             }
         )
         return d
+
+
+@dataclass(frozen=True)
+class StepResultEntry:
+    """Base step-result carrier: one ``RunResult`` (the result data) plus the
+    step/function provenance a result carries to the wire (the keys the frontend uses
+    to correlate a result to its pipeline card).
+
+    This is a **variant hierarchy**, mirroring ``StepContext`` — there is one subclass
+    per result kind (validation / transform / built-in) and *the variant IS the
+    contract*. Each subclass holds only its own provenance fields and renders its own
+    wire row via ``to_dict``; the runner holds this base type and serializes every
+    entry the same way (``entry.to_dict()``), with **no switch on kind** (LSP/OCP).
+    Replaces the raw result dicts executors used to append to ``StepExecResult.entries``
+    — the boundary stays typed end to end; the only dict is each variant's ``to_dict``
+    at ``run_pipeline``'s published return (the api/export seam), byte-identical to the
+    pre-refactor emissions.
+    """
+
+    run_result: RunResult
+
+    def to_dict(self) -> dict[str, Any]:  # pragma: no cover - abstract base
+        raise NotImplementedError("use a StepResultEntry variant")
+
+
+@dataclass(frozen=True)
+class ValidationResultEntry(StepResultEntry):
+    """A validation step's result: identified by the validation function + its set."""
+
+    function_id: Optional[Any] = None
+    function_name: Optional[str] = None
+    set_id: Optional[Any] = None
+    set_name: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        # Provenance keys first; the ValidationRunResult fields (counts, identity,
+        # pass_rate, failing_rows) overlay — function_name carries the same value on
+        # both sides, so the overlay is invisible.
+        return {
+            "function_id": self.function_id,
+            "function_name": self.function_name,
+            "set_name": self.set_name,
+            "set_id": self.set_id,
+            **self.run_result.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class TransformResultEntry(StepResultEntry):
+    """A transform step's result: identified by its source_function_map row.
+
+    ``rows_passed``/``rows_failed`` are wire padding (a transform has no pass/fail) so
+    a transform card and a validation card expose the same metric keys.
+    """
+
+    source_function_map_id: Optional[Any] = None
+    set_name: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_function_map_id": self.source_function_map_id,
+            "set_name": self.set_name,
+            "rows_affected": self.run_result.rows_affected,
+            "rows_passed": None,
+            "rows_failed": None,
+            **self.run_result.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class BuiltinResultEntry(StepResultEntry):
+    """A built-in step's result (join/pivot/filter): identified by its step + type.
+
+    Carries the join's consumed transformed-output ``consumed_result_id`` (lineage)
+    off the ``RunResult``.
+    """
+
+    step_id: Optional[Any] = None
+    builtin_type: Optional[str] = None
+    set_name: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_function_map_id": None,
+            "step_id": self.step_id,
+            "step_type": "builtin",
+            "builtin_type": self.builtin_type,
+            "set_name": self.set_name,
+            "rows_affected": self.run_result.rows_affected,
+            "rows_passed": None,
+            "rows_failed": None,
+            "consumed_result_id": self.run_result.consumed_result_id,
+            **self.run_result.to_dict(),
+        }

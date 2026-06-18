@@ -20,14 +20,22 @@ moved code is byte-for-byte the inline logic; only its home changed.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 import duckdb
 import pandas as pd
 
-from pipeui.results import RunResult, ValidationRunResult, normalize_label
+from pipeui.results import (
+    BuiltinResultEntry,
+    RunResult,
+    StepResultEntry,
+    TransformResultEntry,
+    ValidationResultEntry,
+    ValidationRunResult,
+    normalize_label,
+)
 from pipeui.sql_user_table import instance_table_name
 from pipeui.validation.fails import FailedFunctionEntry
 from pipeui.workflow.builtins import execute_builtin_step
@@ -181,7 +189,7 @@ def _execute_transform_step(
     step: "FunctionStepContext",
     conn: duckdb.DuckDBPyConnection | None = None,
     source_id: uuid.UUID | None = None,
-) -> tuple[pd.DataFrame, str | None, list[dict]]:
+) -> tuple[pd.DataFrame, str | None, list[RunResult]]:
     """Execute all functions in a transform step against the working table.
 
     Returns (new_working_table, error_message_or_None, run_results).
@@ -199,7 +207,7 @@ def _execute_transform_step(
     conn and source_id are required for SQL function execution.
     """
     current = working
-    run_results: list[dict] = []
+    run_results: list[RunResult] = []
     # #264: output config (output_mode / append_name / output_targets) is per-FUNCTION,
     # resolved inside the loop from each FunctionSpec; the step-level value is the legacy fallback.
     step_output_mode = step.output_mode
@@ -216,7 +224,7 @@ def _execute_transform_step(
             status=status,
             error=error,
         )
-        run_results.append(rr.to_dict())
+        run_results.append(rr)
 
     for fn in step.functions:
         if fn.function_type != "transform":
@@ -461,7 +469,7 @@ def _builtin_result(
     error: str | None,
     rows_affected: int | None,
     consumed_result_id: str | None = None,
-) -> dict:
+) -> StepResultEntry:
     """Build a step-results entry for a built-in step (join/pivot/filter).
 
     Reuses the transform RunResult shape (function_type='transform') so the Results
@@ -479,20 +487,15 @@ def _builtin_result(
         label=normalize_label(btype),
         status=status,
         error=error,
+        rows_affected=rows_affected,
+        consumed_result_id=consumed_result_id,
     )
-    entry = {
-        "source_function_map_id": None,
-        "step_id": step.step_id,
-        "step_type": "builtin",
-        "builtin_type": btype,
-        "set_name": btype,
-        "rows_affected": rows_affected,
-        "rows_passed": None,
-        "rows_failed": None,
-        "consumed_result_id": consumed_result_id,
-    }
-    entry.update(rr.to_dict())
-    return entry
+    return BuiltinResultEntry(
+        run_result=rr,
+        step_id=step.step_id,
+        builtin_type=btype,
+        set_name=btype,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +507,7 @@ def _execute_validation_step(
     step: "FunctionStepContext",
     conn: duckdb.DuckDBPyConnection | None = None,
     source_id: uuid.UUID | None = None,
-) -> list[dict]:
+) -> list[StepResultEntry]:
     """Execute all validation functions in a step against the original table.
 
     Each validation function produces one ValidationRunResult (the N=1 argument
@@ -525,15 +528,15 @@ def _execute_validation_step(
             status=status, rows_passed=rows_passed, rows_failed=rows_failed,
             failing_rows=failing_rows, error=error,
         )
-        entry = {
-            "function_id": fn_id,
-            "function_name": fn_name,
-            "set_name": set_name,
-            "set_id": set_id,
-        }
-        # RunResult is the source of truth for type/status/counts/identity/label.
-        entry.update(rr.to_dict())
-        return entry
+        # RunResult is the source of truth for type/status/counts/identity/label;
+        # the ValidationResultEntry variant carries the validation step's provenance.
+        return ValidationResultEntry(
+            run_result=rr,
+            function_id=fn_id,
+            function_name=fn_name,
+            set_name=set_name,
+            set_id=set_id,
+        )
 
     for fn in step.functions:
         if fn.function_type != "validation":
@@ -755,13 +758,14 @@ class StepExecResult:
     """The uniform result an executor returns to the runner.
 
     ``working`` is the (possibly reshaped) working frame after the step.
-    ``entries`` is the list of step-result dicts to splice into ``run_pipeline``'s
-    output (identical in shape to the pre-refactor inline emissions).
+    ``entries`` is the list of ``StepResultEntry`` carriers to splice into
+    ``run_pipeline``'s output; the runner serializes each via ``to_dict()`` at its
+    published return, so the external ``{"steps": [...]}`` shape is unchanged.
     ``wrote_staging`` tells the runner the step staged the working frame.
     """
 
     working: pd.DataFrame
-    entries: list[dict] = field(default_factory=list)
+    entries: list[StepResultEntry] = field(default_factory=list)
     wrote_staging: bool = False
 
 
@@ -806,7 +810,7 @@ class FunctionStepExecutor:
         step = ctx
         sfm_id = step.source_function_map_id
         set_name = step.set_name
-        entries: list[dict] = []
+        entries: list[StepResultEntry] = []
         wrote_staging = False
 
         if env.want_transforms and step_has(step, "transform"):
@@ -815,32 +819,24 @@ class FunctionStepExecutor:
             )
             if error:
                 tr = _transform_runresult(step, env.source_id, status="failed", error=error)
-                entry = {
-                    "source_function_map_id": sfm_id,
-                    "set_name": set_name,
-                    "rows_affected": None,
-                    "rows_passed": None,
-                    "rows_failed": None,
-                }
-                entry.update(tr.to_dict())
-                entries.append(entry)
+                # rows_affected stays None on a failed transform (frame unchanged).
+                entries.append(TransformResultEntry(
+                    run_result=tr, source_function_map_id=sfm_id, set_name=set_name
+                ))
             else:
                 working = new_working
                 write_staging_table(env.conn, env.source_id, working, env.ts)
                 wrote_staging = True
                 emitted = run_results or [
-                    _transform_runresult(step, env.source_id, status="ok", error=None).to_dict()
+                    _transform_runresult(step, env.source_id, status="ok", error=None)
                 ]
+                rows = len(working)
                 for rr in emitted:
-                    entry = {
-                        "source_function_map_id": sfm_id,
-                        "set_name": set_name,
-                        "rows_affected": len(working),
-                        "rows_passed": None,
-                        "rows_failed": None,
-                    }
-                    entry.update(rr)
-                    entries.append(entry)
+                    entries.append(TransformResultEntry(
+                        run_result=replace(rr, rows_affected=rows),
+                        source_function_map_id=sfm_id,
+                        set_name=set_name,
+                    ))
 
         if env.want_validations and step_has(step, "validation"):
             entries.extend(
@@ -872,7 +868,7 @@ class FunctionSetExecutor:
 
     def execute(self, ctx, working, env):
         members = ctx.functions or ()
-        entries: list[dict] = []
+        entries: list[StepResultEntry] = []
         wrote_staging = False
 
         for member in members:

@@ -20,7 +20,14 @@ import pandas as pd
 import pytest
 from dataclasses import FrozenInstanceError
 
-from pipeui.results import RunResult
+from pipeui.results import (
+    BuiltinResultEntry,
+    RunResult,
+    StepResultEntry,
+    TransformResultEntry,
+    ValidationResultEntry,
+    ValidationRunResult,
+)
 from pipeui.workflow.executors import StepExecResult, StepRunEnv
 from pipeui.workflow.resolve import RAW, TRANSFORMED, FrameRef
 from pipeui.workflow.step import (
@@ -167,6 +174,89 @@ def test_step_exec_result_is_frozen():
     res = StepExecResult(working=pd.DataFrame({"a": [1]}), entries=[], wrote_staging=False)
     with pytest.raises(FrozenInstanceError):
         res.wrote_staging = True
+
+
+# ---------------------------------------------------------------------------
+# (e) StepResultEntry variant hierarchy — one subclass per result kind; each
+#     renders its own wire row (LSP: run.py calls to_dict() with no kind switch),
+#     byte-identical to the pre-refactor entry dicts.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_result_entry_variants_are_frozen_and_substitutable():
+    rr = RunResult(
+        function_name="f", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="", label="f", status="ok", error=None,
+    )
+    entry = TransformResultEntry(run_result=rr, source_function_map_id="sfm", set_name="s")
+    # Substitutable for the base type, and frozen.
+    assert isinstance(entry, StepResultEntry)
+    with pytest.raises(FrozenInstanceError):
+        entry.set_name = "other"
+
+
+@pytest.mark.unit
+def test_base_step_result_entry_to_dict_is_abstract():
+    """The base carrier has no wire shape of its own — only variants render."""
+    rr = RunResult(
+        function_name="f", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="", label="f", status="ok", error=None,
+    )
+    with pytest.raises(NotImplementedError):
+        StepResultEntry(run_result=rr).to_dict()
+
+
+@pytest.mark.unit
+def test_validation_entry_wire_shape():
+    """ValidationResultEntry: function identity on the variant; counts/identity from
+    the ValidationRunResult. No rows_affected/consumed_result_id keys."""
+    rr = ValidationRunResult(
+        function_name="check_x", function_type="validation", source_id=uuid.UUID(int=0),
+        bundle_key="amount", label="amount", status="ok", error=None,
+        rows_passed=3, rows_failed=1, failing_rows=[{"amount": -1}],
+    )
+    d = ValidationResultEntry(
+        run_result=rr, function_id="fid", function_name="check_x",
+        set_id="sid", set_name="s",
+    ).to_dict()
+    assert d["function_id"] == "fid" and d["set_id"] == "sid" and d["set_name"] == "s"
+    assert d["function_name"] == "check_x" and d["result_id"] == rr.result_id
+    assert d["rows_passed"] == 3 and d["rows_failed"] == 1 and d["pass_rate"] == 0.75
+    assert "rows_affected" not in d and "consumed_result_id" not in d
+
+
+@pytest.mark.unit
+def test_transform_entry_wire_shape():
+    """TransformResultEntry: source_function_map_id on the variant; rows_affected from
+    the RunResult; rows_passed/rows_failed padded None; no consumed_result_id/set_id."""
+    rr = RunResult(
+        function_name="upper", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="email", label="email", status="ok", error=None, rows_affected=42,
+    )
+    d = TransformResultEntry(
+        run_result=rr, source_function_map_id="sfm", set_name="s",
+    ).to_dict()
+    assert d["source_function_map_id"] == "sfm" and d["set_name"] == "s"
+    assert d["rows_affected"] == 42 and d["rows_passed"] is None and d["rows_failed"] is None
+    assert "consumed_result_id" not in d and "set_id" not in d and "function_id" not in d
+
+
+@pytest.mark.unit
+def test_builtin_entry_wire_shape():
+    """BuiltinResultEntry: step_id/builtin_type on the variant; rows_affected and
+    consumed_result_id (join lineage) from the RunResult."""
+    rr = RunResult(
+        function_name="join", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="step-1", label="join", status="ok", error=None,
+        rows_affected=10, consumed_result_id="abc12345",
+    )
+    d = BuiltinResultEntry(
+        run_result=rr, step_id="step-1", builtin_type="join", set_name="join",
+    ).to_dict()
+    assert d["step_type"] == "builtin" and d["step_id"] == "step-1"
+    assert d["builtin_type"] == "join" and d["consumed_result_id"] == "abc12345"
+    assert d["rows_affected"] == 10 and d["rows_passed"] is None
+    assert d["source_function_map_id"] is None
 
 
 # ---------------------------------------------------------------------------

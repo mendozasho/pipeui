@@ -235,7 +235,10 @@ def run_pipeline(
             continue
         outcome = executor.execute(ctx, working_df, env)
         working_df = outcome.working
-        step_results.extend(outcome.entries)
+        # Serialize the typed StepResultEntry carriers to the wire dict here, at the
+        # runner's published return (the api/export seam). Executors traffic in typed
+        # carriers; only this boundary produces the external {"steps": [...]} dicts.
+        step_results.extend(entry.to_dict() for entry in outcome.entries)
 
     return {
         "run_type": run_type,
