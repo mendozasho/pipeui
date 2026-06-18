@@ -160,9 +160,8 @@ backend `domain → data`; no module imports one above it, and there are **no in
 dodge a cycle** (an in-function import means a responsibility is in the wrong layer — move it down
 or inject it). This table is the canonical "where does new code go" map.
 
-> **Migration note (`ARCHITECTURE.md §4`, epic #55).** The `backend/{data,domain}` layers below
-> are re-homed and settled. Still pending: the `api/` → `middleware/` move (slice 4) and the
-> composition root `app/` (slice 5).
+> **Layer map (`ARCHITECTURE.md §4`, epic #55 — complete).** The tree below is the on-disk
+> shape: `middleware/` (the API seam) + `backend/{data,domain}/` + `app/` (composition root).
 
 | Module | Single responsibility (its one reason to change) | New code goes here when… |
 | --- | --- | --- |
@@ -199,6 +198,13 @@ or inject it). This table is the canonical "where does new code go" map.
 | `worker.py` | **Process-isolated execution** — run a user function in a subprocess (`setrlimit`, Arrow IPC), strict data-in/data-out (never receives the connection). | the worker/sandbox mechanics or its IPC contract. |
 | `run.py` *(L4)* | **Run orchestration** — drive a source's whole run end-to-end (load → resolve → execute via the registry → stage → collect); cross-source runners. Injects `run_pipeline` into `resolve`. | a new run phase, run-type, or cross-source entry point. |
 | `export.py` | **Run export** — produce the exportable `results report` / `transformed report` from a run's output. | a new export format or report shape. |
+| **`middleware/`** — the API seam (HTTP routes; calls `backend` only) | | |
+| `sources` `functions` `function_sets` `pipelines` `validations` `builtins` `settings` `.py` | **API routes** — one router module per resource: validate/parse the request, delegate to a `backend` function, shape the JSON response. No business logic of its own. | a new endpoint or request/response shape for that resource. *(Some handlers — `sources`/`pipelines` — still hold raw SQL/existence checks the audit flags for push-down into `backend` — #48.)* |
+| **`app/`** — composition root (wires the layers; owned by no feature) | | |
+| `main.py` | **App wiring** — build the FastAPI `app`, mount the routers + the `frontend/` static dir. | a new router include or app-level mount/middleware. |
+| `config.py` | **Startup config** — the process-frozen `DB_PATH` (read once at import). | an app-level startup constant. |
+| `helpers.py` | **App utilities** — settings-file I/O (`load_settings`/`save_settings`) + `infer_pattern`. *(Junk-drawer; split slated — #49.)* | (prefer a feature module; this is being dissolved.) |
+| `cli.py` | **CLI entry** — `pipeui <init\|start>` (scaffold config/db; launch uvicorn). | a new CLI subcommand. |
 
 Dependency direction: `base/*` (ids, schema, tables, settings, fails, results) underlies everything;
 within the runner, `steps` → `staging`/`step_loader`/`bundles` → `resolve` → `executors` → `run`,
@@ -221,7 +227,7 @@ tested contract edit) — never an incidental dict key.
 | `StepExecResult` (`backend/domain/runner/executors.py`) | the complete outcome of running one step | `executors` → `run` | `frozen=True`; `entries` are `StepResultEntry` variant carriers (never ad-hoc dicts) |
 | `RunResult` / `ValidationRunResult` (`backend/data/base/results.py`) | canonical identity + data of one result | `executors` (mechanics) → `run` + Results/export | `frozen=True`; deterministic `result_id` |
 | `StepResultEntry` + `Validation`/`Transform`/`BuiltinResultEntry` variants (`backend/data/base/results.py`) | one step's result = a `RunResult` plus its provenance, as a per-kind variant | `executors` → `run` (serialized to the wire dict at the published seam) | `frozen=True`; variant hierarchy ("the variant IS the contract"), each renders its own `to_dict()` — no kind-switch in the consumer |
-| `FrameRef` (`backend/domain/runner/resolve.py`) | provenance of a resolved input frame | `resolve` → `functions.builtins` (`_execute_join`) + `api/sources`, then into `RunResult.consumed_result_id` | `frozen=True`; invariant `result_id is None ⟺ mode == RAW` (in `__post_init__`); returned as `(frame, FrameRef)` |
+| `FrameRef` (`backend/domain/runner/resolve.py`) | provenance of a resolved input frame | `resolve` → `functions.builtins` (`_execute_join`) + `middleware/sources`, then into `RunResult.consumed_result_id` | `frozen=True`; invariant `result_id is None ⟺ mode == RAW` (in `__post_init__`); returned as `(frame, FrameRef)` |
 | `run_transforms` runner *(behavioral port, not data)* (`backend/domain/runner/resolve.py` declares the type) | "produce a source's transformed output by running its transforms" | `run` → `resolve` (DIP) | `resolve` declares the callable signature; orchestrator supplies it; **zero `run` import in `resolve`** |
 
 Enforcement is real, not aspirational: frozen dataclasses block mutation; `__post_init__` invariants
