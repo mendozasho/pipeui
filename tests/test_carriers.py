@@ -30,7 +30,7 @@ from pipeui.backend.data.base.results import (
 )
 from pipeui.workflow.executors import StepExecResult, StepRunEnv
 from pipeui.workflow.resolve import RAW, TRANSFORMED, FrameRef
-from pipeui.workflow.step import (
+from pipeui.backend.data.runner.steps import (
     BUILTIN,
     FUNCTION,
     SET,

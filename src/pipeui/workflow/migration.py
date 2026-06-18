@@ -16,7 +16,7 @@ import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id as _content_hash_id
 from pipeui.backend.data.base.tables import build_create_table_sql, instance_table_name
-from pipeui.validation.column import ColumnRegistryUpdate, ColumnRegistryEntry
+from pipeui.backend.data.sources.columns import ColumnRegistryUpdate, ColumnRegistryEntry
 
 # ---------------------------------------------------------------------------
 # Allowed column types (resolved from Active Deferred Work in CLAUDE.md)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pipeui.validation.column import ColumnRegistryEntry
-from pipeui.validation.source import SourceRegistryEntry
+from pipeui.backend.data.sources.columns import ColumnRegistryEntry
+from pipeui.backend.data.sources.registry import SourceRegistryEntry
 
 
 class FailedRegistryEntry:

@@ -11,7 +11,7 @@ import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.fails import FailedRegistryEntry
-from pipeui.validation.function_set import FunctionSetEntry, FunctionSetUpdate
+from pipeui.backend.data.functions.sets import FunctionSetEntry, FunctionSetUpdate
 
 _MAP_TABLE = "function_set_map"
 

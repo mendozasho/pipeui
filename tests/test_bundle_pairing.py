@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeui.workflow.bundles import BundleLengthError, pair_bundles
+from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
 
 
 def _param(param_id, columns):

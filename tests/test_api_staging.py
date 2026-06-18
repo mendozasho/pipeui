@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from pipeui.api.pipelines import router, get_conn
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.staging import staging_prefix, write_staging_table
+from pipeui.backend.data.runner.staging import staging_prefix, write_staging_table
 
 
 @pytest.fixture

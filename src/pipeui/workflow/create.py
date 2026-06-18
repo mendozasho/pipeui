@@ -14,7 +14,8 @@ from pipeui.backend.data.base.schema.constants import IngestionMethod, DUCKDB_TO
 from pipeui.backend.data.base.db import infer_column_types, get_db_path
 from pipeui.helpers import infer_pattern
 from pipeui.backend.data.base.fails import FailedRegistryEntry
-from pipeui.validation import SourceRegistryEntry, SourceRegistryUpdate, ColumnRegistryEntry
+from pipeui.backend.data.sources.registry import SourceRegistryEntry, SourceRegistryUpdate
+from pipeui.backend.data.sources.columns import ColumnRegistryEntry
 
 
 class CreateFlowCache:

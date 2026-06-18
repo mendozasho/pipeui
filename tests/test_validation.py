@@ -1,5 +1,6 @@
 """
-Behavioral-guarantee tests for pipeui.validation (§3, §4).
+Behavioral-guarantee tests for the registry write-contracts (§3, §4) — the
+SourceRegistry/ColumnRegistry *Entry/*Update objects now in backend/data/sources.
 Marker: unit — pure logic, no DB, no subprocess.
 """
 
@@ -8,12 +9,8 @@ from pydantic import ValidationError
 
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.fails import FailedRegistryEntry
-from pipeui.validation import (
-    ColumnRegistryEntry,
-    ColumnRegistryUpdate,
-    SourceRegistryEntry,
-    SourceRegistryUpdate,
-)
+from pipeui.backend.data.sources.columns import ColumnRegistryEntry, ColumnRegistryUpdate
+from pipeui.backend.data.sources.registry import SourceRegistryEntry, SourceRegistryUpdate
 
 
 # ---------------------------------------------------------------------------
