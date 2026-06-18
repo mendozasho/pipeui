@@ -24,7 +24,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 
-from pipeui.validation.fails import FailedFunctionEntry
+from pipeui.backend.data.base.fails import FailedFunctionEntry
 
 # ---------------------------------------------------------------------------
 # Public constants

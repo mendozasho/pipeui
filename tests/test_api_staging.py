@@ -226,7 +226,7 @@ def test_staging_fed_by_registry_run(client, db, tmp_path, monkeypatch):
     sfm_id = uuid.uuid4()
     db.execute("INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
                [sfm_id, source_id, set_id, 0, "append"])
-    from pipeui.ids import content_hash_id
+    from pipeui.backend.data.base.ids import content_hash_id
     alias_id = content_hash_id("alias_map", str(param_id), str(col_id), str(source_id))
     db.execute("INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
                [alias_id, col_id, param_id, source_id])

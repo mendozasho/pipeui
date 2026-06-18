@@ -38,8 +38,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from pipeui.ids import content_hash_id
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.ids import content_hash_id
+from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
 from pipeui.workflow.run import run_pipeline
@@ -1572,7 +1572,7 @@ def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path)
     fallback, not an error) — a source with nothing to transform has its raw data as
     its 'transformed output'. See resolve._materialize."""
     from pipeui.workflow.resolve import resolve_frame
-    from pipeui.sql_user_table import instance_table_name
+    from pipeui.backend.data.base.tables import instance_table_name
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = db.execute(
@@ -1641,7 +1641,7 @@ def test_resolve_frame_transformed_result_id_is_deterministic(db, tmp_path):
     result_id (equal inputs -> equal id) consistent with the RunResult identity
     scheme."""
     from pipeui.workflow.resolve import resolve_frame
-    from pipeui.results import RunResult
+    from pipeui.backend.data.base.results import RunResult
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = db.execute(

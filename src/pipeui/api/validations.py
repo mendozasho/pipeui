@@ -14,7 +14,7 @@ import uuid
 import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from pipeui.db import get_conn
+from pipeui.backend.data.base.db import get_conn
 from pipeui.workflow.export import build_results_report
 from pipeui.workflow.run import run_validation_across_sources
 

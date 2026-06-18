@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-import pipeui.ids as ids_mod
-from pipeui.ids import content_hash_id, new_id
+import pipeui.backend.data.base.ids as ids_mod
+from pipeui.backend.data.base.ids import content_hash_id, new_id
 
 
 @pytest.mark.unit

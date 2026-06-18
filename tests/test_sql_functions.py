@@ -13,7 +13,7 @@ from pipeui.workflow.functions import (
     list_functions,
 )
 from pipeui.workflow.executors import _execute_sql_function
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.tables import instance_table_name
 from tests.conftest import make_registered_source
 
 
@@ -268,7 +268,7 @@ class TestSqlFunctionExecution:
     @pytest.mark.integration
     def test_sql_execution_returns_failed_entry_on_bad_sql(self, db, tmp_path):
         """Guarantee: invalid SQL returns FailedFunctionEntry (not an exception)."""
-        from pipeui.validation.fails import FailedFunctionEntry
+        from pipeui.backend.data.base.fails import FailedFunctionEntry
         source_id = uuid.uuid4()
 
         sql_file = write_sql(tmp_path, "bad.sql", """

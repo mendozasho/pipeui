@@ -12,7 +12,7 @@ import uuid
 
 from pydantic import BaseModel, Field, model_validator
 
-from pipeui.ids import content_hash_id as _content_hash_id, new_id
+from pipeui.backend.data.base.ids import content_hash_id as _content_hash_id, new_id
 
 _TABLE = "function_set"
 

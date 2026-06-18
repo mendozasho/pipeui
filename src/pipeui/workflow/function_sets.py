@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import duckdb
 
-from pipeui.ids import content_hash_id
-from pipeui.validation.fails import FailedRegistryEntry
+from pipeui.backend.data.base.ids import content_hash_id
+from pipeui.backend.data.base.fails import FailedRegistryEntry
 from pipeui.validation.function_set import FunctionSetEntry, FunctionSetUpdate
 
 _MAP_TABLE = "function_set_map"

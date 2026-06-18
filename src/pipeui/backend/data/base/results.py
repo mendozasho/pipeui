@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from pipeui.ids import content_hash_id
+from pipeui.backend.data.base.ids import content_hash_id
 
 # Table-namespace key for the RunResult identity (CLAUDE_REFERENCE §2 two-level uuid5).
 _RESULT_NAMESPACE = "run_result"

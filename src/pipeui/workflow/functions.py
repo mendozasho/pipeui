@@ -15,7 +15,7 @@ from typing import Any
 
 import duckdb
 
-from pipeui.ids import content_hash_id, new_id
+from pipeui.backend.data.base.ids import content_hash_id, new_id
 
 # ---------------------------------------------------------------------------
 # Classification helpers

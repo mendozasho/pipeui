@@ -29,8 +29,8 @@ from typing import Callable, Optional
 import duckdb
 import pandas as pd
 
-from pipeui.results import transformed_result_id
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.results import transformed_result_id
+from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.workflow.staging import latest_staging, staging_prefix
 from pipeui.workflow.step_loader import get_builtin_steps
 

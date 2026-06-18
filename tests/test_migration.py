@@ -9,8 +9,8 @@ import pytest
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
 from pipeui.workflow.migration import migrate_column, ALLOWED_COLUMN_TYPES
-from pipeui.sql_user_table import instance_table_name
-from pipeui.ids import content_hash_id
+from pipeui.backend.data.base.tables import instance_table_name
+from pipeui.backend.data.base.ids import content_hash_id
 from tests.conftest import make_registered_source, make_quirky_file
 
 

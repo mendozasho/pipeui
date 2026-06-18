@@ -5,7 +5,7 @@ import uuid
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from pipeui.ids import new_id, content_hash_id as _content_hash_id
+from pipeui.backend.data.base.ids import new_id, content_hash_id as _content_hash_id
 
 
 class SourceRegistryEntry(BaseModel):

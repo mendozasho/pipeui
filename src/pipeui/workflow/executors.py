@@ -27,7 +27,7 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 import duckdb
 import pandas as pd
 
-from pipeui.results import (
+from pipeui.backend.data.base.results import (
     BuiltinResultEntry,
     RunResult,
     StepResultEntry,
@@ -36,8 +36,8 @@ from pipeui.results import (
     ValidationRunResult,
     normalize_label,
 )
-from pipeui.sql_user_table import instance_table_name
-from pipeui.validation.fails import FailedFunctionEntry
+from pipeui.backend.data.base.tables import instance_table_name
+from pipeui.backend.data.base.fails import FailedFunctionEntry
 from pipeui.workflow.builtins import execute_builtin_step
 from pipeui.workflow.bundles import pair_bundles
 from pipeui.workflow.staging import write_staging_table

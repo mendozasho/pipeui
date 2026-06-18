@@ -25,9 +25,9 @@ import uuid
 import pandas as pd
 import pytest
 
-from pipeui.db import create_schema, get_connection
-from pipeui.ids import content_hash_id, new_id
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.db import create_schema, get_connection
+from pipeui.backend.data.base.ids import content_hash_id, new_id
+from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.workflow.attach import attach_function
 from pipeui.workflow.builtins import (
     attach_builtin,
@@ -383,7 +383,7 @@ def test_builtin_registry_seeded_with_three_rows(db):
 # ---------------------------------------------------------------------------
 
 def test_create_schema_idempotent_no_duplicates(db):
-    from pipeui.db import create_schema
+    from pipeui.backend.data.base.db import create_schema
     create_schema(db)
     create_schema(db)
     count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]

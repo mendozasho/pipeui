@@ -7,9 +7,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeui.config import DB_PATH
-from pipeui.db import create_schema, get_connection
+from pipeui.backend.data.base.db import create_schema, get_connection
 from pipeui.helpers import load_settings, save_settings
-from pipeui.validation.settings import AppSettings  # noqa: F401 – re-exported for import compat
+from pipeui.backend.data.base.settings import AppSettings  # noqa: F401 – re-exported for import compat
 from pipeui.workflow.functions import scan_functions
 
 router = APIRouter(prefix="/settings", tags=["settings"])

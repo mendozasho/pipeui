@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from pipeui.validation.settings import AppSettings, DEFAULTS
+from pipeui.backend.data.base.settings import AppSettings, DEFAULTS
 
 CONFIG_PATH = Path("pipeui.config.json")
 

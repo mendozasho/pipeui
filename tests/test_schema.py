@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from pipeui.db import create_schema
+from pipeui.backend.data.base.db import create_schema
 from tests.conftest import make_registered_source
 
 REGISTRY_TABLES = {"source_registry", "function_registry", "column_registry", "parameter"}
@@ -255,7 +255,7 @@ def test_run_migrations_adds_position_and_append_name_to_pre_feature_db():
     # #254: slices 2/4b added alias_map.position + source_function_map.append_name to
     # the DDL but never registered them in _REGISTRY_SCHEMA_MIGRATIONS, so a DB created
     # before this feature kept the old shape and get_pipeline 500'd on `ORDER BY am.position`.
-    from pipeui.db import _run_migrations
+    from pipeui.backend.data.base.db import _run_migrations
 
     conn = _old_schema_conn()
     # an existing alias_map row must backfill to position 0, not NULL
@@ -300,7 +300,7 @@ def test_parameter_table_has_default_columns(db):
 def test_run_migrations_adds_parameter_default_columns():
     # #258: pre-feature parameter tables must gain has_default + default_value on migration.
     import duckdb
-    from pipeui.db import _run_migrations
+    from pipeui.backend.data.base.db import _run_migrations
 
     conn = duckdb.connect()
     conn.execute(
@@ -319,7 +319,7 @@ def test_run_migrations_adds_parameter_default_columns():
 @pytest.mark.integration
 def test_run_migrations_is_idempotent_when_columns_already_present():
     # #254: running migrations twice (column already added) must not raise.
-    from pipeui.db import _run_migrations
+    from pipeui.backend.data.base.db import _run_migrations
 
     conn = _old_schema_conn()
     _run_migrations(conn)

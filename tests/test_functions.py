@@ -348,7 +348,7 @@ class TestScanFunctions:
         # Inject a failure during the parameter write (after the function_registry row
         # is inserted in the same transaction). param_id is derived via content_hash_id
         # with the "parameter" namespace, so raise there to exercise the rollback.
-        real_chid = __import__("pipeui.ids", fromlist=["content_hash_id"]).content_hash_id
+        real_chid = __import__("pipeui.backend.data.base.ids", fromlist=["content_hash_id"]).content_hash_id
 
         def failing_content_hash_id(table_name, *fields):
             if table_name == "parameter":
@@ -445,7 +445,7 @@ def fn_client(tmp_path, monkeypatch):
 
     import duckdb
     from fastapi import FastAPI
-    from pipeui.db import create_schema
+    from pipeui.backend.data.base.db import create_schema
     import pipeui.api.functions as fn_mod
     importlib.reload(fn_mod)
 
@@ -865,7 +865,7 @@ def _fn_data():
 @pytest.mark.integration
 def test_param_id_is_deterministic_from_function_id_and_name(db):
     """param_id is derived from (function_id, param_name), not random."""
-    from pipeui.ids import content_hash_id
+    from pipeui.backend.data.base.ids import content_hash_id
 
     register_function_entry(db, Path("/x/checks.py"), "is_valid", _fn_data())
     fn_id, param_id = db.execute(
