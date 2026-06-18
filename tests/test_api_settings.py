@@ -34,7 +34,7 @@ class TestGetSettings:
         assert config_path.exists(), "config file should be created on first GET"
 
         data = res.json()
-        assert data["db_path"] == "pipeui.backend.data.base.db"
+        assert data["db_path"] == "pipeui.db"
         assert data["accent"] == "#7c6cf5"
         assert data["density"] == "regular"
 
@@ -62,7 +62,7 @@ class TestPatchSettings:
         assert data["ok"] is True
         assert data["settings"]["accent"] == "#fb7185"
         # other fields untouched
-        assert data["settings"]["db_path"] == "pipeui.backend.data.base.db"
+        assert data["settings"]["db_path"] == "pipeui.db"
         assert data["settings"]["density"] == "regular"
 
     def test_db_path_change_returns_restart_required(self, settings_client):
@@ -155,7 +155,7 @@ class TestFunctionsPaths:
         # Guarantee: config files that predate functions_paths default to []
         client, mod = settings_client
         config_path = tmp_path / "pipeui.config.json"
-        config_path.write_text(json.dumps({"db_path": "pipeui.backend.data.base.db", "accent": "#7c6cf5", "density": "regular"}))
+        config_path.write_text(json.dumps({"db_path": "pipeui.db", "accent": "#7c6cf5", "density": "regular"}))
 
         res = client.get("/settings")
         assert res.json()["functions_paths"] == []

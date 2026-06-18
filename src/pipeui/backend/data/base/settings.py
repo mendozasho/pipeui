@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 DEFAULTS: dict = {
-    "db_path": "pipeui.backend.data.base.db",
+    "db_path": "pipeui.db",
     "accent": "#7c6cf5",
     "density": "regular",
     "functions_paths": [],

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 CONFIG_PATH = Path("pipeui.config.json")
-DEFAULT_DB = Path("pipeui.backend.data.base.db")
+DEFAULT_DB = Path("pipeui.db")
 
 
 def cmd_init():
