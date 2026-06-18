@@ -41,15 +41,15 @@ frontend together so the app is runnable after every phase.
 These reshape the existing backend without adding features; they are tracked as GitHub
 epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration detail.
 
-- **§4 layer migration — epic #55** *(in progress).* Re-home the backend onto
-  `middleware/` + `backend/{data,domain}/`. **Done:** slices 1–3 (data + domain layers;
-  `validation/` and `workflow/` dissolved) + the `builtins → functions/` relocation.
-  **Next:** slice 4 (`api → middleware`), slice 5 (`app/`).
-- **SRP decomposition — epic #43** *(queued, starts after the migration).* The per-module
-  splits deferred during the migration, done **inside** the re-homed tree:
-  **#45** split `executors.py` → **#46** `attach.py` → **#47** `registration.py` →
-  **#48** api-DIP cleanup → **#49** `db.py`/`helpers.py`. Wave 1 (#44, typed result carriers)
-  already landed.
+- **§4 layer migration — epic #55** *(✅ complete).* Backend re-homed onto `middleware/` +
+  `backend/{data,domain}/` + `app/`. All 5 slices + the `builtins → functions/` relocation
+  landed, each behavior-preserving + hostile-audited; `validation/`, `workflow/`,
+  `sql_user_table/`, top-level `schema/`, and `api/` dissolved.
+- **SRP decomposition — epic #43** *(← active front).* The per-module splits deferred during
+  the migration, done **inside** the re-homed tree: **#45** split `executors.py` → **#46**
+  `attach.py` → **#47** `registration.py` → **#48** api-DIP cleanup → **#49** `db.py`/`helpers.py`
+  (also resolves the `backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). Wave 1
+  (#44, typed result carriers) already landed; **#45 is next.**
 
 ---
 

@@ -1,11 +1,11 @@
 # Architecture — project layer map
 
-> **Status: MIGRATING (epic #55).** The **`backend/{data,domain}` layers have landed** — the
-> data and domain rows in §4's map are now the real on-disk shape (`validation/`, `workflow/`,
-> `sql_user_table/`, `schema/` dissolved into `backend/`). **Still pending:** `api/` → `middleware/`
-> (slice 4) and the composition root → `app/` (slice 5). One deliberate deviation from §4:
-> `builtins.py` landed in `backend/domain/functions/` (not `runner/`) — a built-in is a complex
-> function (#41). See §7 for the per-slice status and what comes next.
+> **Status: current (epic #55 complete).** This layer model is now the on-disk shape:
+> `middleware/` + `backend/{data,domain}/{base,sources,functions,runner}/` + `app/`.
+> `api/`, `workflow/`, `validation/`, `sql_user_table/`, and top-level `schema/` are all
+> dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
+> `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
+> **Next** (the migration was the precondition): the SRP-decomposition epic #43 (#45+) — see §7.
 
 The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
 carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
@@ -18,8 +18,8 @@ carved up the runner cleanly but only the runner. This doc lifts that same disci
 | Layer | Single responsibility | Current modules |
 | --- | --- | --- |
 | **`frontend/`** | What the user sees — UI, design, view state. Imports no backend code; talks to `middleware` only over HTTP. | the React app (untouched this pass) |
-| **`middleware/`** | The API seam — HTTP routes, request/response shaping, CRUD endpoints, the data↔frontend contracts. Calls `backend` only. | `api/*` |
-| **`backend/`** | Everything server-side. Decomposed **per feature** over two sub-layers, `data` (foundation) and `domain` (logic above it). Its size is irrelevant — depth is expressed as nesting. | `workflow/`, `schema/`, `validation/`, `sql_user_table/`, `db`, `results`, `ids` |
+| **`middleware/`** | The API seam — HTTP routes, request/response shaping, CRUD endpoints, the data↔frontend contracts. Calls `backend` only. | `middleware/*` |
+| **`backend/`** | Everything server-side. Decomposed **per feature** over two sub-layers, `data` (foundation) and `domain` (logic above it). Its size is irrelevant — depth is expressed as nesting. | `backend/data/{base,sources,functions,runner}/`, `backend/domain/{sources,functions,runner}/` |
 
 ---
 
@@ -61,9 +61,11 @@ backend/
 
 ---
 
-## 4. Current → target module map
+## 4. Module map (realized)
 
-Re-homing only (no file merges/splits implied here — those are later, per-feature decisions).
+The re-homing below is **done** — every "Target" is now the on-disk path (one deviation:
+`workflow/builtins.py` landed in `backend/domain/functions/builtins.py`, not `runner/`, per #41).
+The per-feature *splits* the migration deferred are tracked separately as epic #43 (#45+).
 
 ### middleware/
 | Current | Target |
@@ -146,10 +148,10 @@ data only; instance table ≠ registry) and the cross-module-private-reach-in ru
 
 ---
 
-## 7. Migration status (epic #55)
+## 7. Migration status (epic #55 — complete)
 
-Incremental, behavior-preserving, one PR per slice (`git mv` + import rewrites + green suite +
-hostile-audit). Status:
+Done incrementally, behavior-preserving, one hostile-audited PR per slice (`git mv` + import
+rewrites + green suite). All slices landed:
 
 - [x] **Slice 1** — `backend/data/base/` (ids, db, results, schema, tables, settings, fails).
 - [x] **Slice 2** — `backend/data/{sources,functions,runner}/`; `validation/` dissolved.
@@ -157,11 +159,11 @@ hostile-audit). Status:
 - [x] **builtins relocation** — `runner/builtins` → `backend/domain/functions/builtins` (deviation
   from §4; a built-in is a complex function — #41). Carries a contract-mediated `functions⇄runner`
   coupling whose resolution is the execution-model convergence (#41).
-- [ ] **Slice 4** — `api/` → `middleware/`.
-- [ ] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`. On landing,
-  flip the Status banner to "current" and finish updating §4's map.
+- [x] **Slice 4** — `api/` → `middleware/`; `api/` dissolved.
+- [x] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`.
 
-**What comes next, after the migration lands:** the **SRP-decomposition epic #43** — the per-module
-splits the migration deliberately deferred: `executors.py` (#45), `attach.py` (#46),
-`functions/registration.py` (#47), the api-DIP cleanup (#48), and `db.py`/`helpers.py` (#49). The
+**What comes next, now that the tree is re-homed:** the **SRP-decomposition epic #43** — the
+per-module splits the migration deliberately deferred: `executors.py` (#45), `attach.py` (#46),
+`functions/registration.py` (#47), the api-DIP cleanup (#48), and `db.py`/`helpers.py` (#49, which
+also resolves the pre-existing `backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). The
 re-homed tree is the precondition; those splits happen **inside it**.
