@@ -49,7 +49,10 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   the migration, done **inside** the re-homed tree: **#45** split `executors.py` → **#46**
   `attach.py` → **#47** `registration.py` → **#48** api-DIP cleanup → **#49** `db.py`/`helpers.py`
   (also resolves the `backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). Wave 1
-  (#44, typed result carriers) already landed; **#45 is next.**
+  (#44, typed result carriers) already landed; **#46 done** — `attach.py` split into `attach.py`
+  (attach/detach writes + single-owner auto-set rule), `pipeline_read.py` (`get_pipeline`),
+  `suggest.py` (`suggest_bindings`), `step_edit.py` (`patch_pipeline_step`). **#47 (`registration.py`)
+  is next.**
 
 ---
 
