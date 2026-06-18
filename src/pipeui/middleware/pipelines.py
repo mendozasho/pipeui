@@ -23,6 +23,7 @@ from pipeui.backend.domain.functions.attach import AttachBinding, attach_functio
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.functions.suggest import suggest_bindings
 from pipeui.backend.domain.functions.step_edit import patch_pipeline_step
+from pipeui.backend.domain.sources.read import source_exists
 from pipeui.backend.domain.runner.export import build_results_report, build_transformed_report
 from pipeui.backend.domain.runner.run import get_staging_rows, run_pipeline, run_set_across_sources
 
@@ -319,10 +320,7 @@ def get_staging_rows_route(
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
     # Check source exists
-    row = conn.execute(
-        "SELECT source_id FROM source_registry WHERE source_id = ?", [sid]
-    ).fetchone()
-    if row is None:
+    if not source_exists(conn, sid):
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     return get_staging_rows(conn, sid)
@@ -373,10 +371,7 @@ def export_transformed_report(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
-    row = conn.execute(
-        "SELECT source_id FROM source_registry WHERE source_id = ?", [sid]
-    ).fetchone()
-    if row is None:
+    if not source_exists(conn, sid):
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     return build_transformed_report(conn, sid)

@@ -49,10 +49,13 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   the migration, done **inside** the re-homed tree: **#45** split `executors.py` *(✅ done)* →
   **#46** `attach.py` *(✅ done)* → **#47** `registration.py` *(✅ done — split into
   `classification.py` (DB-free leaf) + `discovery.py` + `registration.py` (transaction owner) +
-  `function_read.py`)* → **#48**
-  api-DIP cleanup → **#49** `db.py`/`helpers.py` (also resolves the `backend/data/base/db.py` →
+  `function_read.py`)* → **#48** api-DIP cleanup *(✅ done — the middleware seam ran raw SQL, a
+  DIP/layer-boundary leak; reads/guards pushed down into `backend`, the source read-path
+  extracted from `ingestion.py` into `backend/domain/sources/read.py`, and
+  `test_source_read.py::test_middleware_seam_has_no_raw_sql` locks the seam SQL-free)* →
+  **#49** `db.py`/`helpers.py` (also resolves the `backend/data/base/db.py` →
   `app/config.py` `DB_PATH` up-import). Wave 1 (#44, typed result carriers) already landed;
-  **#48 is next.**
+  **#49 is next.**
 
 ---
 

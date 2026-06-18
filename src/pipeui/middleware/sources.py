@@ -13,7 +13,16 @@ from pydantic import BaseModel
 
 from pipeui.backend.data.base.db import get_conn
 from pipeui.backend.domain.sources.create import create_source, find_source_by_pattern, peek_header_columns
-from pipeui.backend.domain.sources.ingestion import get_source_detail, get_source_rows, ingest_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
+from pipeui.backend.domain.sources.read import (
+    check_column_ownership,
+    get_source_columns,
+    get_source_detail,
+    get_source_rows,
+    get_source_summary,
+    list_source_summaries,
+    source_exists,
+)
 from pipeui.backend.domain.sources.migration import migrate_column
 from pipeui.backend.domain.runner.resolve import TRANSFORMED, resolve_frame
 
@@ -22,64 +31,9 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 
 
-def _source_rows(conn: duckdb.DuckDBPyConnection) -> list[dict]:
-    rows = conn.execute(
-        """
-        SELECT
-            sr.source_id,
-            sr.source_name,
-            sr.date_ingested,
-            sr.date_registered,
-            sr.ingestion_method,
-            sr.pattern,
-            sr.primary_key,
-            sr.table_url,
-            sr.content_hash_id
-        FROM source_registry sr
-        ORDER BY sr.date_registered DESC, sr.source_name
-        """
-    ).fetchall()
-
-    col_names = [
-        "source_id", "source_name", "date_ingested", "date_registered",
-        "ingestion_method", "pattern", "primary_key", "table_url", "content_hash_id",
-    ]
-
-    results = []
-    for row in rows:
-        record = dict(zip(col_names, row))
-        record["source_id"] = str(record["source_id"])
-        record["content_hash_id"] = str(record["content_hash_id"])
-        record["date_ingested"] = record["date_ingested"].isoformat() if record["date_ingested"] else None
-        record["date_registered"] = record["date_registered"].isoformat() if record["date_registered"] else None
-
-        cols = conn.execute(
-            """
-            SELECT cr.column_id, cr.column_name, cr.column_type
-            FROM column_registry cr
-            JOIN source_column_map scm ON scm.column_id = cr.column_id
-            WHERE scm.source_id = ?
-            ORDER BY cr.column_name
-            """,
-            [record["source_id"]],
-        ).fetchall()
-
-        record["columns"] = [
-            {"column_id": str(c[0]), "column_name": c[1], "column_type": c[2]}
-            for c in cols
-        ]
-        results.append(record)
-
-    return results
-
-
 @router.get("")
 def list_sources(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
-    rows = _source_rows(conn)
-    for row in rows:
-        detail = get_source_detail(conn, uuid.UUID(row["source_id"]), include_functions=False)
-        row["row_count"] = detail["row_count"] if detail else 0
-    return rows
+    return list_source_summaries(conn)
 
 
 @router.post("")
@@ -105,8 +59,7 @@ async def register_source(
         # Check if an existing source's pattern matches this filename before creating
         matched_id = find_source_by_pattern(conn, file.filename or "")
         if matched_id is not None:
-            rows = _source_rows(conn)
-            record = next((r for r in rows if r["source_id"] == str(matched_id)), None)
+            record = get_source_summary(conn, matched_id)
             return {"ok": True, "matched_existing": True, "source": record}
 
         source_id, failed = create_source(
@@ -124,8 +77,7 @@ async def register_source(
                 content={"ok": False, "errors": reasons},
             )
 
-        rows = _source_rows(conn)
-        record = next((r for r in rows if r["source_id"] == str(source_id)), None)
+        record = get_source_summary(conn, source_id)
         return {"ok": True, "matched_existing": False, "source": record}
 
     finally:
@@ -198,24 +150,11 @@ def get_join_columns(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
-    exists = conn.execute(
-        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
-    ).fetchone()
-    if exists is None:
+    if not source_exists(conn, sid):
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     if not transformed:
-        cols = conn.execute(
-            """
-            SELECT cr.column_name, cr.column_type
-            FROM column_registry cr
-            JOIN source_column_map scm ON scm.column_id = cr.column_id
-            WHERE scm.source_id = ?
-            ORDER BY cr.column_name
-            """,
-            [sid],
-        ).fetchall()
-        return {"columns": [{"column_name": c[0], "column_type": c[1]} for c in cols]}
+        return {"columns": get_source_columns(conn, sid)}
 
     # Transformed: resolve the transformed frame and report its columns. The dtype is
     # best-effort from the resolved frame (the registry has no row for derived columns).
@@ -246,10 +185,7 @@ def get_rows(
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
     # 404 when source is not in source_registry at all
-    exists = conn.execute(
-        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
-    ).fetchone()
-    if exists is None:
+    if not source_exists(conn, sid):
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     rows = get_source_rows(conn, sid, limit=limit)
@@ -290,26 +226,14 @@ def migrate_column_route(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid col_id: {col_id!r}")
 
-    # 404 if source not found
-    source_exists = conn.execute(
-        "SELECT 1 FROM source_registry WHERE source_id = ?", [sid]
-    ).fetchone()
-    if source_exists is None:
+    # Existence/ownership guard — workflow returns a structured status the route maps
+    # to the same three 404s it used to raise inline (source → column → membership).
+    ownership = check_column_ownership(conn, sid, cid)
+    if ownership == "source_missing":
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
-
-    # 404 if column not found in column_registry at all
-    col_exists = conn.execute(
-        "SELECT 1 FROM column_registry WHERE column_id = ?", [cid]
-    ).fetchone()
-    if col_exists is None:
+    if ownership == "column_missing":
         raise HTTPException(status_code=404, detail=f"Column {col_id!r} not found")
-
-    # 404 if column does not belong to this source
-    mapping_exists = conn.execute(
-        "SELECT 1 FROM source_column_map WHERE source_id = ? AND column_id = ?",
-        [sid, cid],
-    ).fetchone()
-    if mapping_exists is None:
+    if ownership == "not_owned":
         raise HTTPException(
             status_code=404,
             detail=f"Column {col_id!r} does not belong to source {source_id!r}",
