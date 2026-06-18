@@ -194,7 +194,10 @@ or inject it). This table is the canonical "where does new code go" map.
 | `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter. Lives here because a built-in is a *complex function* (a step backing, peer to a function set). | a new built-in type (e.g. rename) — its validator + `_execute_*`. ⚠ *contract-mediated `functions⇄runner` coupling: imports `runner.resolve` (`resolve_frame`); `runner.executors` imports it (`execute_builtin_step`). Resolution = the execution-model convergence (#41).* |
 | **`backend/domain/runner/`** — run orchestration + execution | | |
 | `resolve.py` *(L2)* | **Input resolution** — where a step reads its input: raw instance table vs transformed output, materialize-if-absent, cycle guard (`resolve_frame`, `FrameRef`). Runner **injected** (no orchestrator import). | a new input mode, materialize/cycle rule, or provenance field. |
-| `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into results. | a new **step type** (a new `StepExecutor` in `STEP_EXECUTORS`), or new per-function execution mechanics. *(SRP split slated — #45.)* |
+| `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into results (the transform/validation dispatchers + per-function-class arms). Depends **down** on `param_resolve`/`sql_exec`/`interpret`. | a new **step type** (a new `StepExecutor` in `STEP_EXECUTORS`), or new per-function execution mechanics. |
+| `param_resolve.py` *(L3)* | **Scalar-param resolution** — resolve a function's non-column scalar params to broadcast kwargs (`resolve_scalar_kwargs`, `RequiredParamError`). Pure value coercion; no DB/worker/step types. | a scalar-resolution or coercion rule. |
+| `sql_exec.py` *(L3)* | **SQL-function execution** — run a `.sql` function against the instance table (`{source_table}` substitution); returns a DataFrame or `FailedFunctionEntry`. Not process-isolated (the backend's own query). | a SQL-function execution concern. |
+| `interpret.py` *(L3)* | **Validation-result interpretation** — normalize a worker's boolean output (Series/DataFrame/bool/`FailedFunctionEntry`) to pass/fail counts + failing rows, then `emit`. | how a validation result's shape maps to counts/rows. |
 | `worker.py` | **Process-isolated execution** — run a user function in a subprocess (`setrlimit`, Arrow IPC), strict data-in/data-out (never receives the connection). | the worker/sandbox mechanics or its IPC contract. |
 | `run.py` *(L4)* | **Run orchestration** — drive a source's whole run end-to-end (load → resolve → execute via the registry → stage → collect); cross-source runners. Injects `run_pipeline` into `resolve`. | a new run phase, run-type, or cross-source entry point. |
 | `export.py` | **Run export** — produce the exportable `results report` / `transformed report` from a run's output. | a new export format or report shape. |
@@ -208,7 +211,8 @@ or inject it). This table is the canonical "where does new code go" map.
 
 Dependency direction: `base/*` (ids, schema, tables, settings, fails, results) underlies everything;
 within the runner, `steps` → `staging`/`step_loader`/`bundles` → `resolve` → `executors` → `run`,
-with `functions.builtins` consumed by `executors` (and itself consuming `resolve` — the #41 coupling).
+with `executors` depending down on `param_resolve`/`sql_exec`/`interpret`, and
+`functions.builtins` consumed by `executors` (and itself consuming `resolve` — the #41 coupling).
 The `registry`/`columns`/`sets` write-contracts feed the source/function **domain** modules (create,
 attach, …), not the runner chain.
 
