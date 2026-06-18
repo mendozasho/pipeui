@@ -53,7 +53,7 @@ backend/
   domain/                   # orchestration; owns transactions; called by middleware
     base/                   # shared domain helpers (as they emerge)
     sources/                # create, ingestion, migration
-    functions/              # discovery/registration, sets, attach
+    functions/              # classification, discovery, registration, function_read, sets, attach
     runner/                 # run orchestration, executors, resolve, builtins, worker, export
 ```
 
@@ -163,9 +163,10 @@ rewrites + green suite). All slices landed:
 - [x] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`.
 
 **What comes next, now that the tree is re-homed:** the **SRP-decomposition epic #43** — the
-per-module splits the migration deliberately deferred: `executors.py` (#45), `attach.py` (#46 —
-done; split into `attach.py` + `pipeline_read.py` + `suggest.py` + `step_edit.py` under
-`backend/domain/functions/`), `functions/registration.py` (#47 — active front), the api-DIP cleanup
-(#48), and `db.py`/`helpers.py` (#49, which also resolves the pre-existing
-`backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). The re-homed tree is the
-precondition; those splits happen **inside it**.
+per-module splits the migration deliberately deferred: `executors.py` (#45, ✅ done), `attach.py`
+(#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into `classification` (DB-free
+leaf), `discovery`, `registration` (transaction owner), and `function_read`), the api-DIP cleanup
+(#48, ← active front),
+and `db.py`/`helpers.py` (#49, which also resolves the pre-existing `backend/data/base/db.py` →
+`app/config.py` `DB_PATH` up-import). The re-homed tree is the precondition; those splits happen
+**inside it**.

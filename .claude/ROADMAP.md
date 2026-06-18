@@ -46,13 +46,13 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   landed, each behavior-preserving + hostile-audited; `validation/`, `workflow/`,
   `sql_user_table/`, top-level `schema/`, and `api/` dissolved.
 - **SRP decomposition — epic #43** *(← active front).* The per-module splits deferred during
-  the migration, done **inside** the re-homed tree: **#45** split `executors.py` → **#46**
-  `attach.py` → **#47** `registration.py` → **#48** api-DIP cleanup → **#49** `db.py`/`helpers.py`
-  (also resolves the `backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). Wave 1
-  (#44, typed result carriers) already landed; **#46 done** — `attach.py` split into `attach.py`
-  (attach/detach writes + single-owner auto-set rule), `pipeline_read.py` (`get_pipeline`),
-  `suggest.py` (`suggest_bindings`), `step_edit.py` (`patch_pipeline_step`). **#47 (`registration.py`)
-  is next.**
+  the migration, done **inside** the re-homed tree: **#45** split `executors.py` *(✅ done)* →
+  **#46** `attach.py` *(✅ done)* → **#47** `registration.py` *(✅ done — split into
+  `classification.py` (DB-free leaf) + `discovery.py` + `registration.py` (transaction owner) +
+  `function_read.py`)* → **#48**
+  api-DIP cleanup → **#49** `db.py`/`helpers.py` (also resolves the `backend/data/base/db.py` →
+  `app/config.py` `DB_PATH` up-import). Wave 1 (#44, typed result carriers) already landed;
+  **#48 is next.**
 
 ---
 
