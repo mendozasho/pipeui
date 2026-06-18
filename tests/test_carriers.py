@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 from dataclasses import FrozenInstanceError
 
-from pipeui.results import RunResult
+from pipeui.results import RunResult, StepResultEntry, ValidationRunResult
 from pipeui.workflow.executors import StepExecResult, StepRunEnv
 from pipeui.workflow.resolve import RAW, TRANSFORMED, FrameRef
 from pipeui.workflow.step import (
@@ -167,6 +167,44 @@ def test_step_exec_result_is_frozen():
     res = StepExecResult(working=pd.DataFrame({"a": [1]}), entries=[], wrote_staging=False)
     with pytest.raises(FrozenInstanceError):
         res.wrote_staging = True
+
+
+# ---------------------------------------------------------------------------
+# (e) StepResultEntry — frozen carrier; to_dict reproduces the legacy entry shape
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_step_result_entry_is_frozen():
+    rr = RunResult(
+        function_name="f", function_type="transform", source_id=uuid.UUID(int=0),
+        bundle_key="", label="f", status="ok", error=None,
+    )
+    entry = StepResultEntry(run_result=rr, routing={"set_name": "s"})
+    with pytest.raises(FrozenInstanceError):
+        entry.run_result = rr
+
+
+@pytest.mark.unit
+def test_step_result_entry_to_dict_lays_routing_then_runresult():
+    """to_dict() == {**routing, **run_result.to_dict()} — routing first, RunResult
+    fields overlay (the exact legacy ``entry.update(rr.to_dict())`` shape), so the
+    external {"steps": [...]} wire contract is unchanged."""
+    rr = ValidationRunResult(
+        function_name="check_x", function_type="validation", source_id=uuid.UUID(int=0),
+        bundle_key="amount", label="amount", status="ok", error=None,
+        rows_passed=3, rows_failed=1, failing_rows=[{"amount": -1}],
+    )
+    routing = {"function_id": "fid", "function_name": "STALE", "set_name": "s", "set_id": "sid"}
+    entry = StepResultEntry(run_result=rr, routing=routing)
+    d = entry.to_dict()
+    # routing keys present...
+    assert d["function_id"] == "fid"
+    assert d["set_id"] == "sid"
+    # ...but RunResult's value wins on overlap (function_name), and identity/counts come from rr
+    assert d["function_name"] == "check_x"
+    assert d["result_id"] == rr.result_id
+    assert d["rows_passed"] == 3 and d["rows_failed"] == 1
+    assert d == {**routing, **rr.to_dict()}
 
 
 # ---------------------------------------------------------------------------

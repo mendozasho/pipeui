@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from pipeui.ids import content_hash_id
 
@@ -130,3 +130,27 @@ class ValidationRunResult(RunResult):
             }
         )
         return d
+
+
+@dataclass(frozen=True)
+class StepResultEntry:
+    """One step-result row an executor produces: a ``RunResult`` plus the step
+    routing/wire metadata that ``RunResult`` deliberately does not hold — ids
+    (``source_function_map_id``, ``function_id``, ``set_id``, ``step_id``), names
+    (``set_name``), and the built-in/transform extras (``step_type``,
+    ``builtin_type``, ``rows_affected``, ``consumed_result_id``).
+
+    This is the frozen carrier that replaces the raw result dicts executors used to
+    append to ``StepExecResult.entries`` — keeping the executor→runner boundary typed
+    rather than dict-by-string-key (ARCHITECTURE §2/§5). It is serialized to the wire
+    dict only at ``run_pipeline``'s published return (the api/export seam):
+    ``to_dict`` lays ``routing`` down first and overlays the ``RunResult`` fields,
+    reproducing the exact legacy ``entry.update(rr.to_dict())`` shape so the external
+    ``{"steps": [...]}` contract is unchanged.
+    """
+
+    run_result: RunResult
+    routing: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**self.routing, **self.run_result.to_dict()}
