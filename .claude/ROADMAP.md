@@ -36,6 +36,23 @@ frontend together so the app is runnable after every phase.
 
 ---
 
+## Active refactor tracks (architecture, parallel to the feature phases)
+
+These reshape the existing backend without adding features; they are tracked as GitHub
+epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration detail.
+
+- **§4 layer migration — epic #55** *(in progress).* Re-home the backend onto
+  `middleware/` + `backend/{data,domain}/`. **Done:** slices 1–3 (data + domain layers;
+  `validation/` and `workflow/` dissolved) + the `builtins → functions/` relocation.
+  **Next:** slice 4 (`api → middleware`), slice 5 (`app/`).
+- **SRP decomposition — epic #43** *(queued, starts after the migration).* The per-module
+  splits deferred during the migration, done **inside** the re-homed tree:
+  **#45** split `executors.py` → **#46** `attach.py` → **#47** `registration.py` →
+  **#48** api-DIP cleanup → **#49** `db.py`/`helpers.py`. Wave 1 (#44, typed result carriers)
+  already landed.
+
+---
+
 ## Decisions to resolve first (gating)
 
 These are CLAUDE.md → Active Deferred Work items. Each one blocks clean
