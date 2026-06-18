@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipeui.helpers import load_settings
+from pipeui.app.helpers import load_settings
 
 # Startup-frozen DB path. Evaluated ONCE at import time from the settings file
 # (load_settings eagerly creates the file if absent). It is a module-level

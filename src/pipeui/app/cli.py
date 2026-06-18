@@ -31,7 +31,7 @@ def cmd_start():
         config = json.loads(CONFIG_PATH.read_text())
     host = config.get("host", "127.0.0.1")
     port = config.get("port", 8000)
-    uvicorn.run("pipeui.main:app", host=host, port=port, reload=True)
+    uvicorn.run("pipeui.app.main:app", host=host, port=port, reload=True)
 
 
 def main():

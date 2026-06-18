@@ -6,9 +6,9 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from pipeui.config import DB_PATH
+from pipeui.app.config import DB_PATH
 from pipeui.backend.data.base.db import create_schema, get_connection
-from pipeui.helpers import load_settings, save_settings
+from pipeui.app.helpers import load_settings, save_settings
 from pipeui.backend.data.base.settings import AppSettings  # noqa: F401 – re-exported for import compat
 from pipeui.backend.domain.functions.registration import scan_functions
 

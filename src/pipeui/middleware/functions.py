@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from pipeui.backend.data.base.db import get_conn
-from pipeui.helpers import load_settings
+from pipeui.app.helpers import load_settings
 from pipeui.backend.domain.functions.registration import get_function, list_functions, scan_functions
 
 router = APIRouter(prefix="/functions", tags=["functions"])
