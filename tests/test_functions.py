@@ -7,16 +7,22 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.backend.domain.functions.registration import (
+from pipeui.backend.domain.functions.classification import (
     derive_function_class,
     derive_function_return_type,
     derive_function_type,
+)
+from pipeui.backend.domain.functions.discovery import (
     discover_functions_in_file,
-    get_function,
-    list_functions,
+    _inspect_function,
+)
+from pipeui.backend.domain.functions.registration import (
     register_function_entry,
     scan_functions,
-    _inspect_function,
+)
+from pipeui.backend.domain.functions.function_read import (
+    get_function,
+    list_functions,
 )
 from tests.conftest import make_registered_source
 
@@ -910,3 +916,22 @@ def test_param_id_survives_rescan_and_keeps_alias_map_binding(db):
         [am_id],
     ).fetchone()
     assert bound is not None and bound[0] == "col"
+
+
+def test_classification_module_has_no_db_dependency():
+    """#47 acceptance: the classification module is pure derivation (Principle 4,
+    derived-not-stored) — it must import neither duckdb nor any data-layer DB module,
+    so the derive_* helpers stay callable with no connection."""
+    import ast
+    import pipeui.backend.domain.functions.classification as classification
+
+    tree = ast.parse(Path(classification.__file__).read_text(encoding="utf-8"))
+    imported_modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported_modules.append(node.module or "")
+
+    offenders = [m for m in imported_modules if "duckdb" in m or m.endswith(".data.base.db")]
+    assert not offenders, f"classification must stay DB-free, found: {offenders}"

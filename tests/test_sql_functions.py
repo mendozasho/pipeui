@@ -7,11 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.backend.domain.functions.registration import (
-    discover_sql_functions_in_file,
-    scan_functions,
-    list_functions,
-)
+from pipeui.backend.domain.functions.discovery import discover_sql_functions_in_file
+from pipeui.backend.domain.functions.registration import scan_functions
+from pipeui.backend.domain.functions.function_read import list_functions
 from pipeui.backend.domain.runner.executors import _execute_sql_function
 from pipeui.backend.data.base.tables import instance_table_name
 from tests.conftest import make_registered_source

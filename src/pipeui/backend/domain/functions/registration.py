@@ -1,308 +1,34 @@
-"""Function discovery, classification, and registration workflow.
+"""Function registration (functions domain) — the DB transaction + scan entry point.
+
+register_function_entry(conn, file_path, fn_name, data)
+    Write one function_registry row + all its parameter rows in a single
+    transaction (§10), collapsing on content_hash_id (Principle 2).
+
+scan_functions(conn, functions_paths)
+    Discover (.py/.sql) every function under the given dirs, register each, and
+    deactivate registry rows whose source file vanished. Returns a scan log.
+
+Split out of the monolithic discovery+classification+registration module (#47):
+this is the transaction owner — it holds the DuckDB connection. Classification
+(``classification``) and discovery/parsing (``discovery``) are DB-free modules it
+sits above; the function read-API lives in ``function_read``.
 
 §10: function_registry row + all parameter rows = one transaction per function.
-§11: function_class / function_type / function_return_type derivation.
 §2:  content_hash_id = uuid5(table_namespace, function_name|function_class|function_return_type)
 Principle 2: collapse on content_hash_id — preserve surrogate function_id, overwrite mutables.
 """
 from __future__ import annotations
 
-import inspect
-import re
-import types
 from pathlib import Path
-from typing import Any
 
 import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id, new_id
+from pipeui.backend.domain.functions.discovery import (
+    discover_functions_in_file,
+    discover_sql_functions_in_file,
+)
 
-# ---------------------------------------------------------------------------
-# Classification helpers
-# ---------------------------------------------------------------------------
-
-# Param-type granularity ordering (lower index = more granular / higher
-# granularity = more scalar-like).  §11: function_class is the *least*
-# granular (highest index) parameter type.
-_PARAM_GRANULARITY: dict[str, int] = {
-    "int": 0,
-    "float": 0,
-    "bool": 0,
-    "str": 1,          # may be column_backed — resolved at attach time
-    "pd.Series[bool]": 2,
-    "pd.Series": 2,
-    "pd.DataFrame": 3,
-}
-
-# function_class derived from the least-granular (highest index) param_type
-_GRANULARITY_TO_CLASS: dict[int, str] = {
-    0: "scalar",
-    1: "scalar",        # unaliased str → scalar at scan time (column_backed resolved at attach)
-    2: "pd.Series",
-    3: "pd.dataframe",
-}
-
-# function_return_type vocabulary (CONTEXT.md)
-_RETURN_TYPE_MAP: dict[str, str] = {
-    "int": "scalar",
-    "float": "scalar",
-    "str": "scalar",
-    "bool": "boolean",
-    "pd.Series": "pd.Series",
-    "pd.Series[bool]": "pd.Series[bool]",
-    "pd.DataFrame": "pd.DataFrame",
-}
-
-# function_type: validation iff return is boolean or pd.Series[bool]
-_VALIDATION_RETURNS = {"boolean", "pd.Series[bool]"}
-
-
-def _annotation_to_str(annotation: Any) -> str | None:
-    """Convert a parameter/return annotation to its canonical param_type string.
-
-    Returns None when the annotation is inspect.Parameter.empty / inspect.Signature.empty.
-    """
-    if annotation is inspect.Parameter.empty or annotation is inspect.Signature.empty:
-        return None
-    # Use the string representation; handle common subscripted generics
-    ann_str = str(annotation)
-    # typing representations → canonical form
-    replacements = {
-        "pandas.core.series.Series": "pd.Series",
-        "pandas.core.frame.DataFrame": "pd.DataFrame",
-        "<class 'int'>": "int",
-        "<class 'float'>": "float",
-        "<class 'bool'>": "bool",
-        "<class 'str'>": "str",
-    }
-    for old, new in replacements.items():
-        ann_str = ann_str.replace(old, new)
-    # Handle typing.Optional, etc. — not in scope for v1; unsupported types will
-    # fail the "not in known set" check in the caller.
-    return ann_str
-
-
-def _is_known_param_type(type_str: str) -> bool:
-    return type_str in _PARAM_GRANULARITY
-
-
-def _is_known_return_type(type_str: str) -> bool:
-    return type_str in _RETURN_TYPE_MAP
-
-
-def derive_function_class(param_types: list[str]) -> str:
-    """Derive function_class from the list of param_type strings (§11).
-
-    The least-granular (highest granularity-index) param drives the class.
-    """
-    max_granularity = max(_PARAM_GRANULARITY[pt] for pt in param_types)
-    return _GRANULARITY_TO_CLASS[max_granularity]
-
-
-def derive_function_return_type(return_annotation_str: str) -> str | None:
-    """Map a return annotation string to function_return_type vocabulary (CONTEXT.md)."""
-    return _RETURN_TYPE_MAP.get(return_annotation_str)
-
-
-def derive_function_type(function_return_type: str) -> str:
-    """Derive function_type from function_return_type (§11 / CONTEXT.md)."""
-    return "validation" if function_return_type in _VALIDATION_RETURNS else "transform"
-
-
-# ---------------------------------------------------------------------------
-# Per-file function discovery (.py)
-# ---------------------------------------------------------------------------
-
-def _load_module(file_path: Path):
-    """Import a .py file as a module without adding it to sys.modules permanently.
-
-    Compiles from source directly so stale .pyc bytecode cannot shadow a file
-    that was modified within the same process (e.g. during tests or after a
-    user edits the file before re-scanning).
-    """
-    source = file_path.read_text(encoding="utf-8")
-    code = compile(source, str(file_path), "exec")
-    mod = types.ModuleType(f"_pipeui_scan_{file_path.stem}")
-    mod.__file__ = str(file_path)
-    # __name__ is used in discover_functions_in_file to filter imported symbols
-    exec(code, mod.__dict__)
-    return mod
-
-
-def _inspect_function(fn_name: str, fn_obj) -> dict | str:
-    """Inspect one function and return its classification data or a skip reason string.
-
-    Returns a dict with keys:
-        param_types, param_names, function_class, function_return_type,
-        function_type, function_signature, function_doc
-    Or a str describing why the function was skipped.
-    """
-    sig = inspect.signature(fn_obj)
-    params = list(sig.parameters.values())
-
-    # --- eligibility checks ---
-    if not params:
-        return "function must have at least one parameter"
-
-    for p in params:
-        if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            return "variadic parameters not supported"
-
-    for p in params:
-        ann = _annotation_to_str(p.annotation)
-        if ann is None:
-            return f"untyped parameter `{p.name}`"
-        if not _is_known_param_type(ann):
-            return f"unsupported parameter type `{ann}` on `{p.name}`"
-
-    ret_ann = _annotation_to_str(sig.return_annotation)
-    if ret_ann is None:
-        return "missing return annotation"
-    if not _is_known_return_type(ret_ann):
-        return f"unsupported return type `{ret_ann}`"
-
-    # --- derivation ---
-    param_names = [p.name for p in params]
-    param_types_list = [_annotation_to_str(p.annotation) for p in params]  # type: ignore[misc]
-    # #258: capture each param's Python default so the executor can fall back to it
-    # and the frontend can distinguish required params from optional ones.
-    param_has_default = [p.default is not inspect.Parameter.empty for p in params]
-    param_default_values = [
-        str(p.default) if p.default is not inspect.Parameter.empty else None
-        for p in params
-    ]
-    fn_class = derive_function_class(param_types_list)
-    fn_return_type = derive_function_return_type(ret_ann)
-    fn_type = derive_function_type(fn_return_type)  # type: ignore[arg-type]
-    fn_sig = str(sig)
-    fn_doc = inspect.getdoc(fn_obj) or None
-
-    return {
-        "param_names": param_names,
-        "param_types": param_types_list,
-        "param_has_default": param_has_default,
-        "param_default_values": param_default_values,
-        "function_class": fn_class,
-        "function_return_type": fn_return_type,
-        "function_type": fn_type,
-        "function_signature": fn_sig,
-        "function_doc": fn_doc,
-    }
-
-
-def discover_functions_in_file(file_path: Path) -> list[dict]:
-    """Return a list of eligible function inspection dicts found in file_path.
-
-    Each item is either:
-      {"function_name": str, "data": dict}    — eligible
-      {"function_name": str, "skip_reason": str}  — ineligible
-    """
-    results = []
-    try:
-        mod = _load_module(file_path)
-    except Exception as exc:
-        return [{"function_name": "<module>", "skip_reason": f"import error: {exc}"}]
-
-    for name, obj in inspect.getmembers(mod, inspect.isfunction):
-        if name.startswith("_"):
-            continue
-        # Only functions defined in this file (not imported ones)
-        if getattr(obj, "__module__", None) != mod.__name__:
-            continue
-        result = _inspect_function(name, obj)
-        if isinstance(result, str):
-            results.append({"function_name": name, "skip_reason": result})
-        else:
-            results.append({"function_name": name, "data": result})
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Per-file function discovery (.sql)
-# ---------------------------------------------------------------------------
-
-_SQL_COMMENT_RE = re.compile(r"^--\s*(\w+)\s*:\s*(.+)$")
-
-# Return-type suffix per function_type for SQL functions
-_SQL_RETURN_SUFFIX: dict[str, str] = {
-    "transform": "pd.DataFrame",
-    "validation": "pd.Series[bool]",
-    "unknown": "unknown",
-}
-
-
-def _parse_sql_header(source: str) -> dict | str:
-    """Parse the leading comment block of a .sql file.
-
-    Returns a dict with classification data or a str skip reason.
-    """
-    meta: dict[str, str] = {}
-    for line in source.splitlines():
-        line = line.strip()
-        if not line:
-            continue  # skip blank lines (e.g. leading blank line after dedent)
-        if not line.startswith("--"):
-            break
-        m = _SQL_COMMENT_RE.match(line)
-        if m:
-            meta[m.group(1).lower()] = m.group(2).strip()
-
-    if "name" not in meta:
-        return "missing required `-- name:` header"
-
-    fn_name = meta["name"]
-    fn_doc = meta.get("description") or None
-    raw_type = meta.get("type", "").lower()
-
-    if raw_type == "transform":
-        fn_type = "transform"
-    elif raw_type == "validation":
-        fn_type = "validation"
-    else:
-        fn_type = "unknown"
-
-    fn_class = "pd.dataframe"
-    fn_return_type = _SQL_RETURN_SUFFIX[fn_type]
-    fn_sig = f"{{source_table}}: pd.DataFrame -> {fn_return_type}"
-
-    return {
-        "function_name": fn_name,
-        "function_doc": fn_doc,
-        "function_type": fn_type,
-        "function_class": fn_class,
-        "function_return_type": fn_return_type,
-        "function_signature": fn_sig,
-        "param_names": [],
-        "param_types": [],
-        "param_has_default": [],
-        "param_default_values": [],
-    }
-
-
-def discover_sql_functions_in_file(file_path: Path) -> list[dict]:
-    """Return a list of SQL function discovery dicts for a .sql file.
-
-    Each item is either:
-      {"function_name": str, "data": dict}    — eligible
-      {"function_name": str, "skip_reason": str}  — ineligible
-    """
-    try:
-        source = file_path.read_text(encoding="utf-8")
-    except Exception as exc:
-        return [{"function_name": "<file>", "skip_reason": f"read error: {exc}"}]
-
-    result = _parse_sql_header(source)
-    if isinstance(result, str):
-        return [{"function_name": file_path.stem, "skip_reason": result}]
-
-    fn_name = result.pop("function_name")
-    return [{"function_name": fn_name, "data": result}]
-
-
-# ---------------------------------------------------------------------------
-# Registration (workflow layer — owns the DB connection and transactions)
-# ---------------------------------------------------------------------------
 
 def register_function_entry(
     conn: duckdb.DuckDBPyConnection,
@@ -434,10 +160,6 @@ def register_function_entry(
 _register_one_function = register_function_entry
 
 
-# ---------------------------------------------------------------------------
-# Scan entry point
-# ---------------------------------------------------------------------------
-
 def scan_functions(
     conn: duckdb.DuckDBPyConnection,
     functions_paths: list[str],
@@ -533,111 +255,3 @@ def scan_functions(
                 })
 
     return log
-
-
-# ---------------------------------------------------------------------------
-# Read helpers for the API
-# ---------------------------------------------------------------------------
-
-def get_function(conn: duckdb.DuckDBPyConnection, function_id: str) -> dict | None:
-    """Return full detail for one function, or None if not found.
-
-    Includes all function_registry fields, parameter list, and attached_sources
-    (joined from source_function_map → source_registry).
-    """
-    row = conn.execute(
-        """
-        SELECT function_id, content_hash_id, function_class, function_name,
-               function_doc, function_return_type, function_signature,
-               function_type, module_path, is_active
-        FROM function_registry
-        WHERE function_id = ?
-        """,
-        [function_id],
-    ).fetchone()
-
-    if row is None:
-        return None
-
-    col_names = [
-        "function_id", "content_hash_id", "function_class", "function_name",
-        "function_doc", "function_return_type", "function_signature",
-        "function_type", "module_path", "is_active",
-    ]
-    record = dict(zip(col_names, row))
-    record["function_id"] = str(record["function_id"])
-    record["content_hash_id"] = str(record["content_hash_id"])
-
-    params = conn.execute(
-        """
-        SELECT param_id, param_name, param_type
-        FROM parameter
-        WHERE function_id = ?
-        ORDER BY param_name
-        """,
-        [record["function_id"]],
-    ).fetchall()
-    record["parameters"] = [
-        {"param_id": str(p[0]), "param_name": p[1], "param_type": p[2]}
-        for p in params
-    ]
-
-    sources = conn.execute(
-        """
-        SELECT DISTINCT sr.source_id, sr.source_name
-        FROM source_function_map sfm
-        JOIN function_set_map fsm ON fsm.set_id = sfm.set_id
-        JOIN source_registry sr ON sr.source_id = sfm.source_id
-        WHERE fsm.function_id = ?
-        ORDER BY sr.source_name
-        """,
-        [record["function_id"]],
-    ).fetchall()
-    record["attached_sources"] = [
-        {"source_id": str(s[0]), "source_name": s[1]}
-        for s in sources
-    ]
-
-    return record
-
-
-def list_functions(conn: duckdb.DuckDBPyConnection) -> list[dict]:
-    """Return all function_registry rows with their parameter rows, ordered by function_name."""
-    rows = conn.execute(
-        """
-        SELECT function_id, content_hash_id, function_class, function_name,
-               function_doc, function_return_type, function_signature,
-               function_type, module_path, is_active
-        FROM function_registry
-        ORDER BY function_name
-        """
-    ).fetchall()
-
-    col_names = [
-        "function_id", "content_hash_id", "function_class", "function_name",
-        "function_doc", "function_return_type", "function_signature",
-        "function_type", "module_path", "is_active",
-    ]
-
-    results = []
-    for row in rows:
-        record = dict(zip(col_names, row))
-        record["function_id"] = str(record["function_id"])
-        record["content_hash_id"] = str(record["content_hash_id"])
-
-        params = conn.execute(
-            """
-            SELECT param_id, param_name, param_type
-            FROM parameter
-            WHERE function_id = ?
-            ORDER BY param_name
-            """,
-            [record["function_id"]],
-        ).fetchall()
-        record["parameters"] = [
-            {"param_id": str(p[0]), "param_name": p[1], "param_type": p[2]}
-            for p in params
-        ]
-        results.append(record)
-
-    return results

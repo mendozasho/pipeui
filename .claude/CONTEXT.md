@@ -188,7 +188,10 @@ or inject it). This table is the canonical "where does new code go" map.
 | `ingestion.py` | **Source ingestion** — load a file → `TRY_CAST` type-validate → duplicate-handle → write clean rows to the instance table. *(Also currently holds the source read/preview helpers `get_source_rows`/`get_source_detail` — a read-path concern the audit flags for extraction.)* | an ingest-phase concern. |
 | `migration.py` | **Column-type migration** — recreate-and-copy + `TRY_CAST` pre-check + atomic swap when a column's type changes, via `ColumnRegistryUpdate`. | a column-type-migration rule. |
 | **`backend/domain/functions/`** — function registration + pipeline wiring | | |
-| `registration.py` | **Function registration** — discover (`.py`/`.sql`) + classify (`function_class`/`type`/`return`) + register (`function_registry` + `parameter` rows). | a discovery/classification/registration concern. *(SRP split slated — #47.)* |
+| `classification.py` *(DB-free leaf)* | **Function classification** — pure derivation of `function_class`/`function_return_type`/`function_type` from param/return annotations (Principle 4, §11), the derivation tables, and annotation-string canonicalization (`_annotation_to_str`, `_is_known_*`). **Zero DB dependency** — touches no connection, filesystem, or app object. | a classification/derivation rule or a new param/return type mapping. |
+| `discovery.py` | **Function discovery/parsing** — load a `.py` module + inspect each function (`discover_functions_in_file`), or parse a `.sql` header (`discover_sql_functions_in_file`), into per-function classification dicts (or skip reasons). Reads the filesystem; calls `classification`; no DB. | a file-discovery or signature/header-parsing concern. |
+| `registration.py` | **Function registration (DB transaction owner)** — `register_function_entry` writes one `function_registry` row + its `parameter` rows in one transaction (§10), collapsing on `content_hash_id` (Principle 2); `scan_functions` scans dirs, registers, and deactivates vanished files. Holds the DuckDB connection; calls `discovery`. | a registration/transaction or scan-orchestration concern. |
+| `function_read.py` | **Function read-API** — `get_function` (one function's registry fields + params + attached_sources) / `list_functions` (all, ordered). Pure read — no transaction, no discovery, no classification. | a function registry read/serialize concern. |
 | `sets.py` | **Function-set CRUD** — create / update / list function sets (`FunctionSet*` carriers at the write boundary). | a function-set lifecycle op. |
 | `attach.py` | **Pipeline wiring** — attach/detach a function to a source's pipeline, suggest bindings, edit a placed step (`alias_map` writes); read the pipeline. | a pipeline attach/edit/suggest concern. *(SRP split slated — #46.)* |
 | `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter. Lives here because a built-in is a *complex function* (a step backing, peer to a function set). | a new built-in type (e.g. rename) — its validator + `_execute_*`. ⚠ *contract-mediated `functions⇄runner` coupling: imports `runner.resolve` (`resolve_frame`); `runner.executors` imports it (`execute_builtin_step`). Resolution = the execution-model convergence (#41).* |
@@ -209,6 +212,8 @@ or inject it). This table is the canonical "where does new code go" map.
 Dependency direction: `base/*` (ids, schema, tables, settings, fails, results) underlies everything;
 within the runner, `steps` → `staging`/`step_loader`/`bundles` → `resolve` → `executors` → `run`,
 with `functions.builtins` consumed by `executors` (and itself consuming `resolve` — the #41 coupling).
+Within `functions`, the registration chain flows `classification` (DB-free leaf) ← `discovery` ←
+`registration`; `function_read` is an independent read-only seam (no transaction, no discovery).
 The `registry`/`columns`/`sets` write-contracts feed the source/function **domain** modules (create,
 attach, …), not the runner chain.
 
