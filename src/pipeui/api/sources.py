@@ -15,6 +15,7 @@ from pipeui.db import get_conn
 from pipeui.workflow.create import create_source, find_source_by_pattern, peek_header_columns
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.workflow.migration import migrate_column
+from pipeui.workflow.resolve import TRANSFORMED, resolve_frame
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
@@ -218,8 +219,6 @@ def get_join_columns(
 
     # Transformed: resolve the transformed frame and report its columns. The dtype is
     # best-effort from the resolved frame (the registry has no row for derived columns).
-    from pipeui.workflow.resolve import TRANSFORMED, resolve_frame
-
     frame, _ref = resolve_frame(conn, sid, TRANSFORMED)
     return {
         "columns": [

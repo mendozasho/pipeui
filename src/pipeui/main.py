@@ -32,5 +32,5 @@ if FRONTEND_DIR.exists():
 
 
 def run():
-    import uvicorn
+    import uvicorn  # lazy: heavy server dependency, only needed when the server actually starts
     uvicorn.run("pipeui.main:app", host="127.0.0.1", port=8000, reload=True)
