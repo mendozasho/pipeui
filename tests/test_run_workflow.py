@@ -43,8 +43,8 @@ from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import ingest_source
 from pipeui.workflow.run import run_pipeline
-from pipeui.workflow.staging import staging_prefix
-from pipeui.workflow.step_loader import fetch_steps
+from pipeui.backend.data.runner.staging import staging_prefix
+from pipeui.backend.data.runner.step_loader import fetch_steps
 from pipeui.workflow.attach import AttachBinding, attach_function
 from tests.conftest import make_registered_source
 
@@ -1728,8 +1728,8 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
     attributes, not dict keys. The loader tags the step SET so it routes to the
     function-set adapter; from_function (exercised by the adapter and below) is the
     FUNCTION-tagged sibling — both build the same FunctionStepContext shape."""
-    from pipeui.workflow.step_loader import fetch_steps
-    from pipeui.workflow.step import (
+    from pipeui.backend.data.runner.step_loader import fetch_steps
+    from pipeui.backend.data.runner.steps import (
         FUNCTION,
         FunctionSpec,
         FunctionStepContext,
@@ -1767,8 +1767,8 @@ def test_stepcontext_from_function_carries_step_dict_keys(db, tmp_path):
 def test_stepcontext_from_set_carries_step_dict_keys(db, tmp_path):
     """#19: StepContext.from_set builds the FunctionStepContext from a loader row,
     tagged SET (the set-adapter dispatch tag) but carrying the same typed fields."""
-    from pipeui.workflow.step_loader import fetch_steps
-    from pipeui.workflow.step import SET, StepContext
+    from pipeui.backend.data.runner.step_loader import fetch_steps
+    from pipeui.backend.data.runner.steps import SET, StepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = _val_col(db, source_id, "val")
@@ -1800,7 +1800,7 @@ def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
     StepContext.from_builtin — step_id / builtin_type / builtin_config / position
     are typed attributes."""
     from pipeui.workflow.builtins import get_builtin_steps
-    from pipeui.workflow.step import BuiltinStepContext
+    from pipeui.backend.data.runner.steps import BuiltinStepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     _seed_builtin_filter_step(db, source_id, "val", 20, position=0)
@@ -2026,8 +2026,8 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
           hardcoded direct call would bypass the patched registry and the recorder
           would never fire (and the spy count would not match the member count)."""
     from pipeui.workflow import executors as ex_mod
-    from pipeui.workflow import step as step_mod
-    from pipeui.workflow.step import FUNCTION, FunctionSpec, StepContext
+    from pipeui.backend.data.runner import steps as step_mod
+    from pipeui.backend.data.runner.steps import FUNCTION, FunctionSpec, StepContext
     from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"types": []}
@@ -2092,7 +2092,7 @@ def test_adapter_dispatches_non_function_member_to_its_executor(db, monkeypatch)
     own step_type), so a function-hardcoded dispatch would fire FUNCTION_SLOT and the
     assertion would read ['FUNCTION_SLOT']."""
     from pipeui.workflow import executors as ex_mod
-    from pipeui.workflow.step import BUILTIN, FUNCTION, FunctionSpec, StepContext
+    from pipeui.backend.data.runner.steps import BUILTIN, FUNCTION, FunctionSpec, StepContext
     from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"slots": []}
@@ -2149,7 +2149,7 @@ def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path,
     over a two-member function set (validation gt0 + transform dbl on column `a`). The
     factory must be invoked for the function member(s); the result entries must match
     the golden set behavior member-for-member."""
-    import pipeui.workflow.step as ctx_mod
+    import pipeui.backend.data.runner.steps as ctx_mod
 
     source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, name="ffac", cols=("a",))
     col_id = _val_col(db, source_id, "a")

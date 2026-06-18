@@ -37,7 +37,7 @@ from pipeui.workflow.builtins import (
     patch_builtin,
 )
 from pipeui.workflow.run import run_pipeline
-from pipeui.workflow.step import StepContext
+from pipeui.backend.data.runner.steps import StepContext
 from tests.conftest import make_registered_source
 
 

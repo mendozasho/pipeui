@@ -16,7 +16,7 @@ import uuid
 
 import duckdb
 
-from pipeui.workflow.step import (
+from pipeui.backend.data.runner.steps import (
     BuiltinStepContext,
     FunctionStepContext,
     StepContext,

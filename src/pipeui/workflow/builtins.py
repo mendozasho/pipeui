@@ -36,10 +36,10 @@ import pandas as pd
 
 from pipeui.backend.data.base.ids import new_id
 from pipeui.workflow.resolve import RAW, TRANSFORMED, resolve_frame
-from pipeui.workflow.step import BuiltinStepContext
+from pipeui.backend.data.runner.steps import BuiltinStepContext
 # get_builtin_steps lives in step_loader (L1, pure read); re-exported here so
 # ``from pipeui.workflow.builtins import get_builtin_steps`` keeps working.
-from pipeui.workflow.step_loader import get_builtin_steps  # noqa: F401
+from pipeui.backend.data.runner.step_loader import get_builtin_steps  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Validation helpers

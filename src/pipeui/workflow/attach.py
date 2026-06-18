@@ -27,8 +27,8 @@ import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id, new_id
 from pipeui.backend.data.base.results import normalize_label
-from pipeui.workflow.bundles import BundleLengthError, pair_bundles
-from pipeui.workflow.step_loader import get_builtin_steps
+from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
+from pipeui.backend.data.runner.step_loader import get_builtin_steps
 
 
 # ---------------------------------------------------------------------------
