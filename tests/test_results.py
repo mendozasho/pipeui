@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-from pipeui.results import RunResult, ValidationRunResult, normalize_label
+from pipeui.backend.data.base.results import RunResult, ValidationRunResult, normalize_label
 
 
 # ---------------------------------------------------------------------------

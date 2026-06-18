@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 from dataclasses import FrozenInstanceError
 
-from pipeui.results import (
+from pipeui.backend.data.base.results import (
     BuiltinResultEntry,
     RunResult,
     StepResultEntry,

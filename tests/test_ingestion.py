@@ -8,7 +8,7 @@ import pytest
 
 from pipeui.workflow.create import create_source
 from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.tables import instance_table_name
 from tests.conftest import make_quirky_file
 
 
@@ -277,7 +277,7 @@ def test_quirky_varchar_fallback_infers_varchar(db, tmp_path):
 
 def _seed_function_on_source(db, source_id, fn_name, fn_type, position=0):
     """Attach a minimal function set to source_id. Returns set_id."""
-    from pipeui.ids import content_hash_id as _cid
+    from pipeui.backend.data.base.ids import content_hash_id as _cid
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(

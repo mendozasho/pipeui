@@ -41,8 +41,8 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-from pipeui.results import RunResult, normalize_label
-from pipeui.sql_user_table import instance_table_name
+from pipeui.backend.data.base.results import RunResult, normalize_label
+from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.workflow import executors as _executors
 from pipeui.workflow.executors import StepRunEnv, step_has
 from pipeui.workflow.step import BUILTIN

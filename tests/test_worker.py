@@ -26,7 +26,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from pipeui.validation.fails import FailedFunctionEntry
+from pipeui.backend.data.base.fails import FailedFunctionEntry
 from pipeui.workflow.worker import (
     _SENTINEL_FRAME,
     _SENTINEL_SCALAR,

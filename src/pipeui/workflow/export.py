@@ -29,7 +29,7 @@ from typing import Any
 
 import duckdb
 
-from pipeui.results import normalize_label
+from pipeui.backend.data.base.results import normalize_label
 from pipeui.workflow.run import get_staging_rows
 
 

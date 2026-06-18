@@ -34,8 +34,8 @@ import pytest
 
 import datetime
 
-from pipeui.ids import content_hash_id
-from pipeui.db import create_schema, get_connection
+from pipeui.backend.data.base.ids import content_hash_id
+from pipeui.backend.data.base.db import create_schema, get_connection
 from pipeui.workflow.attach import AttachBinding, attach_function, get_pipeline, patch_pipeline_step, suggest_bindings
 from tests.conftest import make_registered_source
 
@@ -368,7 +368,7 @@ def test_transaction_atomicity_on_duplicate_alias_map(db):
     fn_id, (param_id,) = _make_function(db, "fn_dup", [("col", "str")])
 
     # Pre-insert an alias_map row with the same deterministic id
-    from pipeui.ids import content_hash_id as chid
+    from pipeui.backend.data.base.ids import content_hash_id as chid
     dup_id = chid("alias_map", str(param_id), str(col_ids[0]), str(source_id))
     alias_uuid = uuid.uuid4()
     db.execute(
@@ -465,7 +465,7 @@ def test_suggest_includes_scalar_params_with_kind(db):
 def test_suggest_excludes_column_not_on_target(db):
     """Guarantee S5: columns bound on other sources absent from target are not returned."""
     import datetime as _dt
-    from pipeui.ids import content_hash_id as _ch
+    from pipeui.backend.data.base.ids import content_hash_id as _ch
     target_source_id, _ = make_registered_source(db, n_columns=1)
 
     # Create a source with a uniquely-named column (not shared with target)

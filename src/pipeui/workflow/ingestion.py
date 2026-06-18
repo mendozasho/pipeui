@@ -8,9 +8,9 @@ import duckdb
 
 import re
 
-from pipeui.schema.constants import DUCKDB_TO_PYTHON, IngestionMethod
-from pipeui.sql_user_table import build_create_table_sql, instance_table_name
-from pipeui.validation.fails import FailedRegistryEntry
+from pipeui.backend.data.base.schema.constants import DUCKDB_TO_PYTHON, IngestionMethod
+from pipeui.backend.data.base.tables import build_create_table_sql, instance_table_name
+from pipeui.backend.data.base.fails import FailedRegistryEntry
 
 
 def _load_to_temp(conn: duckdb.DuckDBPyConnection, file_path: str, temp_name: str) -> None:

@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from pipeui.sql_user_table import build_create_table_sql, instance_table_name
+from pipeui.backend.data.base.tables import build_create_table_sql, instance_table_name
 
 
 # ---------------------------------------------------------------------------

@@ -25,8 +25,8 @@ from typing import Optional
 
 import duckdb
 
-from pipeui.ids import content_hash_id, new_id
-from pipeui.results import normalize_label
+from pipeui.backend.data.base.ids import content_hash_id, new_id
+from pipeui.backend.data.base.results import normalize_label
 from pipeui.workflow.bundles import BundleLengthError, pair_bundles
 from pipeui.workflow.step_loader import get_builtin_steps
 

@@ -6,11 +6,11 @@ Marker: unit — pure logic, no DB, no subprocess.
 import pytest
 from pydantic import ValidationError
 
-from pipeui.ids import content_hash_id
+from pipeui.backend.data.base.ids import content_hash_id
+from pipeui.backend.data.base.fails import FailedRegistryEntry
 from pipeui.validation import (
     ColumnRegistryEntry,
     ColumnRegistryUpdate,
-    FailedRegistryEntry,
     SourceRegistryEntry,
     SourceRegistryUpdate,
 )

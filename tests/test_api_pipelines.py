@@ -36,7 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pipeui.api.pipelines import router
-from pipeui.db import get_conn
+from pipeui.backend.data.base.db import get_conn
 from tests.conftest import make_registered_source
 
 
@@ -916,7 +916,7 @@ def _make_right_source(conn):
     column_registry content_hash_id collision a second make_registered_source
     would cause). Returns (source_id, column_name)."""
     import datetime as _dt
-    from pipeui.ids import content_hash_id as _ch
+    from pipeui.backend.data.base.ids import content_hash_id as _ch
     src_id = uuid.uuid4()
     conn.execute(
         "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
@@ -1117,7 +1117,7 @@ def test_join_columns_endpoint_raw_vs_transformed(sources_client, db):
     resolved transformed output (its latest staging table), which here carries an
     extra column the raw table does not.
     """
-    from pipeui.sql_user_table import instance_table_name
+    from pipeui.backend.data.base.tables import instance_table_name
 
     source_id, _ = make_registered_source(db, n_columns=2)  # raw cols: col_0, col_1
 

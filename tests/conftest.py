@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.ids import content_hash_id
-from pipeui.db import create_schema, get_connection
+from pipeui.backend.data.base.ids import content_hash_id
+from pipeui.backend.data.base.db import create_schema, get_connection
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def patch_new_id(monkeypatch):
     def _fixed() -> uuid.UUID:
         return uuid.UUID(int=next(counter))
 
-    monkeypatch.setattr("pipeui.ids.new_id", _fixed)
+    monkeypatch.setattr("pipeui.backend.data.base.ids.new_id", _fixed)
     return _fixed
 
 

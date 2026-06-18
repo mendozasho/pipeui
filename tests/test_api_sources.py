@@ -164,7 +164,7 @@ def test_get_source_detail_distinct_pk_count_before_and_after_ingestion(client, 
     # Simulate duplicate PKs by recreating the instance table without the PK
     # constraint and inserting a duplicate row — this tests the scenario that the
     # warning badge detects (distinct_pk_count < row_count).
-    from pipeui.sql_user_table import instance_table_name
+    from pipeui.backend.data.base.tables import instance_table_name
     import uuid
     tname = instance_table_name(uuid.UUID(source_id))
     # Recreate without PK constraint so duplicates can be inserted

@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import pipeui.api.function_sets as fs_mod
-from pipeui.db import create_schema, get_connection
+from pipeui.backend.data.base.db import create_schema, get_connection
 from pipeui.workflow.functions import scan_functions
 
 

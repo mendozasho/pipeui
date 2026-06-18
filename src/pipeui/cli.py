@@ -9,7 +9,7 @@ DEFAULT_DB = Path("pipeui.db")
 def cmd_init():
     created = []
     if not CONFIG_PATH.exists():
-        from pipeui.validation.settings import AppSettings  # lazy: only when scaffolding a missing config
+        from pipeui.backend.data.base.settings import AppSettings  # lazy: only when scaffolding a missing config
         settings = AppSettings()
         CONFIG_PATH.write_text(settings.model_dump_json(indent=2))
         created.append(str(CONFIG_PATH))
