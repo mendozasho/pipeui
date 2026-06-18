@@ -1605,7 +1605,7 @@ def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
     """AC4: a transformed reference forming a cycle (A->C->A) raises an error naming
     the sources in the cycle and does not loop."""
     from pipeui.backend.domain.runner.resolve import resolve_frame, TransformedCycleError
-    from pipeui.backend.domain.runner.builtins import attach_builtin
+    from pipeui.backend.domain.functions.builtins import attach_builtin
 
     # Two sources, each with a transformed-join pointing at the other.
     src_a, _ = _register_source_and_ingest(db, tmp_path, name="a_src")
@@ -1709,7 +1709,7 @@ def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
 
 def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator="gte"):
     """Attach a built-in filter step keeping rows where `column operator value`."""
-    from pipeui.backend.domain.runner.builtins import attach_builtin
+    from pipeui.backend.domain.functions.builtins import attach_builtin
 
     res = attach_builtin(
         db, source_id, "filter",
@@ -1799,7 +1799,7 @@ def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
     """#19: get_builtin_steps produces the typed BuiltinStepContext via
     StepContext.from_builtin — step_id / builtin_type / builtin_config / position
     are typed attributes."""
-    from pipeui.backend.domain.runner.builtins import get_builtin_steps
+    from pipeui.backend.domain.functions.builtins import get_builtin_steps
     from pipeui.backend.data.runner.steps import BuiltinStepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)

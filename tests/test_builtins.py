@@ -26,10 +26,10 @@ import pandas as pd
 import pytest
 
 from pipeui.backend.data.base.db import create_schema, get_connection
-from pipeui.backend.data.base.ids import content_hash_id, new_id
+from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.backend.domain.functions.attach import attach_function
-from pipeui.backend.domain.runner.builtins import (
+from pipeui.backend.domain.functions.builtins import (
     attach_builtin,
     detach_builtin,
     execute_builtin_step,
@@ -38,7 +38,6 @@ from pipeui.backend.domain.runner.builtins import (
 )
 from pipeui.backend.domain.runner.run import run_pipeline
 from pipeui.backend.data.runner.steps import StepContext
-from tests.conftest import make_registered_source
 
 
 def _builtin_step(builtin_type: str, builtin_config: dict, *, step_id="s", position=0):
