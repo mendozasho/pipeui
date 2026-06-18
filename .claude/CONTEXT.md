@@ -160,9 +160,9 @@ backend `domain → data`; no module imports one above it, and there are **no in
 dodge a cycle** (an in-function import means a responsibility is in the wrong layer — move it down
 or inject it). This table is the canonical "where does new code go" map.
 
-> **Migration note (`ARCHITECTURE.md §4`, epic #55).** The data layer is re-homed under
-> `backend/data/`; the `pipeui/workflow/` rows are the runner **domain** modules still awaiting
-> their slice-3 move to `backend/domain/runner/`. Paths track the current on-disk home.
+> **Migration note (`ARCHITECTURE.md §4`, epic #55).** The `backend/{data,domain}` layers below
+> are re-homed and settled. Still pending: the `api/` → `middleware/` move (slice 4) and the
+> composition root `app/` (slice 5).
 
 | Module | Single responsibility (its one reason to change) | New code goes here when… |
 | --- | --- | --- |
@@ -184,16 +184,27 @@ or inject it). This table is the canonical "where does new code go" map.
 | `bundles.py` | **Argument-bundle pairing** — pure positional pairing of multi-select columns (`pair_bundles`, `ArgumentBundle`). | a multi-select bundle-pairing rule. |
 | `staging.py` *(L1)* | **Staging store** — write/read/drop a source's transformed-output staging tables. | anything about how transformed output is stored. |
 | `step_loader.py` *(L1)* | **Step loading** — read the map tables into a source's ordered step list (`fetch_steps`, `get_builtin_steps`). Pure read. | a new step source or ordering rule. |
-| **`pipeui/workflow/`** — runner **domain** (migrating to `backend/domain/runner/`, §4 slice 3) | | |
+| **`backend/domain/sources/`** — source lifecycle (orchestration; owns transactions) | | |
+| `create.py` | **Source creation** — the create-flow cache (`_stage_create_flow`), type/PK confirmation, and the atomic `source_registry` + `column_registry` + `source_column_map` write. | a source-creation step or create-flow staging concern. |
+| `ingestion.py` | **Source ingestion** — load a file → `TRY_CAST` type-validate → duplicate-handle → write clean rows to the instance table. *(Also currently holds the source read/preview helpers `get_source_rows`/`get_source_detail` — a read-path concern the audit flags for extraction.)* | an ingest-phase concern. |
+| `migration.py` | **Column-type migration** — recreate-and-copy + `TRY_CAST` pre-check + atomic swap when a column's type changes, via `ColumnRegistryUpdate`. | a column-type-migration rule. |
+| **`backend/domain/functions/`** — function registration + pipeline wiring | | |
+| `registration.py` | **Function registration** — discover (`.py`/`.sql`) + classify (`function_class`/`type`/`return`) + register (`function_registry` + `parameter` rows). | a discovery/classification/registration concern. *(SRP split slated — #47.)* |
+| `sets.py` | **Function-set CRUD** — create / update / list function sets (`FunctionSet*` carriers at the write boundary). | a function-set lifecycle op. |
+| `attach.py` | **Pipeline wiring** — attach/detach a function to a source's pipeline, suggest bindings, edit a placed step (`alias_map` writes); read the pipeline. | a pipeline attach/edit/suggest concern. *(SRP split slated — #46.)* |
+| `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter. Lives here because a built-in is a *complex function* (a step backing, peer to a function set). | a new built-in type (e.g. rename) — its validator + `_execute_*`. ⚠ *contract-mediated `functions⇄runner` coupling: imports `runner.resolve` (`resolve_frame`); `runner.executors` imports it (`execute_builtin_step`). Resolution = the execution-model convergence (#41).* |
+| **`backend/domain/runner/`** — run orchestration + execution | | |
 | `resolve.py` *(L2)* | **Input resolution** — where a step reads its input: raw instance table vs transformed output, materialize-if-absent, cycle guard (`resolve_frame`, `FrameRef`). Runner **injected** (no orchestrator import). | a new input mode, materialize/cycle rule, or provenance field. |
-| `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter. | a new built-in type (e.g. rename) — its validator + `_execute_*`. |
-| `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into results. | a new **step type** (a new `StepExecutor` in `STEP_EXECUTORS`), or new per-function execution mechanics. |
+| `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into results. | a new **step type** (a new `StepExecutor` in `STEP_EXECUTORS`), or new per-function execution mechanics. *(SRP split slated — #45.)* |
+| `worker.py` | **Process-isolated execution** — run a user function in a subprocess (`setrlimit`, Arrow IPC), strict data-in/data-out (never receives the connection). | the worker/sandbox mechanics or its IPC contract. |
 | `run.py` *(L4)* | **Run orchestration** — drive a source's whole run end-to-end (load → resolve → execute via the registry → stage → collect); cross-source runners. Injects `run_pipeline` into `resolve`. | a new run phase, run-type, or cross-source entry point. |
+| `export.py` | **Run export** — produce the exportable `results report` / `transformed report` from a run's output. | a new export format or report shape. |
 
 Dependency direction: `base/*` (ids, schema, tables, settings, fails, results) underlies everything;
-within the runner, `steps` → `staging`/`step_loader`/`bundles` → `resolve`/`builtins` → `executors`
-→ `run`. The `registry`/`columns`/`sets` write-contracts feed the source/function **domain** modules
-(create, attach, …), not the runner chain.
+within the runner, `steps` → `staging`/`step_loader`/`bundles` → `resolve` → `executors` → `run`,
+with `functions.builtins` consumed by `executors` (and itself consuming `resolve` — the #41 coupling).
+The `registry`/`columns`/`sets` write-contracts feed the source/function **domain** modules (create,
+attach, …), not the runner chain.
 
 ### Module contracts (carriers)
 
@@ -206,12 +217,12 @@ tested contract edit) — never an incidental dict key.
 | --- | --- | --- | --- |
 | `StepContext` + `FunctionStepContext` / `BuiltinStepContext` (`backend/data/runner/steps.py`) | typed, logic-free description of one step | `step_loader` → `steps.py` factories → `run` (dispatch) + `executors` | `frozen=True`; typed fields (no `data` dict / `get`); built only via `from_*` factories; the variant returned **is** the contract |
 | `FunctionSpec` (`backend/data/runner/steps.py`) | one member of a function step | `step_loader` → `executors` (set adapter) | `frozen=True`; `params`/`builtin_config` are typed `Mapping` (the declared depth boundary) |
-| `StepRunEnv` (`workflow/executors.py`) | the run-scoped inputs an executor needs | `run` → `executors` | `frozen=True`; fully populated by the orchestrator; carries the injected `run_transforms` runner |
-| `StepExecResult` (`workflow/executors.py`) | the complete outcome of running one step | `executors` → `run` | `frozen=True`; `entries` are `StepResultEntry` variant carriers (never ad-hoc dicts) |
+| `StepRunEnv` (`backend/domain/runner/executors.py`) | the run-scoped inputs an executor needs | `run` → `executors` | `frozen=True`; fully populated by the orchestrator; carries the injected `run_transforms` runner |
+| `StepExecResult` (`backend/domain/runner/executors.py`) | the complete outcome of running one step | `executors` → `run` | `frozen=True`; `entries` are `StepResultEntry` variant carriers (never ad-hoc dicts) |
 | `RunResult` / `ValidationRunResult` (`backend/data/base/results.py`) | canonical identity + data of one result | `executors` (mechanics) → `run` + Results/export | `frozen=True`; deterministic `result_id` |
 | `StepResultEntry` + `Validation`/`Transform`/`BuiltinResultEntry` variants (`backend/data/base/results.py`) | one step's result = a `RunResult` plus its provenance, as a per-kind variant | `executors` → `run` (serialized to the wire dict at the published seam) | `frozen=True`; variant hierarchy ("the variant IS the contract"), each renders its own `to_dict()` — no kind-switch in the consumer |
-| `FrameRef` (`resolve.py`) | provenance of a resolved input frame | `resolve` → `builtins` (`_execute_join`) + `api/sources`, then into `RunResult.consumed_result_id` | `frozen=True`; invariant `result_id is None ⟺ mode == RAW` (in `__post_init__`); returned as `(frame, FrameRef)` |
-| `run_transforms` runner *(behavioral port, not data)* (`resolve.py` declares the type) | "produce a source's transformed output by running its transforms" | `run` → `resolve` (DIP) | `resolve` declares the callable signature; orchestrator supplies it; **zero `pipeui.workflow.run` import in `resolve`** |
+| `FrameRef` (`backend/domain/runner/resolve.py`) | provenance of a resolved input frame | `resolve` → `functions.builtins` (`_execute_join`) + `api/sources`, then into `RunResult.consumed_result_id` | `frozen=True`; invariant `result_id is None ⟺ mode == RAW` (in `__post_init__`); returned as `(frame, FrameRef)` |
+| `run_transforms` runner *(behavioral port, not data)* (`backend/domain/runner/resolve.py` declares the type) | "produce a source's transformed output by running its transforms" | `run` → `resolve` (DIP) | `resolve` declares the callable signature; orchestrator supplies it; **zero `run` import in `resolve`** |
 
 Enforcement is real, not aspirational: frozen dataclasses block mutation; `__post_init__` invariants
 make illegal carriers unconstructable; one contract test per carrier asserts the producer fills the
