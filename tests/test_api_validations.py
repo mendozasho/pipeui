@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pipeui.api.validations import router
+from pipeui.middleware.validations import router
 from pipeui.backend.data.base.db import get_conn
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.domain.sources.create import create_source
@@ -291,7 +291,7 @@ def _pipelines_client(db):
     The source-tied results export lives under /pipelines/{source_id}/export/results,
     so the source-tied test needs the pipelines router too.
     """
-    from pipeui.api.pipelines import router as pipelines_router
+    from pipeui.middleware.pipelines import router as pipelines_router
     app = FastAPI()
     app.include_router(router)
     app.include_router(pipelines_router)

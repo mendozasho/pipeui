@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pipeui.api.sources import router, get_conn
+from pipeui.middleware.sources import router, get_conn
 
 
 @pytest.fixture

@@ -35,7 +35,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pipeui.api.pipelines import router
+from pipeui.middleware.pipelines import router
 from pipeui.backend.data.base.db import get_conn
 from tests.conftest import make_registered_source
 
@@ -1099,8 +1099,8 @@ def test_transformed_export_route_returns_empty_payload_for_registered_source(cl
 @pytest.fixture
 def sources_client(db):
     """TestClient for the sources router wired to the test's DuckDB sandbox."""
-    from pipeui.api.sources import router as sources_router
-    from pipeui.api.sources import get_conn as sources_get_conn
+    from pipeui.middleware.sources import router as sources_router
+    from pipeui.middleware.sources import get_conn as sources_get_conn
 
     app = FastAPI()
     app.include_router(sources_router)

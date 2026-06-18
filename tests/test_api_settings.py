@@ -13,7 +13,7 @@ def settings_client(tmp_path, monkeypatch):
 
     # Re-import after chdir so CONFIG_PATH resolves to tmp_path
     import importlib
-    import pipeui.api.settings as settings_mod
+    import pipeui.middleware.settings as settings_mod
     importlib.reload(settings_mod)
 
     from fastapi import FastAPI

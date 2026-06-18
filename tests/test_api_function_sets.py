@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import pipeui.api.function_sets as fs_mod
+import pipeui.middleware.function_sets as fs_mod
 from pipeui.backend.data.base.db import create_schema, get_connection
 from pipeui.backend.domain.functions.registration import scan_functions
 
