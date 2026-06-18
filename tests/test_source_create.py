@@ -11,7 +11,7 @@ import datetime
 
 from pipeui.helpers import infer_pattern
 from pipeui.backend.data.base.ids import content_hash_id as _ch
-from pipeui.workflow.create import create_source, update_source
+from pipeui.backend.domain.sources.create import create_source, update_source
 
 
 def make_csv(tmp_path, name, columns, rows):
@@ -178,7 +178,7 @@ def test_source_create_var_fallback(db, tmp_path):
     path = make_csv(tmp_path, "report.csv", ["id"], [[1]])
 
     # Patch infer_column_types to simulate an unrecognized type coming back from DuckDB
-    with patch("pipeui.workflow.create.infer_column_types", return_value=[("id", "UNRECOGNIZED")]):
+    with patch("pipeui.backend.domain.sources.create.infer_column_types", return_value=[("id", "UNRECOGNIZED")]):
         source_id, failed = create_source(db, path, "var_source", "id")
 
     assert not failed.has_failures()

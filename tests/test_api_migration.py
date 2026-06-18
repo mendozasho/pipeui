@@ -18,8 +18,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pipeui.api.sources import router, get_conn
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
 from tests.conftest import make_registered_source
 
 

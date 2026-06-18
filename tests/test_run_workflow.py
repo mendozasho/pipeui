@@ -40,12 +40,12 @@ import pytest
 
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.tables import instance_table_name
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
-from pipeui.workflow.run import run_pipeline
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
+from pipeui.backend.domain.runner.run import run_pipeline
 from pipeui.backend.data.runner.staging import staging_prefix
 from pipeui.backend.data.runner.step_loader import fetch_steps
-from pipeui.workflow.attach import AttachBinding, attach_function
+from pipeui.backend.domain.functions.attach import AttachBinding, attach_function
 from tests.conftest import make_registered_source
 
 
@@ -276,7 +276,7 @@ def test_rerun_drops_prior_staging_table(db, tmp_path):
 
     # Second run with a different timestamp may collide; patch time to ensure different name
     import time
-    with patch("pipeui.workflow.run.time") as mock_time:
+    with patch("pipeui.backend.domain.runner.run.time") as mock_time:
         mock_time.time.return_value = int(time.time()) + 9999
         run_pipeline(db, source_id, "transforms")
 
@@ -1211,7 +1211,7 @@ def test_run_entry_points_delegate_to_single_runner(db, tmp_path, monkeypatch):
         "SELECT function_id FROM function_registry WHERE function_name = 'is_above_threshold'"
     ).fetchone()[0]
 
-    import pipeui.workflow.run as run_mod
+    import pipeui.backend.domain.runner.run as run_mod
     seen: list[str] = []
     real = run_mod.run_pipeline
 
@@ -1479,7 +1479,7 @@ def _messy_source_and_ingest(db, tmp_path, name="messy"):
 @pytest.mark.integration
 def test_resolve_frame_raw_returns_instance_table(db, tmp_path):
     """AC1: resolve_frame(source, raw) returns the source's instance table contents."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     expected = db.execute(
@@ -1502,7 +1502,7 @@ def test_resolve_frame_raw_returns_instance_table(db, tmp_path):
 def test_resolve_frame_transformed_returns_latest_staging(db, tmp_path):
     """AC2: resolve_frame(source, transformed) returns the latest staging table
     contents when one exists (no re-run)."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = db.execute(
@@ -1535,7 +1535,7 @@ def test_resolve_frame_transformed_returns_latest_staging(db, tmp_path):
 def test_resolve_frame_transformed_materializes_if_absent(db, tmp_path):
     """AC3: resolve_frame(source, transformed) for a source with NO staging table
     runs that source's pipeline once and returns its produced output."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = db.execute(
@@ -1571,7 +1571,7 @@ def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path)
     table so transformed resolution still yields a frame. DECIDED behavior (keep the
     fallback, not an error) — a source with nothing to transform has its raw data as
     its 'transformed output'. See resolve._materialize."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
     from pipeui.backend.data.base.tables import instance_table_name
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
@@ -1604,8 +1604,8 @@ def test_resolve_frame_transformed_no_transforms_falls_back_to_raw(db, tmp_path)
 def test_resolve_frame_transformed_cycle_raises_naming_sources(db, tmp_path):
     """AC4: a transformed reference forming a cycle (A->C->A) raises an error naming
     the sources in the cycle and does not loop."""
-    from pipeui.workflow.resolve import resolve_frame, TransformedCycleError
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.runner.resolve import resolve_frame, TransformedCycleError
+    from pipeui.backend.domain.runner.builtins import attach_builtin
 
     # Two sources, each with a transformed-join pointing at the other.
     src_a, _ = _register_source_and_ingest(db, tmp_path, name="a_src")
@@ -1640,7 +1640,7 @@ def test_resolve_frame_transformed_result_id_is_deterministic(db, tmp_path):
     """AC5: the ref returned for a transformed frame carries a deterministic UUID5
     result_id (equal inputs -> equal id) consistent with the RunResult identity
     scheme."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
     from pipeui.backend.data.base.results import RunResult
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
@@ -1674,7 +1674,7 @@ def test_resolve_frame_transformed_result_id_is_deterministic(db, tmp_path):
 def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
     """AC6: resolve_frame returns correct rows over null-containing / type-messy
     real-world data without dropping or corrupting rows."""
-    from pipeui.workflow.resolve import resolve_frame
+    from pipeui.backend.domain.runner.resolve import resolve_frame
 
     source_id, _ = _messy_source_and_ingest(db, tmp_path)
     expected = db.execute(
@@ -1709,7 +1709,7 @@ def test_resolve_frame_correct_over_messy_null_data(db, tmp_path):
 
 def _seed_builtin_filter_step(db, source_id, column, value, position=1, operator="gte"):
     """Attach a built-in filter step keeping rows where `column operator value`."""
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.runner.builtins import attach_builtin
 
     res = attach_builtin(
         db, source_id, "filter",
@@ -1799,7 +1799,7 @@ def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
     """#19: get_builtin_steps produces the typed BuiltinStepContext via
     StepContext.from_builtin — step_id / builtin_type / builtin_config / position
     are typed attributes."""
-    from pipeui.workflow.builtins import get_builtin_steps
+    from pipeui.backend.domain.runner.builtins import get_builtin_steps
     from pipeui.backend.data.runner.steps import BuiltinStepContext
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
@@ -1820,7 +1820,7 @@ def test_stepcontext_from_builtin_carries_builtin_keys(db, tmp_path):
 def test_step_executor_registry_has_function_and_builtin_executors():
     """#20: the step-type registry resolves an executor for each step type
     (function/set -> function executor; builtin -> builtin executor)."""
-    from pipeui.workflow.executors import STEP_EXECUTORS, StepExecutor
+    from pipeui.backend.domain.runner.executors import STEP_EXECUTORS, StepExecutor
 
     assert "function" in STEP_EXECUTORS
     assert "builtin" in STEP_EXECUTORS
@@ -1835,7 +1835,7 @@ def test_run_pipeline_dispatches_through_registry(db, tmp_path):
     executors are invoked. Patching the registry to drop the builtin executor
     must make the builtin step vanish from the output (proving dispatch goes
     through the registry, not an inline branch)."""
-    from pipeui.workflow import executors as ex_mod
+    from pipeui.backend.domain.runner import executors as ex_mod
 
     source_id, _ = _register_source_and_ingest(db, tmp_path)
     col_id = _val_col(db, source_id, "val")
@@ -2025,10 +2025,10 @@ def test_adapter_dispatches_member_by_step_type_not_hardcoded_function(db, tmp_p
           replacing the registry's FUNCTION slot with a recording executor: a
           hardcoded direct call would bypass the patched registry and the recorder
           would never fire (and the spy count would not match the member count)."""
-    from pipeui.workflow import executors as ex_mod
+    from pipeui.backend.domain.runner import executors as ex_mod
     from pipeui.backend.data.runner import steps as step_mod
     from pipeui.backend.data.runner.steps import FUNCTION, FunctionSpec, StepContext
-    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+    from pipeui.backend.domain.runner.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"types": []}
 
@@ -2091,9 +2091,9 @@ def test_adapter_dispatches_non_function_member_to_its_executor(db, monkeypatch)
     Falsifiable: the recorders key on the *registry slot that fired* (not the context's
     own step_type), so a function-hardcoded dispatch would fire FUNCTION_SLOT and the
     assertion would read ['FUNCTION_SLOT']."""
-    from pipeui.workflow import executors as ex_mod
+    from pipeui.backend.domain.runner import executors as ex_mod
     from pipeui.backend.data.runner.steps import BUILTIN, FUNCTION, FunctionSpec, StepContext
-    from pipeui.workflow.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
+    from pipeui.backend.domain.runner.executors import FunctionSetExecutor, StepExecResult, StepRunEnv
 
     seen = {"slots": []}
 

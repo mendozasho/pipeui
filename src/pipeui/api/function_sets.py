@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeui.backend.data.base.db import get_conn
-from pipeui.workflow.function_sets import (
+from pipeui.backend.domain.functions.sets import (
     create_function_set,
     delete_function_set,
     get_function_set,

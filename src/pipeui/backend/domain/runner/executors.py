@@ -38,7 +38,7 @@ from pipeui.backend.data.base.results import (
 )
 from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.backend.data.base.fails import FailedFunctionEntry
-from pipeui.workflow.builtins import execute_builtin_step
+from pipeui.backend.domain.runner.builtins import execute_builtin_step
 from pipeui.backend.data.runner.bundles import pair_bundles
 from pipeui.backend.data.runner.staging import write_staging_table
 from pipeui.backend.data.runner.steps import (
@@ -50,7 +50,7 @@ from pipeui.backend.data.runner.steps import (
     FunctionStepContext,
     StepContext,
 )
-from pipeui.workflow.worker import call_function
+from pipeui.backend.domain.runner.worker import call_function
 
 
 # ---------------------------------------------------------------------------

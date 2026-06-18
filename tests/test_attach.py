@@ -36,7 +36,7 @@ import datetime
 
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.db import create_schema, get_connection
-from pipeui.workflow.attach import AttachBinding, attach_function, get_pipeline, patch_pipeline_step, suggest_bindings
+from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, get_pipeline, patch_pipeline_step, suggest_bindings
 from tests.conftest import make_registered_source
 
 
@@ -652,7 +652,7 @@ def test_suggest_current_scalar_value_populated_from_map(db):
 
 def _attach_fn(conn, source_id, fn_id, col_ids):
     """Helper: attach function_id to source_id with first column bound."""
-    from pipeui.workflow.attach import AttachBinding
+    from pipeui.backend.domain.functions.attach import AttachBinding
     params = conn.execute(
         "SELECT param_id, param_type FROM parameter WHERE function_id = ?", [fn_id]
     ).fetchall()
@@ -934,7 +934,7 @@ def _make_right_source(conn):
 def test_get_pipeline_emits_builtin_step_with_discriminator(db):
     """#209 AC1: get_pipeline returns a placed built-in step in steps[] with
     step_type='builtin', carrying builtin_type and builtin_config."""
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.runner.builtins import attach_builtin
 
     source_id, col_ids = make_registered_source(db, n_columns=1)
     right_source_id, rcol = _make_right_source(db)
@@ -982,7 +982,7 @@ def test_get_pipeline_function_steps_carry_step_type_and_functions(db):
 def test_get_pipeline_orders_builtin_among_function_steps_by_position(db):
     """#209 AC1: a built-in step is position-ordered among function steps. Function
     at position 0, built-in at position 1 → function first, built-in second."""
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.runner.builtins import attach_builtin
 
     source_id, col_ids = make_registered_source(db, n_columns=1)
     fn_id, _ = _make_function(db, "fn_ordered", [("df", "pd.DataFrame")])

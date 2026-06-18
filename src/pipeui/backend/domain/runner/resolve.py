@@ -39,7 +39,7 @@ TRANSFORMED = "transformed"
 
 # The injected "produce a source's transformed output" runner (DIP). resolve declares
 # the callable signature; the orchestrator (run.py) supplies it — resolve never imports
-# ``pipeui.workflow.run`` (CONTEXT.md → carriers → ``run_transforms`` behavioral port).
+# ``pipeui.backend.domain.runner.run`` (CONTEXT.md → carriers → ``run_transforms`` behavioral port).
 RunTransforms = Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]
 
 

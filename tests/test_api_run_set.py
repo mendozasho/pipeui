@@ -19,8 +19,8 @@ from fastapi.testclient import TestClient
 from pipeui.api.pipelines import router
 from pipeui.backend.data.base.db import get_conn
 from pipeui.backend.data.base.ids import content_hash_id
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
 
 
 # ---------------------------------------------------------------------------

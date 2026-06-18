@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import pipeui.api.function_sets as fs_mod
 from pipeui.backend.data.base.db import create_schema, get_connection
-from pipeui.workflow.functions import scan_functions
+from pipeui.backend.domain.functions.registration import scan_functions
 
 
 @pytest.fixture

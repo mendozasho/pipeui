@@ -28,15 +28,15 @@ import pytest
 from pipeui.backend.data.base.db import create_schema, get_connection
 from pipeui.backend.data.base.ids import content_hash_id, new_id
 from pipeui.backend.data.base.tables import instance_table_name
-from pipeui.workflow.attach import attach_function
-from pipeui.workflow.builtins import (
+from pipeui.backend.domain.functions.attach import attach_function
+from pipeui.backend.domain.runner.builtins import (
     attach_builtin,
     detach_builtin,
     execute_builtin_step,
     get_unified_pipeline,
     patch_builtin,
 )
-from pipeui.workflow.run import run_pipeline
+from pipeui.backend.domain.runner.run import run_pipeline
 from pipeui.backend.data.runner.steps import StepContext
 from tests.conftest import make_registered_source
 
@@ -657,7 +657,7 @@ def _attach_join_to_source(conn, left_id, right_id, *, use_transformed, on=None)
 def test_transformed_join_step_result_carries_consumed_result_id(db):
     """A TRANSFORMED join's run_pipeline step entry carries consumed_result_id equal
     to the result_id resolve_frame returns for the same transformed reference."""
-    from pipeui.workflow.resolve import TRANSFORMED, resolve_frame
+    from pipeui.backend.domain.runner.resolve import TRANSFORMED, resolve_frame
 
     left_id, _ = _make_source(db, "cjl")
     right_id, _ = _make_source(db, "cjr")

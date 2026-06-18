@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.workflow.functions import (
+from pipeui.backend.domain.functions.registration import (
     derive_function_class,
     derive_function_return_type,
     derive_function_type,
@@ -355,7 +355,7 @@ class TestScanFunctions:
                 raise RuntimeError("injected failure for parameter write")
             return real_chid(table_name, *fields)
 
-        monkeypatch.setattr("pipeui.workflow.functions.content_hash_id", failing_content_hash_id)
+        monkeypatch.setattr("pipeui.backend.domain.functions.registration.content_hash_id", failing_content_hash_id)
 
         log = scan_functions(db, [str(tmp_path)])
         # The function should be absent from function_registry
