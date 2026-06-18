@@ -37,8 +37,8 @@ from fastapi.testclient import TestClient
 from pipeui.api.pipelines import router
 from pipeui.backend.data.base.db import get_conn
 from pipeui.backend.data.base.ids import content_hash_id
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +617,7 @@ def test_run_returns_one_runresult_per_bundle(client, db, tmp_path):
 #     future change re-introduced a superseded bypass path, these go red.
 # ---------------------------------------------------------------------------
 
-import pipeui.workflow.executors as _executors_mod  # noqa: E402
+import pipeui.backend.domain.runner.executors as _executors_mod  # noqa: E402
 
 
 class _SpyExecutor:
@@ -649,7 +649,7 @@ def _spy_registry(monkeypatch):
 def test_run_endpoint_routes_through_registry_and_matches_run_pipeline(client, db, tmp_path, monkeypatch):
     """#21[0]: the run endpoint produces the same shape/content as a direct run_pipeline
     call, and dispatches through the STEP_EXECUTORS registry (unified model — no bypass)."""
-    from pipeui.workflow.run import run_pipeline
+    from pipeui.backend.domain.runner.run import run_pipeline
 
     source_id, _ = register_and_ingest(db, tmp_path)
     col_id = db.execute(

@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 from pipeui.api.validations import router
 from pipeui.backend.data.base.db import get_conn
 from pipeui.backend.data.base.ids import content_hash_id
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +396,7 @@ def test_results_export_unknown_function_returns_404(db):
 # the registry, not a bypass path.
 # ---------------------------------------------------------------------------
 
-import pipeui.workflow.executors as _executors_mod  # noqa: E402
+import pipeui.backend.domain.runner.executors as _executors_mod  # noqa: E402
 
 
 class _SpyExecutor:

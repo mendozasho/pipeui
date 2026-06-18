@@ -216,7 +216,7 @@ def test_peek_columns_unsupported_type_returns_422(client):
 def test_peek_header_columns_helper_reads_header_and_drops_blanks(tmp_path):
     """The helper returns only the first row and drops blank/whitespace header cells,
     for both CSV and XLSX — without materializing the rest of the file."""
-    from pipeui.workflow.create import peek_header_columns
+    from pipeui.backend.domain.sources.create import peek_header_columns
 
     csv_path = tmp_path / "h.csv"
     csv_path.write_text("id,amount, ,region\n1,10,x,west\n2,20,y,east\n")

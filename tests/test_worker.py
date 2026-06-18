@@ -1,5 +1,5 @@
 """
-Tests for pipeui.workflow.worker — process-isolated function execution.
+Tests for pipeui.backend.domain.runner.worker — process-isolated function execution.
 
 Guards (CLAUDE_REFERENCE.md §13 behavioral-guarantee pattern):
 - unit:  harness only constructs Arrow IPC payloads from scalar/Series/DataFrame
@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 
 from pipeui.backend.data.base.fails import FailedFunctionEntry
-from pipeui.workflow.worker import (
+from pipeui.backend.domain.runner.worker import (
     _SENTINEL_FRAME,
     _SENTINEL_SCALAR,
     _SENTINEL_SERIES,
@@ -288,7 +288,7 @@ def test_dataframe_happy_path_round_trips():
 
 def test_clean_worker_stderr_strips_setrlimit_noise():
     """#270: the macOS setrlimit warning must be stripped so the real error surfaces."""
-    from pipeui.workflow.worker import _clean_worker_stderr
+    from pipeui.backend.domain.runner.worker import _clean_worker_stderr
     stderr = (
         "[worker] setrlimit failed: current limit exceeds maximum limit\n"
         "Traceback (most recent call last):\n"
@@ -303,6 +303,6 @@ def test_clean_worker_stderr_strips_setrlimit_noise():
 
 def test_clean_worker_stderr_without_noise_unchanged():
     """#270: a failure with no setrlimit line is preserved verbatim (stripped of edges)."""
-    from pipeui.workflow.worker import _clean_worker_stderr
+    from pipeui.backend.domain.runner.worker import _clean_worker_stderr
     s = 'Traceback (most recent call last):\n  ...\nValueError: boom'
     assert _clean_worker_stderr(s) == s

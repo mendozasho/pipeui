@@ -939,7 +939,7 @@ def _make_right_source(conn):
 def test_get_pipeline_returns_builtin_step_with_discriminator(client, db):
     """#209 AC1: GET /pipelines/{source_id} returns a placed built-in step in
     steps[] with step_type='builtin', its builtin_type and builtin_config."""
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.functions.builtins import attach_builtin
 
     source_id, _ = make_registered_source(db, n_columns=1)
     right_id, rcol = _make_right_source(db)
@@ -984,7 +984,7 @@ def test_get_pipeline_function_step_carries_step_type_no_regression(client, db):
 def test_get_pipeline_interleaves_builtin_and_function_by_position(client, db):
     """#209 AC1: function (position 0) and built-in (position 1) come back ordered
     by position with the correct discriminators."""
-    from pipeui.workflow.builtins import attach_builtin
+    from pipeui.backend.domain.functions.builtins import attach_builtin
 
     source_id, _ = make_registered_source(db, n_columns=1)
     fn_id, _ = _make_function(db, "fn_inter", [("df", "pd.DataFrame")])

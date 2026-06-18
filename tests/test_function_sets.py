@@ -6,14 +6,14 @@ import uuid
 
 import pytest
 
-from pipeui.workflow.function_sets import (
+from pipeui.backend.domain.functions.sets import (
     create_function_set,
     delete_function_set,
     get_function_set,
     list_function_sets,
     update_function_set,
 )
-from pipeui.workflow.functions import scan_functions
+from pipeui.backend.domain.functions.registration import scan_functions
 
 
 # ---------------------------------------------------------------------------

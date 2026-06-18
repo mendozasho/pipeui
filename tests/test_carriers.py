@@ -28,8 +28,8 @@ from pipeui.backend.data.base.results import (
     ValidationResultEntry,
     ValidationRunResult,
 )
-from pipeui.workflow.executors import StepExecResult, StepRunEnv
-from pipeui.workflow.resolve import RAW, TRANSFORMED, FrameRef
+from pipeui.backend.domain.runner.executors import StepExecResult, StepRunEnv
+from pipeui.backend.domain.runner.resolve import RAW, TRANSFORMED, FrameRef
 from pipeui.backend.data.runner.steps import (
     BUILTIN,
     FUNCTION,

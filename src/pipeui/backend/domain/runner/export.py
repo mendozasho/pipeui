@@ -30,7 +30,7 @@ from typing import Any
 import duckdb
 
 from pipeui.backend.data.base.results import normalize_label
-from pipeui.workflow.run import get_staging_rows
+from pipeui.backend.domain.runner.run import get_staging_rows
 
 
 # Columns surfaced in the transposed results report, in order. Every RunResult row

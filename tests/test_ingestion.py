@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import get_source_detail, get_source_rows, ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import get_source_detail, get_source_rows, ingest_source
 from pipeui.backend.data.base.tables import instance_table_name
 from tests.conftest import make_quirky_file
 

@@ -17,8 +17,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pipeui.api.pipelines import router, get_conn
-from pipeui.workflow.create import create_source
-from pipeui.workflow.ingestion import ingest_source
+from pipeui.backend.domain.sources.create import create_source
+from pipeui.backend.domain.sources.ingestion import ingest_source
 from pipeui.backend.data.runner.staging import staging_prefix, write_staging_table
 
 
@@ -183,7 +183,7 @@ def test_transformed_export_does_not_fail_for_validation_only_mixed_set(client, 
 # execution model and its response shape is preserved.
 # ---------------------------------------------------------------------------
 
-import pipeui.workflow.executors as _executors_mod  # noqa: E402
+import pipeui.backend.domain.runner.executors as _executors_mod  # noqa: E402
 
 
 class _SpyExecutor:
