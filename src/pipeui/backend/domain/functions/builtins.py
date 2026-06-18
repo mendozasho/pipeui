@@ -42,6 +42,33 @@ from pipeui.backend.data.runner.steps import BuiltinStepContext
 from pipeui.backend.data.runner.step_loader import get_builtin_steps  # noqa: F401
 
 # ---------------------------------------------------------------------------
+# Catalog read
+# ---------------------------------------------------------------------------
+
+def list_builtin_catalog(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Return the built-in step catalog from builtin_registry, ordered by type.
+
+    Each entry: ``{builtin_id, builtin_type, display_name, description, config_schema}``
+    with config_schema parsed from its stored JSON. The read+parse the API seam used to
+    do inline (DIP fix — §14): GET /builtins now delegates here.
+    """
+    rows = conn.execute(
+        "SELECT builtin_id, builtin_type, display_name, description, config_schema "
+        "FROM builtin_registry ORDER BY builtin_type"
+    ).fetchall()
+    return [
+        {
+            "builtin_id": str(builtin_id),
+            "builtin_type": builtin_type,
+            "display_name": display_name,
+            "description": description,
+            "config_schema": json.loads(config_schema) if isinstance(config_schema, str) else config_schema,
+        }
+        for builtin_id, builtin_type, display_name, description, config_schema in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
 

@@ -52,7 +52,7 @@ backend/
     runner/                 # step carriers, bundles, staging store, step loading
   domain/                   # orchestration; owns transactions; called by middleware
     base/                   # shared domain helpers (as they emerge)
-    sources/                # create, ingestion, migration
+    sources/                # create, ingestion (write-path), read, migration
     functions/              # classification, discovery, registration, function_read, sets, attach
     runner/                 # run orchestration, executors, resolve, builtins, worker, export
 ```
@@ -166,7 +166,9 @@ rewrites + green suite). All slices landed:
 per-module splits the migration deliberately deferred: `executors.py` (#45, ✅ done), `attach.py`
 (#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into `classification` (DB-free
 leaf), `discovery`, `registration` (transaction owner), and `function_read`), the api-DIP cleanup
-(#48, ← active front),
-and `db.py`/`helpers.py` (#49, which also resolves the pre-existing `backend/data/base/db.py` →
-`app/config.py` `DB_PATH` up-import). The re-homed tree is the precondition; those splits happen
-**inside it**.
+(#48, ✅ done — the middleware seam ran raw SQL; reads/guards pushed down into `backend`, the
+source read-path extracted from `ingestion.py` into `backend/domain/sources/read.py`, and a
+guard test locks the seam SQL-free),
+and `db.py`/`helpers.py` (#49, ← active front, which also resolves the pre-existing
+`backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). The re-homed tree is the
+precondition; those splits happen **inside it**.

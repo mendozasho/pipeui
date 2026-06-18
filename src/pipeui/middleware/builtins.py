@@ -8,7 +8,6 @@ GET    /sources/{source_id}/pipeline                  — unified pipeline (func
 """
 from __future__ import annotations
 
-import json
 import uuid
 
 import duckdb
@@ -21,6 +20,7 @@ from pipeui.backend.domain.functions.builtins import (
     attach_builtin,
     detach_builtin,
     get_unified_pipeline,
+    list_builtin_catalog,
     patch_builtin,
 )
 
@@ -34,20 +34,8 @@ catalog_router = APIRouter(tags=["builtins"])
 
 @catalog_router.get("/builtins")
 def list_builtins(conn: duckdb.DuckDBPyConnection = Depends(get_conn)):
-    """Return all rows from builtin_registry."""
-    rows = conn.execute(
-        "SELECT builtin_id, builtin_type, display_name, description, config_schema FROM builtin_registry ORDER BY builtin_type"
-    ).fetchall()
-    result = []
-    for builtin_id, builtin_type, display_name, description, config_schema in rows:
-        result.append({
-            "builtin_id": str(builtin_id),
-            "builtin_type": builtin_type,
-            "display_name": display_name,
-            "description": description,
-            "config_schema": json.loads(config_schema) if isinstance(config_schema, str) else config_schema,
-        })
-    return result
+    """Return the built-in step catalog (delegates to the workflow contract)."""
+    return list_builtin_catalog(conn)
 
 
 def _parse_source_id(source_id: str) -> uuid.UUID:
