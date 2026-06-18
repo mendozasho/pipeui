@@ -13,8 +13,9 @@ from pipeui.middleware.settings import router as settings_router
 from pipeui.middleware.sources import router as sources_router
 from pipeui.middleware.validations import router as validations_router
 
-# frontend/ is bundled as package data inside the pipeui package directory
-FRONTEND_DIR = Path(__file__).parent / "frontend"
+# frontend/ is bundled as package data at the pipeui package root; this module now
+# lives one level down in app/, so walk up to the package dir to find it.
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
 app = FastAPI(title="PipeUI")
 app.include_router(settings_router)
@@ -33,4 +34,4 @@ if FRONTEND_DIR.exists():
 
 def run():
     import uvicorn  # lazy: heavy server dependency, only needed when the server actually starts
-    uvicorn.run("pipeui.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("pipeui.app.main:app", host="127.0.0.1", port=8000, reload=True)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import duckdb
 
-from pipeui.config import DB_PATH
+from pipeui.app.config import DB_PATH
 from pipeui.backend.data.base.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
 from pipeui.backend.data.base.schema.queries import DDL as _DDL, SEED_BUILTINS as _SEED_BUILTINS
 
