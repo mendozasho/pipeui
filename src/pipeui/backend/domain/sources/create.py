@@ -300,7 +300,11 @@ def update_source(
         failed.add(existing, "content_hash_id collision")
         return None, failed
 
-    set_fields: dict[str, object] = {k: v for k, v in updates.items()}
+    # §3 discipline: write the values from the validated SourceRegistryUpdate carrier
+    # (the recompute-on-edit source of truth), not the raw `updates` kwargs — so any
+    # normalization the carrier applies is what lands in the row, alongside the
+    # recomputed content_hash_id. Only the caller-changed columns are written.
+    set_fields: dict[str, object] = {k: getattr(update, k) for k in updates}
     set_fields["content_hash_id"] = update.content_hash_id
     set_clause = ", ".join(f"{k} = ?" for k in set_fields)
     values = list(set_fields.values()) + [source_id]

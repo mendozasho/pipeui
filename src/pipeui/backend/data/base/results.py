@@ -116,6 +116,10 @@ class ValidationRunResult(RunResult):
 
     rows_passed: Optional[int] = None
     rows_failed: Optional[int] = None
+    # #53: kept as `list` (not tightened to `tuple`) — it is written once and never
+    # mutated, and `to_dict` serializes it to a wire ARRAY (the API contract + tests
+    # treat it as a list). Tightening would need a __post_init__ converter on this
+    # frozen carrier purely for a marginal gain. Revisit only if a mutation site appears.
     failing_rows: list[dict] = field(default_factory=list)
 
     @property

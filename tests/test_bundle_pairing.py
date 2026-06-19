@@ -96,8 +96,8 @@ def test_varying_label_lists_only_varying_columns_for_that_bundle():
         _param("p1", ["a1", "a2"]),
         _param("p3", ["k"]),  # static
     ])
-    assert bundles[0].varying_columns == ["a1"]
-    assert bundles[1].varying_columns == ["a2"]
+    assert bundles[0].varying_columns == ("a1",)  # tuple — frozen carrier payload (#53)
+    assert bundles[1].varying_columns == ("a2",)
 
 
 # ---------------------------------------------------------------------------

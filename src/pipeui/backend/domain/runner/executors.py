@@ -10,8 +10,9 @@ type branching that used to live in ``run_pipeline``'s loop.
 This module owns the execution mechanics (``_execute_transform_step``,
 ``_execute_validation_step``, the ``RunResult`` builders) — they were previously in
 ``run.py`` and imported back here inside the executors, which formed the
-``run ⇄ executors`` cycle. They now live here (L3) and ``run.py`` (L4) imports nothing
-back; ``run.py`` re-exports the few symbols external tests still import by path.
+``run ⇄ executors`` cycle. They now live here (L3) and ``run.py`` (L4) imports them from
+here (one-way, no back-import); external tests import these symbols directly from
+``executors`` by path.
 
 Three single-responsibility slices the registry depends **down** on were split out
 (#45): ``param_resolve`` (scalar-kwarg resolution), ``sql_exec`` (SQL-function

@@ -103,12 +103,33 @@ def list_function_sets(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
 
 def _set_summary(conn: duckdb.DuckDBPyConnection, set_id: str) -> dict:
-    """Return a single set summary by set_id (used after create)."""
-    rows = list_function_sets(conn)
-    for r in rows:
-        if r["set_id"] == set_id:
-            return r
-    return {"set_id": set_id}
+    """Return a single set summary by set_id (used after create).
+
+    Targeted single-row query — the same projection as ``list_function_sets`` filtered
+    to one set, rather than listing every set and scanning for the match.
+    """
+    row = conn.execute("""
+        SELECT
+            fs.set_id,
+            fs.set_name,
+            fs.set_description,
+            COUNT(fsm.function_id)                                          AS member_count,
+            COALESCE(BOOL_OR(fr.is_active = false), false)                  AS has_inactive
+        FROM function_set fs
+        LEFT JOIN function_set_map fsm ON fs.set_id = fsm.set_id
+        LEFT JOIN function_registry fr ON fsm.function_id = fr.function_id
+        WHERE fs.set_id = ?
+        GROUP BY fs.set_id, fs.set_name, fs.set_description
+    """, [set_id]).fetchone()
+    if row is None:
+        return {"set_id": set_id}
+    return {
+        "set_id": str(row[0]),
+        "set_name": row[1],
+        "set_description": row[2],
+        "member_count": row[3],
+        "has_inactive": bool(row[4]),
+    }
 
 
 def get_function_set(conn: duckdb.DuckDBPyConnection, set_id: str) -> dict | None:

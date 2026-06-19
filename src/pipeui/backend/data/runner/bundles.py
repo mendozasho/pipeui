@@ -19,7 +19,9 @@ Model (CONTEXT.md → argument bundle / static param / multi_select_eligible):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 
 class BundleLengthError(ValueError):
@@ -36,12 +38,15 @@ class ArgumentBundle:
 
     ``columns`` maps ``param_id`` -> the bound column for this bundle (a varying param's
     ``i``-th column, or a static param's single broadcast column). ``varying_columns`` is
-    the ordered list of columns contributed by *varying* params only — it drives the
+    the ordered tuple of columns contributed by *varying* params only — it drives the
     result label, so a card reads as the column that actually varies across bundles.
+
+    The payloads are immutable (a read-only ``Mapping`` + a ``tuple``) so a ``frozen``
+    bundle is frozen all the way down — consumers only read them (#53).
     """
 
-    columns: dict[str, object] = field(default_factory=dict)
-    varying_columns: list[object] = field(default_factory=list)
+    columns: Mapping[str, object] = MappingProxyType({})
+    varying_columns: tuple[object, ...] = ()
 
 
 def pair_bundles(params: list[dict]) -> list[ArgumentBundle]:
@@ -89,6 +94,10 @@ def pair_bundles(params: list[dict]) -> list[ArgumentBundle]:
             varying_cols.append(col)
         for p in static:
             columns[p["param_id"]] = p["columns"][0]
-        bundles.append(ArgumentBundle(columns=columns, varying_columns=varying_cols))
+        # Freeze the payloads as the locals are built once and never mutated after.
+        bundles.append(ArgumentBundle(
+            columns=MappingProxyType(columns),
+            varying_columns=tuple(varying_cols),
+        ))
 
     return bundles
