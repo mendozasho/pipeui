@@ -51,11 +51,21 @@ _TYPE_DESCRIPTORS: tuple[TypeDescriptor, ...] = (
     TypeDescriptor("pd.DataFrame",    3, "pd.dataframe", "pd.DataFrame",    False),
 )
 
+def _derive_lookups(
+    descriptors: tuple[TypeDescriptor, ...],
+) -> tuple[dict[str, TypeDescriptor], frozenset[str]]:
+    """Build the two lookups from the descriptor table — the ONLY place they are
+    derived. Reused at module load and by tests so a row added to ``_TYPE_DESCRIPTORS``
+    provably propagates to every consumer (OCP, #51) through this one function."""
+    by_type = {d.type_str: d for d in descriptors}
+    validation_return_types = frozenset(
+        d.return_type for d in descriptors if d.is_validation_return
+    )
+    return by_type, validation_return_types
+
+
 # Lookups derived from the single table — never maintained independently.
-_BY_TYPE: dict[str, TypeDescriptor] = {d.type_str: d for d in _TYPE_DESCRIPTORS}
-_VALIDATION_RETURN_TYPES: frozenset[str] = frozenset(
-    d.return_type for d in _TYPE_DESCRIPTORS if d.is_validation_return
-)
+_BY_TYPE, _VALIDATION_RETURN_TYPES = _derive_lookups(_TYPE_DESCRIPTORS)
 
 
 def _annotation_to_str(annotation: Any) -> str | None:
