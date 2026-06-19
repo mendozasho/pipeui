@@ -45,7 +45,7 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   `backend/{data,domain}/` + `app/`. All 5 slices + the `builtins → functions/` relocation
   landed, each behavior-preserving + hostile-audited; `validation/`, `workflow/`,
   `sql_user_table/`, top-level `schema/`, and `api/` dissolved.
-- **SRP decomposition — epic #43** *(← active front).* The per-module splits deferred during
+- **SRP decomposition — epic #43** *(✅ complete).* The per-module splits deferred during
   the migration, done **inside** the re-homed tree: **#45** split `executors.py` *(✅ done)* →
   **#46** `attach.py` *(✅ done)* → **#47** `registration.py` *(✅ done — split into
   `classification.py` (DB-free leaf) + `discovery.py` + `registration.py` (transaction owner) +
@@ -53,9 +53,14 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   DIP/layer-boundary leak; reads/guards pushed down into `backend`, the source read-path
   extracted from `ingestion.py` into `backend/domain/sources/read.py`, and
   `test_source_read.py::test_middleware_seam_has_no_raw_sql` locks the seam SQL-free)* →
-  **#49** `db.py`/`helpers.py` (also resolves the `backend/data/base/db.py` →
-  `app/config.py` `DB_PATH` up-import). Wave 1 (#44, typed result carriers) already landed;
-  **#49 is next.**
+  **#49** `db.py`/`helpers.py` *(✅ done — `db.py` reduced to connection + registry-schema
+  lifecycle, with type-inference extracted to `backend/data/sources/inference.py` and the
+  `get_conn` provider moved to `middleware/deps.py`; `app/helpers.py` dissolved — settings I/O
+  folded into `app/config.py`, `infer_pattern` moved to `backend/domain/sources/create.py`; the
+  `backend/data/base/db.py → app/config.py` `DB_PATH` up-import is gone, locked by
+  `test_db_layering.py`)*. Wave 1 (#44, typed result carriers) already landed. With #49 done,
+  **epic #43 is complete.** Next architecture front: see the F3 deferred items below and
+  `ARCHITECTURE.md §7`.
 
 ---
 

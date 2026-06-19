@@ -167,7 +167,7 @@ or inject it). This table is the canonical "where does new code go" map.
 | --- | --- | --- |
 | **`backend/data/base/`** — shared foundation, pulled by every feature | | |
 | `ids.py` | **Id derivation** — random surrogate `new_id` + by-content `content_hash_id` (UUID5 over a per-table namespace). Zero `pipeui` imports. | a new id scheme or table namespace. |
-| `db.py` | **Connection + schema lifecycle** — open a DuckDB connection, create/migrate the schema, resolve the db path. | a connection or DDL-bootstrap concern. ⚠ *currently also holds CSV/xlsx type-inference and the FastAPI `get_conn` provider — an SRP overlap slated to split out (#49).* |
+| `db.py` | **Connection + schema lifecycle** — open a DuckDB connection (`get_connection`), create/migrate the registry schema (`create_schema`/`_run_migrations`), resolve the db path (`get_db_path`). Imports neither `app` nor FastAPI; emits no stdout. | a connection or DDL-bootstrap concern. |
 | `schema/` | **DDL + type maps + seeds** — `constants.py` (`IngestionMethod`, DuckDB↔Python type maps), `queries.py` (table DDL, builtin seeds). | a schema table, a type-map entry, or a seed. |
 | `tables.py` | **Instance-table DDL builder** — pure `instance_table_name` + `build_create_table_sql`; no DB, no registry. | how a per-source instance table is named or created. |
 | `results.py` *(L0)* | **Result identity/data** — `RunResult`/`ValidationRunResult` + the `StepResultEntry` variant carriers; the single source of truth for result data. | a new result field/shape or result-kind variant (never an ad-hoc dict). |
@@ -176,6 +176,7 @@ or inject it). This table is the canonical "where does new code go" map.
 | **`backend/data/sources/`** — source feature data | | |
 | `registry.py` | **Source registry write-contract** — `SourceRegistry{Entry,Update}`: validates a `source_registry` row and recomputes `content_hash_id`; holds no DB handle, reads no other rows. | a `source_registry` field or write-rule. |
 | `columns.py` | **Column registry write-contract** — `ColumnRegistry{Entry,Update}`. | a `column_registry` field or write-rule. |
+| `inference.py` | **CSV/xlsx column type-inference** — `infer_column_types` (DuckDB DESCRIBE-sniff a file into normalized `(name, type)` pairs, `VARCHAR` fallback) + `map_pandas_dtype` (the xlsx pandas-fallback). No DB writes, no stdout; consumed by `domain/sources/create.py`. | a file type-inference or sniff-normalization rule. |
 | **`backend/data/functions/`** — function feature data | | |
 | `sets.py` | **Function-set registry write-contract** — `FunctionSet{Entry,Update}`. | a `function_set` field or write-rule. |
 | **`backend/data/runner/`** — runner feature data | | |
@@ -184,7 +185,7 @@ or inject it). This table is the canonical "where does new code go" map.
 | `staging.py` *(L1)* | **Staging store** — write/read/drop a source's transformed-output staging tables. | anything about how transformed output is stored. |
 | `step_loader.py` *(L1)* | **Step loading** — read the map tables into a source's ordered step list (`fetch_steps`, `get_builtin_steps`). Pure read. | a new step source or ordering rule. |
 | **`backend/domain/sources/`** — source lifecycle (orchestration; owns transactions) | | |
-| `create.py` | **Source creation** — the create-flow cache (`_stage_create_flow`), type/PK confirmation, and the atomic `source_registry` + `column_registry` + `source_column_map` write. | a source-creation step or create-flow staging concern. |
+| `create.py` | **Source creation** — the create-flow cache (`_stage_create_flow`), type/PK confirmation, and the atomic `source_registry` + `column_registry` + `source_column_map` write. Also owns the sources utils `infer_pattern` (filename → regex pattern) and `find_source_by_pattern`. | a source-creation step or create-flow staging concern. |
 | `ingestion.py` | **Source ingestion (write-path)** — load a file → `TRY_CAST` type-validate → duplicate-handle → write clean rows to the instance table (`ingest_source` + the schema-diff helpers). | an ingest-phase / write concern. |
 | `read.py` | **Source read-path** — pure registry reads + row preview, no transaction: `list_source_summaries` (all sources + columns + exact row_count in 2 base queries — no N+1), `get_source_summary` (one source, no row_count — the register/ingest-match echo), `get_source_columns` (join-modal picker), `source_exists` / `check_column_ownership` (existence/ownership guards returning a structured `"source_missing"\|"column_missing"\|"not_owned"\|"ok"` status the route maps to a 404), and `get_source_detail` / `get_source_rows` (per-source detail + row preview). | a source read / preview / existence-guard concern. |
 | `migration.py` | **Column-type migration** — recreate-and-copy + `TRY_CAST` pre-check + atomic swap when a column's type changes, via `ColumnRegistryUpdate`. | a column-type-migration rule. |
@@ -209,11 +210,11 @@ or inject it). This table is the canonical "where does new code go" map.
 | `run.py` *(L4)* | **Run orchestration** — drive a source's whole run end-to-end (load → resolve → execute via the registry → stage → collect); cross-source runners. Injects `run_pipeline` into `resolve`. | a new run phase, run-type, or cross-source entry point. |
 | `export.py` | **Run export** — produce the exportable `results report` / `transformed report` from a run's output. | a new export format or report shape. |
 | **`middleware/`** — the API seam (HTTP routes; calls `backend` only) | | |
+| `deps.py` | **Shared FastAPI dependencies** — `get_conn`, the request-scoped DuckDB connection provider that wires `app.config.DB_PATH` to the data-layer `get_connection` + `create_schema`. Lives here (not the data layer) so the connection↔app composition stays above the backend, keeping the data layer app-free (#49). | a new request-scoped dependency or connection-wiring concern. |
 | `sources` `functions` `function_sets` `pipelines` `validations` `builtins` `settings` `.py` | **API routes** — one router module per resource: validate/parse the request, delegate to a `backend` function, shape the JSON response. No business logic of its own — no `conn.execute` in the seam (reads/guards live in `backend`; guarded by `test_source_read.py::test_middleware_seam_has_no_raw_sql`). | a new endpoint or request/response shape for that resource. |
 | **`app/`** — composition root (wires the layers; owned by no feature) | | |
 | `main.py` | **App wiring** — build the FastAPI `app`, mount the routers + the `frontend/` static dir. | a new router include or app-level mount/middleware. |
-| `config.py` | **Startup config** — the process-frozen `DB_PATH` (read once at import). | an app-level startup constant. |
-| `helpers.py` | **App utilities** — settings-file I/O (`load_settings`/`save_settings`) + `infer_pattern`. *(Junk-drawer; split slated — #49.)* | (prefer a feature module; this is being dissolved.) |
+| `config.py` | **Startup config + settings I/O** — owns `pipeui.config.json`: `load_settings`/`save_settings`/`CONFIG_PATH` plus the process-frozen `DB_PATH` (read once at import). | an app-level startup constant or a settings-file read/write concern. |
 | `cli.py` | **CLI entry** — `pipeui <init\|start>` (scaffold config/db; launch uvicorn). | a new CLI subcommand. |
 
 Dependency direction: `base/*` (ids, schema, tables, settings, fails, results) underlies everything;

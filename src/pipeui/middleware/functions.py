@@ -8,8 +8,8 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from pipeui.backend.data.base.db import get_conn
-from pipeui.app.helpers import load_settings
+from pipeui.middleware.deps import get_conn
+from pipeui.app.config import load_settings
 from pipeui.backend.domain.functions.registration import scan_functions
 from pipeui.backend.domain.functions.function_read import get_function, list_functions
 

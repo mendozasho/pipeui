@@ -36,7 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pipeui.middleware.pipelines import router
-from pipeui.backend.data.base.db import get_conn
+from pipeui.middleware.deps import get_conn
 from tests.conftest import make_registered_source
 
 
