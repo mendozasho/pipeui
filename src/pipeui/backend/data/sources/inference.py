@@ -10,12 +10,11 @@ stdout — the xlsx fallback is a silent, designed degradation, not an error.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import duckdb
 
-from pipeui.backend.data.base.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
+from pipeui.backend.data.base.schema.constants import PYTHON_TO_DUCKDB, normalize_column_type
 
 
 def infer_column_types(
@@ -53,10 +52,8 @@ def infer_column_types(
     result = []
     for row in rows:
         col_name = row[0]
-        raw_type = row[1].upper() if row[1] else ""
-        # Normalize parameterized types like VARCHAR(100) or DECIMAL(18,3) → base name
-        base_type = re.split(r"[\s(]", raw_type)[0]
-        col_type = base_type if base_type in DUCKDB_TO_PYTHON else "VARCHAR"
+        # Known DuckDB type, else VARCHAR — strips parameterization (#52).
+        col_type = normalize_column_type(row[1])
         result.append((col_name, col_type))
     return result
 
