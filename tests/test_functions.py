@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from pipeui.backend.domain.functions import classification
 from pipeui.backend.domain.functions.classification import (
     derive_function_class,
     derive_function_return_type,
@@ -137,6 +138,99 @@ class TestDeriveFunctionType:
     @pytest.mark.unit
     def test_pd_dataframe_return_is_transform(self):
         assert derive_function_type("pd.DataFrame") == "transform"
+
+
+class TestSingleTypeDescriptorTable:
+    """#51 (OCP): classification reads from ONE ordered type-descriptor table, so
+    adding a supported type is a single ``_TYPE_DESCRIPTORS`` entry — no edits
+    scattered across separate maps."""
+
+    @pytest.mark.unit
+    def test_legacy_multi_maps_removed(self):
+        """The four coupled literal maps the table replaced no longer exist — a
+        guard against regressing to multi-map maintenance."""
+        for legacy in ("_PARAM_GRANULARITY", "_GRANULARITY_TO_CLASS",
+                       "_RETURN_TYPE_MAP", "_VALIDATION_RETURNS"):
+            assert not hasattr(classification, legacy), (
+                f"{legacy} should be gone — classification has one source of truth"
+            )
+
+    @pytest.mark.unit
+    def test_derived_lookups_come_from_the_table(self):
+        """``_BY_TYPE`` and ``_VALIDATION_RETURN_TYPES`` are produced by the module's
+        own ``_derive_lookups`` from the table — proving the live lookups were built
+        that one way and are not independently authored."""
+        expected_by_type, expected_validation = classification._derive_lookups(
+            classification._TYPE_DESCRIPTORS
+        )
+        assert classification._BY_TYPE == expected_by_type
+        assert classification._VALIDATION_RETURN_TYPES == expected_validation
+
+    # Independent source of truth for which return-type vocabulary values are
+    # validations (CONTEXT.md §11) — deliberately hardcoded here, NOT read from the
+    # table, so a flipped ``is_validation_return`` flag in the table is caught rather
+    # than silently agreed with.
+    _KNOWN_VALIDATION_RETURNS = {"boolean", "pd.Series[bool]"}
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("descriptor", classification._TYPE_DESCRIPTORS,
+                             ids=lambda d: d.type_str)
+    def test_every_descriptor_routes_through_all_derivations(self, descriptor):
+        """Each row drives all five public derivations/gates — proof the functions
+        share the single table, so one new row wires every consumer at once. The
+        function_type leg checks against an independent validation-return set, not
+        the descriptor's own flag, so a mislabeled row fails here."""
+        assert classification._is_known_param_type(descriptor.type_str)
+        assert classification._is_known_return_type(descriptor.type_str)
+        assert derive_function_class([descriptor.type_str]) == descriptor.function_class
+        assert derive_function_return_type(descriptor.type_str) == descriptor.return_type
+        # The table's flag must match the documented vocabulary (catches a flipped flag)...
+        assert descriptor.is_validation_return == (
+            descriptor.return_type in self._KNOWN_VALIDATION_RETURNS
+        )
+        # ...and the derivation must agree with that same independent set.
+        expected_fn_type = (
+            "validation" if descriptor.return_type in self._KNOWN_VALIDATION_RETURNS
+            else "transform"
+        )
+        assert derive_function_type(descriptor.return_type) == expected_fn_type
+
+    @pytest.mark.unit
+    def test_one_new_row_wires_every_consumer(self, monkeypatch):
+        """The headline OCP guarantee: adding ONE row to ``_TYPE_DESCRIPTORS`` — and
+        rebuilding via the module's OWN ``_derive_lookups`` (not a re-implementation
+        in the test) — makes every gate and derivation recognize the new type. No
+        second edit site."""
+        new = classification.TypeDescriptor(
+            "decimal", 0, "scalar", "scalar", is_validation_return=False
+        )
+        extended = classification._TYPE_DESCRIPTORS + (new,)
+        by_type, validation_returns = classification._derive_lookups(extended)
+        # The ONLY authored edit is the new table row; the lookups are the module's
+        # own derivation of it.
+        monkeypatch.setattr(classification, "_TYPE_DESCRIPTORS", extended)
+        monkeypatch.setattr(classification, "_BY_TYPE", by_type)
+        monkeypatch.setattr(classification, "_VALIDATION_RETURN_TYPES", validation_returns)
+        assert classification._is_known_param_type("decimal")
+        assert classification._is_known_return_type("decimal")
+        assert derive_function_class(["decimal"]) == "scalar"
+        assert derive_function_return_type("decimal") == "scalar"
+        assert derive_function_type("scalar") == "transform"
+
+    @pytest.mark.unit
+    def test_a_validation_row_added_routes_to_validation(self, monkeypatch):
+        """Complement to the scalar case: a new row whose return_type is a validation
+        vocabulary value is derived as a validation through the same one edit site."""
+        new = classification.TypeDescriptor(
+            "pd.Series[int]", 2, "pd.Series", "pd.Series[bool]", is_validation_return=True
+        )
+        extended = classification._TYPE_DESCRIPTORS + (new,)
+        by_type, validation_returns = classification._derive_lookups(extended)
+        monkeypatch.setattr(classification, "_TYPE_DESCRIPTORS", extended)
+        monkeypatch.setattr(classification, "_BY_TYPE", by_type)
+        monkeypatch.setattr(classification, "_VALIDATION_RETURN_TYPES", validation_returns)
+        assert derive_function_return_type("pd.Series[int]") == "pd.Series[bool]"
+        assert derive_function_type("pd.Series[bool]") == "validation"
 
 
 class TestInspectFunction:
