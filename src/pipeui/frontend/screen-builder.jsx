@@ -764,7 +764,20 @@ function builtinConfigSummary(step, sources) {
     const nKeys = Array.isArray(cfg.on) ? cfg.on.length : 0;
     return `Join · ${rightName} · ${joinType} · ${nKeys} ${nKeys === 1 ? "key" : "keys"}`;
   }
-  // Generic fallback for other built-in types (only join is wired end-to-end).
+  if (step.builtin_type === "filter") {
+    const col = cfg.column || "?";
+    const op = cfg.operator || "?";
+    const NULLARY = { is_null: "is null", is_not_null: "is not null" };
+    if (NULLARY[op]) return `Filter · ${col} ${NULLARY[op]}`;
+    const SYM = {
+      eq: "=", neq: "≠", gt: ">", gte: "≥", lt: "<", lte: "≤",
+      contains: "contains", not_contains: "not contains",
+    };
+    const opStr = SYM[op] || op;
+    const val = cfg.value != null ? String(cfg.value) : "";
+    return `Filter · ${col} ${opStr} ${val}`.trim();
+  }
+  // Generic fallback for other built-in types (only join + filter are wired).
   const label = step.builtin_type ? step.builtin_type.charAt(0).toUpperCase() + step.builtin_type.slice(1) : "Step";
   return label;
 }
@@ -797,7 +810,7 @@ function BuiltinStepCard({ step, sourceId, order, sources, onRemoved, onEdit }) 
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <OrderBadge n={order} />
         <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {step.builtin_type === "join" ? "Join" : (step.builtin_type || "Built-in")}
+          {step.builtin_type ? (step.builtin_type.charAt(0).toUpperCase() + step.builtin_type.slice(1)) : "Built-in"}
         </span>
         <span style={{
           fontSize: 9, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase",
@@ -1875,6 +1888,153 @@ function JoinModal({ open, onClose, currentSource, sources, fetchRightColumns, o
 }
 
 // ---------------------------------------------------------------------------
+// FilterModal — configure a built-in filter step: keep rows where a column
+// matches a predicate. Single step (column + condition + value); mirrors the
+// JoinModal create/edit contract (open / onClose / onSubmit / initialConfig).
+// Operators mirror the backend (_FILTER_COMPARISONS + contains/not_contains are
+// binary; is_null/is_not_null take no value). #40 prep / filter end-to-end.
+// ---------------------------------------------------------------------------
+
+// Operator options: value + label + whether a comparison value is required.
+const FILTER_OPERATORS = [
+  { value: "eq", label: "= (equals)", needsValue: true },
+  { value: "neq", label: "≠ (not equals)", needsValue: true },
+  { value: "gt", label: "> (greater than)", needsValue: true },
+  { value: "gte", label: "≥ (at least)", needsValue: true },
+  { value: "lt", label: "< (less than)", needsValue: true },
+  { value: "lte", label: "≤ (at most)", needsValue: true },
+  { value: "contains", label: "contains", needsValue: true },
+  { value: "not_contains", label: "does not contain", needsValue: true },
+  { value: "is_null", label: "is null", needsValue: false },
+  { value: "is_not_null", label: "is not null", needsValue: false },
+];
+
+function filterOperatorNeedsValue(op) {
+  const found = FILTER_OPERATORS.find(o => o.value === op);
+  return found ? found.needsValue : true;
+}
+
+const _filterFieldStyle = {
+  fontSize: 13, padding: "5px 8px", borderRadius: "var(--radius)",
+  border: "1px solid var(--border)", background: "var(--panel-2)",
+  color: "var(--text)", width: "100%", boxSizing: "border-box",
+};
+
+function FilterModal({ open, onClose, currentSource, onSubmit, initialConfig }) {
+  const { Modal, Btn } = window.__UI__;
+  const [column, setColumn] = useState("");
+  const [operator, setOperator] = useState("eq");
+  const [value, setValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const isEdit = !!initialConfig;
+
+  // Reset on open. Edit mode seeds from the saved config so the placed step
+  // round-trips (Principle 7); a nullary operator (is_null) leaves value blank.
+  useEffect(() => {
+    if (!open) return;
+    if (initialConfig) {
+      setColumn(initialConfig.column || "");
+      setOperator(initialConfig.operator || "eq");
+      setValue(initialConfig.value != null ? String(initialConfig.value) : "");
+    } else {
+      setColumn("");
+      setOperator("eq");
+      setValue("");
+    }
+    setSubmitting(false);
+    setSubmitError(null);
+  }, [open, initialConfig]);
+
+  const columns = (currentSource && currentSource.columns) || [];
+  const needsValue = filterOperatorNeedsValue(operator);
+  const canSubmit = !!column && !!operator && (!needsValue || value.trim() !== "");
+
+  function submit() {
+    if (!canSubmit || submitting) return;
+    // Nullary operators (is_null / is_not_null) carry no value — match the backend
+    // shape which rejects a value-less binary op and ignores value for nullary ops.
+    const config = needsValue ? { column, operator, value } : { column, operator };
+    setSubmitting(true);
+    setSubmitError(null);
+    Promise.resolve(onSubmit(config))
+      .then(res => {
+        setSubmitting(false);
+        if (res && res.ok === false) { setSubmitError(res.detail || "Could not add filter step."); return; }
+        onClose && onClose();
+      })
+      .catch(e => { setSubmitting(false); setSubmitError(String(e && e.message ? e.message : e)); });
+  }
+
+  const footer = (
+    <>
+      <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+      <Btn variant="primary" onClick={submit} disabled={!canSubmit || submitting}>
+        {isEdit ? "Save filter" : "Add step"}
+      </Btn>
+    </>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEdit ? "Edit filter" : "Add filter"} width={420} footer={footer}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--text-2)" }}>Column</span>
+          <select
+            data-testid="filter-column"
+            value={column}
+            onChange={e => setColumn(e.target.value)}
+            style={{ ..._filterFieldStyle, cursor: "pointer" }}
+          >
+            <option value="">Select a column…</option>
+            {columns.map(c => (
+              <option key={c.column_id || c.column_name} value={c.column_name}>{c.column_name}</option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--text-2)" }}>Condition</span>
+          <select
+            data-testid="filter-operator"
+            value={operator}
+            onChange={e => setOperator(e.target.value)}
+            style={{ ..._filterFieldStyle, cursor: "pointer" }}
+          >
+            {FILTER_OPERATORS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+
+        {needsValue && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, color: "var(--text-2)" }}>Value</span>
+            <input
+              data-testid="filter-value"
+              type="text"
+              placeholder="Value to compare"
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              style={_filterFieldStyle}
+            />
+          </label>
+        )}
+
+        <div style={{ fontSize: 12, color: "var(--text-4)" }}>
+          Keeps rows where <strong>{column || "the column"}</strong>{" "}
+          {needsValue ? "matches the condition" : operator.replace("_", " ")}.
+        </div>
+
+        {submitError && (
+          <div style={{ fontSize: 12, color: "var(--bad)" }}>{submitError}</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Side panel
 // ---------------------------------------------------------------------------
 
@@ -1894,6 +2054,8 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
   // Join built-in modal
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [joinSources, setJoinSources] = useState([]);
+  // Filter built-in modal (open from a filter-card drop or a placed filter edit)
+  const [filterModalOpen, setFilterModalOpen] = useState(false);
   // Edit a placed built-in step (#209): holds the step being edited, or null. When
   // set, the join modal opens seeded from its builtin_config and saves via PATCH.
   const [editingBuiltin, setEditingBuiltin] = useState(null);
@@ -1979,15 +2141,53 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       });
   }
 
-  // Open the join modal seeded from a placed built-in step's config (#209 edit).
+  // Attach (POST) or edit (PATCH) a filter built-in step. Mirrors submitJoinStep
+  // with builtin_type="filter"; on success re-fetches the pipeline so the card updates.
+  function submitFilterStep(builtinConfig) {
+    if (editingBuiltin) {
+      return fetch("/sources/" + source.source_id + "/attach-builtin/" + editingBuiltin.step_id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ builtin_config: builtinConfig }),
+      })
+        .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+        .then(res => {
+          if (res.ok) { loadPipeline(); flash && flash("Filter step updated.", "ok"); }
+          return res;
+        });
+    }
+    return fetch("/sources/" + source.source_id + "/attach-builtin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ builtin_type: "filter", builtin_config: builtinConfig }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+      .then(res => {
+        if (res.ok) { loadPipeline(); flash && flash("Filter step added.", "ok"); }
+        return res;
+      });
+  }
+
+  // Open the right modal seeded from a placed built-in step's config (#209 edit).
+  // Routes by builtin_type: join -> JoinModal, filter -> FilterModal (others: no-op).
   function handleEditBuiltin(step) {
-    if (!step || step.builtin_type !== "join") return;
-    setEditingBuiltin(step);
-    setJoinModalOpen(true);
+    if (!step) return;
+    if (step.builtin_type === "join") {
+      setEditingBuiltin(step);
+      setJoinModalOpen(true);
+    } else if (step.builtin_type === "filter") {
+      setEditingBuiltin(step);
+      setFilterModalOpen(true);
+    }
   }
 
   function handleCloseJoinModal() {
     setJoinModalOpen(false);
+    setEditingBuiltin(null);
+  }
+
+  function handleCloseFilterModal() {
+    setFilterModalOpen(false);
     setEditingBuiltin(null);
   }
 
@@ -2025,11 +2225,13 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     const setId = e.dataTransfer.getData("palette/set_id");
     const builtinType = e.dataTransfer.getData("palette/builtin_type");
 
-    // Builtin drop — join opens its two-step configuration modal; other built-ins
-    // are not wired yet.
+    // Builtin drop — join + filter open their configuration modals; remaining
+    // built-ins (e.g. pivot) are not wired yet.
     if (builtinType) {
       if (builtinType === "join") {
         setJoinModalOpen(true);
+      } else if (builtinType === "filter") {
+        setFilterModalOpen(true);
       } else {
         const label = builtinType.charAt(0).toUpperCase() + builtinType.slice(1);
         flash && flash(`${label} modal coming soon`, "ok");
@@ -2256,7 +2458,15 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         sources={joinSources}
         fetchRightColumns={fetchJoinRightColumns}
         onSubmit={submitJoinStep}
-        initialConfig={editingBuiltin ? editingBuiltin.builtin_config : null}
+        initialConfig={editingBuiltin && editingBuiltin.builtin_type === "join" ? editingBuiltin.builtin_config : null}
+      />
+
+      <FilterModal
+        open={filterModalOpen}
+        onClose={handleCloseFilterModal}
+        currentSource={(pipeline && pipeline.source) || source}
+        onSubmit={submitFilterStep}
+        initialConfig={editingBuiltin && editingBuiltin.builtin_type === "filter" ? editingBuiltin.builtin_config : null}
       />
     </div>
   );
@@ -2378,4 +2588,4 @@ window.__ScreenBuilder__ = ScreenBuilder;
 // loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
 // these export statements are valid there too; the app itself consumes the
 // components via the window.__ScreenBuilder__ global above.
-export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
+export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };

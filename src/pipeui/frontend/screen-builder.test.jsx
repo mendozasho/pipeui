@@ -5,7 +5,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor, act } from "@testing-library/react";
-import { PendingStepCard, ParamRow, StepCard, JoinModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
+import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
 
 afterEach(() => {
   cleanup();
@@ -1178,5 +1178,83 @@ describe("PendingStepCard — replace-target + append-name (slice 4 / #241)", ()
     const extras = onSave.mock.calls[0][2];
     expect(extras.output_mode).toBe("replace");
     expect(extras.output_targets).toEqual(["c2", "c2"]);
+  });
+});
+
+
+// ===========================================================================
+// FilterModal — single-step filter config (filter built-in, end-to-end)
+// ===========================================================================
+
+function renderFilter(extra = {}) {
+  const onSubmit = extra.onSubmit || vi.fn(() => Promise.resolve({ ok: true, step_id: "f1" }));
+  const onClose = extra.onClose || vi.fn();
+  const utils = render(
+    React.createElement(FilterModal, {
+      open: true,
+      onClose,
+      currentSource: extra.currentSource || LEFT_SOURCE,
+      onSubmit,
+      initialConfig: extra.initialConfig || null,
+    })
+  );
+  return { ...utils, onSubmit, onClose };
+}
+
+describe("FilterModal", () => {
+  it("renders column / condition / value fields populated with the source's columns", () => {
+    renderFilter();
+    const col = screen.getByTestId("filter-column");
+    expect(within(col).getByText("region")).toBeTruthy();
+    expect(within(col).getByText("amount")).toBeTruthy();
+    expect(screen.getByTestId("filter-operator")).toBeTruthy();
+    expect(screen.getByTestId("filter-value")).toBeTruthy();
+  });
+
+  it("hides the value input for a nullary operator (is_null)", () => {
+    renderFilter();
+    fireEvent.change(screen.getByTestId("filter-operator"), { target: { value: "is_null" } });
+    expect(screen.queryByTestId("filter-value")).toBeNull();
+  });
+
+  it("disables submit until a column (and a value for a binary op) are set", () => {
+    renderFilter();
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("filter-column"), { target: { value: "amount" } });
+    // operator defaults to "eq" (binary) → still needs a value
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("filter-value"), { target: { value: "100" } });
+    expect(screen.getByText("Add step").disabled).toBe(false);
+  });
+
+  it("submits {column, operator, value} for a binary operator", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderFilter({ onSubmit });
+    fireEvent.change(screen.getByTestId("filter-column"), { target: { value: "amount" } });
+    fireEvent.change(screen.getByTestId("filter-operator"), { target: { value: "gt" } });
+    fireEvent.change(screen.getByTestId("filter-value"), { target: { value: "100" } });
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ column: "amount", operator: "gt", value: "100" })
+    );
+  });
+
+  it("submits {column, operator} with NO value for a nullary operator", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderFilter({ onSubmit });
+    fireEvent.change(screen.getByTestId("filter-column"), { target: { value: "region" } });
+    fireEvent.change(screen.getByTestId("filter-operator"), { target: { value: "is_null" } });
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ column: "region", operator: "is_null" })
+    );
+  });
+
+  it("pre-fills from initialConfig in edit mode and labels the action 'Save filter' (Principle 7)", () => {
+    renderFilter({ initialConfig: { column: "amount", operator: "lte", value: "50" } });
+    expect(screen.getByTestId("filter-column").value).toBe("amount");
+    expect(screen.getByTestId("filter-operator").value).toBe("lte");
+    expect(screen.getByTestId("filter-value").value).toBe("50");
+    expect(screen.getByText("Save filter")).toBeTruthy();
   });
 });
