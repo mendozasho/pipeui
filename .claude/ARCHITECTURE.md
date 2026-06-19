@@ -5,7 +5,7 @@
 > `api/`, `workflow/`, `validation/`, `sql_user_table/`, and top-level `schema/` are all
 > dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
 > `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
-> **Next** (the migration was the precondition): the SRP-decomposition epic #43 (#45+) — see §7.
+> The SRP-decomposition epic #43 (#45–#49) that followed is also **complete** — see §7.
 
 The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
 carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
@@ -47,7 +47,7 @@ backend/
     base/                   # shared, pulled by every feature
       ids        db         schema/ (DDL + type maps + seeds)
       tables     settings   results        fails
-    sources/                # source + column registry contracts
+    sources/                # source + column registry contracts + file type-inference
     functions/              # function + function-set registry contracts
     runner/                 # step carriers, bundles, staging store, step loading
   domain/                   # orchestration; owns transactions; called by middleware
@@ -115,7 +115,7 @@ The per-feature *splits* the migration deferred are tracked separately as epic #
 ### composition root (cross-cutting — wires layers, owned by none)
 | Current | Target |
 | --- | --- |
-| `main.py`, `config.py`, `helpers.py`, `cli.py` | `app/` (or package root) |
+| `main.py`, `config.py`, `cli.py` | `app/` (`helpers.py` dissolved in #49 — settings I/O → `config.py`, `infer_pattern` → `backend/domain/sources/create.py`; the `get_conn` provider lives in `middleware/deps.py`) |
 
 ---
 
@@ -162,13 +162,21 @@ rewrites + green suite). All slices landed:
 - [x] **Slice 4** — `api/` → `middleware/`; `api/` dissolved.
 - [x] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`.
 
-**What comes next, now that the tree is re-homed:** the **SRP-decomposition epic #43** — the
-per-module splits the migration deliberately deferred: `executors.py` (#45, ✅ done), `attach.py`
+**The SRP-decomposition epic #43 (complete).** The per-module splits the migration deliberately
+deferred, done **inside** the re-homed tree: `executors.py` (#45, ✅ done), `attach.py`
 (#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into `classification` (DB-free
 leaf), `discovery`, `registration` (transaction owner), and `function_read`), the api-DIP cleanup
 (#48, ✅ done — the middleware seam ran raw SQL; reads/guards pushed down into `backend`, the
 source read-path extracted from `ingestion.py` into `backend/domain/sources/read.py`, and a
-guard test locks the seam SQL-free),
-and `db.py`/`helpers.py` (#49, ← active front, which also resolves the pre-existing
-`backend/data/base/db.py` → `app/config.py` `DB_PATH` up-import). The re-homed tree is the
-precondition; those splits happen **inside it**.
+guard test locks the seam SQL-free), and `db.py`/`helpers.py` (#49, ✅ done): `db.py` reduced to
+connection + registry-schema lifecycle, type-inference extracted to
+`backend/data/sources/inference.py`, the `get_conn` provider moved to `middleware/deps.py`, and
+`app/helpers.py` dissolved (settings I/O → `app/config.py`, `infer_pattern` →
+`backend/domain/sources/create.py`). #49 also resolved the `backend/data/base/db.py` →
+`app/config.py` `DB_PATH` up-import (the data layer is now app-free, locked by
+`test_db_layering.py`).
+
+**Next.** With the §4 layer migration (#55) and the SRP-decomposition epic (#43) both complete,
+no architecture-track epic is open. The remaining roadmap front is feature work (ROADMAP.md
+Phase F3 / Active Deferred Work); the next structural reshape will be tracked as a new epic when
+opened.

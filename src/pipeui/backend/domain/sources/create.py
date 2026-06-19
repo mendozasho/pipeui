@@ -11,11 +11,24 @@ import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id
 from pipeui.backend.data.base.schema.constants import IngestionMethod, DUCKDB_TO_PYTHON
-from pipeui.backend.data.base.db import infer_column_types, get_db_path
-from pipeui.app.helpers import infer_pattern
+from pipeui.backend.data.base.db import get_db_path
+from pipeui.backend.data.sources.inference import infer_column_types
 from pipeui.backend.data.base.fails import FailedRegistryEntry
 from pipeui.backend.data.sources.registry import SourceRegistryEntry, SourceRegistryUpdate
 from pipeui.backend.data.sources.columns import ColumnRegistryEntry
+
+
+def infer_pattern(filename: str) -> str | None:
+    """Return a generalized regex pattern for a filename, or None if no digits exist.
+
+    Generally used to infer the filename of a new data source. For example, `sales-2025.04.03.xlsx`.
+    Moved here from the dissolved app/helpers.py (#49): it is a sources util, and this
+    module (its only consumer) already owns the related ``find_source_by_pattern``.
+    """
+    stem = Path(filename).stem
+    if not re.search(r"\d", stem):
+        return None
+    return re.sub(r"\d+", r"\\d+", stem)
 
 
 class CreateFlowCache:

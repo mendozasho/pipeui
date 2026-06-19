@@ -1,12 +1,14 @@
-from __future__ import annotations
+"""DuckDB connection + registry schema lifecycle (data/base).
 
-import re
-from pathlib import Path
+Connection creation, schema DDL + registry migrations, and connection introspection
+only. Type-inference moved to ``data/sources/inference.py`` and the FastAPI
+``get_conn`` provider to ``middleware/deps.py`` (#49) — so this bottom data module
+imports neither ``app`` (no more ``DB_PATH`` up-import) nor FastAPI, and emits no stdout.
+"""
+from __future__ import annotations
 
 import duckdb
 
-from pipeui.app.config import DB_PATH
-from pipeui.backend.data.base.schema.constants import DUCKDB_TO_PYTHON, PYTHON_TO_DUCKDB
 from pipeui.backend.data.base.schema.queries import DDL as _DDL, SEED_BUILTINS as _SEED_BUILTINS
 
 
@@ -76,72 +78,16 @@ def _run_migrations(conn: duckdb.DuckDBPyConnection) -> None:
             conn.execute("ROLLBACK")
 
 
-def infer_column_types(
-        conn: duckdb.DuckDBPyConnection,
-        file_path: str
-) -> list[tuple[str, str]]:
-    """Infer column names and types from a CSV or xlsx file using DuckDB sniffing.
-
-    Needs a duckdb connection to execute the DESCRIBE SELECT query, which is used to try and
-    get the column types.
-    """
-    ext = Path(file_path).suffix.lower()
-
-    if ext == ".xlsx":
-        try:
-            rows = conn.execute(
-                f"DESCRIBE SELECT * FROM read_xlsx('{file_path}')"
-            ).fetchall()
-        except Exception as exc:
-            # Fall back to pandas for xlsx when read_xlsx is unavailable.
-            import pandas as pd  # lazy: xlsx-fallback path only, when DuckDB read_xlsx is unavailable  # noqa: PLC0415
-
-            df = pd.read_excel(file_path, nrows=0)
-            print(exc)
-            return [
-                (col, map_pandas_dtype(str(df[col].dtype)))
-                for col in df.columns
-            ]
-    elif ext == ".csv":
-        rows = conn.execute(
-            "DESCRIBE SELECT * FROM read_csv_auto(?)", [file_path]
-        ).fetchall()
-    else:
-        raise ValueError(f"Unsupported file extension: {ext}")
-
-    result = []
-    for row in rows:
-        col_name = row[0]
-        raw_type = row[1].upper() if row[1] else ""
-        # Normalize parameterized types like VARCHAR(100) or DECIMAL(18,3) → base name
-        base_type = re.split(r"[\s(]", raw_type)[0]
-        col_type = base_type if base_type in DUCKDB_TO_PYTHON else "VARCHAR"
-        result.append((col_name, col_type))
-    return result
-
-
-def map_pandas_dtype(dtype_str: str) -> str:
-    """Map a pandas dtype string to a DUCKDB_TO_PYTHON key or 'varchar'."""
-    return PYTHON_TO_DUCKDB.get(dtype_str, "VARCHAR")
-
-
 def get_db_path(conn: duckdb.DuckDBPyConnection) -> str:
-    """Return the DB file path for this connection, or ':memory:' for in-memory."""
+    """Return the DB file path for this connection, or ':memory:' for in-memory.
+
+    A failed PRAGMA falls back to ':memory:' silently — the data layer emits no stdout.
+    """
     try:
         rows = conn.execute("PRAGMA database_list").fetchall()
         for row in rows:
             if row[1] == "main" and row[2]:
                 return row[2]
-    except Exception as exc:
-        print(f"Error retrieving database path: {exc}")
+    except Exception:
+        pass
     return ":memory:"
-
-
-def get_conn():
-    """FastAPI Depends provider — yields a connected, schema-initialised DuckDB connection."""
-    conn = get_connection(str(DB_PATH))
-    create_schema(conn)
-    try:
-        yield conn
-    finally:
-        conn.close()

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from pipeui.app.config import DB_PATH
 from pipeui.backend.data.base.db import create_schema, get_connection
-from pipeui.app.helpers import load_settings, save_settings
+from pipeui.app.config import load_settings, save_settings
 from pipeui.backend.data.base.settings import AppSettings  # noqa: F401 – re-exported for import compat
 from pipeui.backend.domain.functions.registration import scan_functions
 

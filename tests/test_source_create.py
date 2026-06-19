@@ -9,7 +9,7 @@ import pytest
 
 import datetime
 
-from pipeui.app.helpers import infer_pattern
+from pipeui.backend.domain.sources.create import infer_pattern
 from pipeui.backend.data.base.ids import content_hash_id as _ch
 from pipeui.backend.domain.sources.create import create_source, update_source
 
