@@ -180,6 +180,9 @@ def run_pipeline(
     # joined columns), so it always executes after every other step regardless of its
     # stored position. The primary sort key flags rename; all other steps keep their
     # by-position order, so pipelines without a rename sort identically to before.
+    # NOTE (#83): "rename" is a magic string repeated in 3 sort sites (here,
+    # get_pipeline, get_unified_pipeline). When a 2nd pinned-* built-in lands, promote
+    # this to a BuiltinSpec flag + one shared sort helper — do not add a third literal.
     want_builtins = run_type in ("transforms", "all")
     builtin_steps = get_builtin_steps(conn, source_id) if want_builtins else []
     active_steps = sorted(

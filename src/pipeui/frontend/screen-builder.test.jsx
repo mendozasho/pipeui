@@ -1338,3 +1338,18 @@ describe("RenameModal", () => {
     expect(screen.getByText("Save rename")).toBeTruthy();
   });
 });
+
+describe("RenameModal — order preservation (Principle 7, non-alphabetical)", () => {
+  it("seeds + re-emits saved pairs in saved order, NOT alphabetical", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    // Saved order is zebra THEN apple — an alphabetical re-sort would flip them.
+    renderRename({ onSubmit, initialConfig: { renames: { zebra: "z", apple: "a" } } });
+    expect(screen.getByTestId("rename-from-0").value).toBe("zebra");
+    expect(screen.getByTestId("rename-from-1").value).toBe("apple");
+    // Re-submit unchanged → emitted key order must match saved order (Object.keys IS
+    // order-sensitive, unlike toHaveBeenCalledWith object equality).
+    fireEvent.click(screen.getByText("Save rename"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(Object.keys(onSubmit.mock.calls[0][0].renames)).toEqual(["zebra", "apple"]);
+  });
+});
