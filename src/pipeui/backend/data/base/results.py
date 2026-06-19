@@ -211,7 +211,7 @@ class TransformResultEntry(StepResultEntry):
 
 @dataclass(frozen=True)
 class BuiltinResultEntry(StepResultEntry):
-    """A built-in step's result (join/pivot/filter): identified by its step + type.
+    """A built-in step's result: identified by its step + type.
 
     Carries the join's consumed transformed-output ``consumed_result_id`` (lineage)
     off the ``RunResult``.

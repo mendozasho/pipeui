@@ -171,7 +171,7 @@ def run_pipeline(
     else:
         fn_steps = steps
 
-    # Built-in steps (join/pivot/filter) live in source_builtin_map and share the
+    # Built-in steps live in source_builtin_map and share the
     # position space. They reshape the working table, so they run as part of the
     # transform chain — on full-pipeline and transforms runs, not on a validations-only
     # or single-set run. Merge with function steps by position; Python's stable sort

@@ -11,7 +11,7 @@ The carrier is **variant-typed**, not a ``data`` dict:
   - ``FunctionStepContext`` — a function step (a function set). Built via
     ``from_function`` (tags ``FUNCTION``) or ``from_set`` (tags ``SET`` for the
     set adapter); both carry the same fields, only the dispatch tag differs.
-  - ``BuiltinStepContext`` — a join/pivot/filter step. Built via ``from_builtin``.
+  - ``BuiltinStepContext`` — a built-in step. Built via ``from_builtin``.
   - ``FunctionSpec`` — one function member of a set.
 
 ``params`` (on ``FunctionSpec``) and ``builtin_config`` (on ``BuiltinStepContext``)
@@ -118,7 +118,7 @@ class FunctionStepContext(StepContext):
 
 @dataclass(frozen=True)
 class BuiltinStepContext(StepContext):
-    """A built-in step (join/pivot/filter).
+    """A built-in step.
 
     ``builtin_config`` stays a typed ``Mapping`` — the depth boundary the built-in
     executor reads by key (``cfg.get("…")``)."""

@@ -65,8 +65,8 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   registration, no chain edits; guard test `tests/test_builtins.py::test_builtin_dispatch_is_registry_driven`)*
   → **#51** single type-descriptor table for classification (OCP) *(open)*.
   **Wave 5:** **#52** a single DuckDB→Python type normalizer (DRY) *(open)* → **#53** dead-code /
-  stale-doc / `REFACTOR_PLAN.md` prune *(open)*. **Active front: #51 next**, then #52/#53.
-  See `ARCHITECTURE.md §7`.
+  stale-doc / `REFACTOR_PLAN.md` prune *(✅ done — PR #84 merged)*.
+  **Active front: #51 next**, then #52. See `ARCHITECTURE.md §7`.
 
 ---
 
