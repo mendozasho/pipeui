@@ -45,22 +45,28 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   `backend/{data,domain}/` + `app/`. All 5 slices + the `builtins → functions/` relocation
   landed, each behavior-preserving + hostile-audited; `validation/`, `workflow/`,
   `sql_user_table/`, top-level `schema/`, and `api/` dissolved.
-- **SRP decomposition — epic #43** *(✅ complete).* The per-module splits deferred during
-  the migration, done **inside** the re-homed tree: **#45** split `executors.py` *(✅ done)* →
-  **#46** `attach.py` *(✅ done)* → **#47** `registration.py` *(✅ done — split into
-  `classification.py` (DB-free leaf) + `discovery.py` + `registration.py` (transaction owner) +
-  `function_read.py`)* → **#48** api-DIP cleanup *(✅ done — the middleware seam ran raw SQL, a
-  DIP/layer-boundary leak; reads/guards pushed down into `backend`, the source read-path
-  extracted from `ingestion.py` into `backend/domain/sources/read.py`, and
-  `test_source_read.py::test_middleware_seam_has_no_raw_sql` locks the seam SQL-free)* →
-  **#49** `db.py`/`helpers.py` *(✅ done — `db.py` reduced to connection + registry-schema
-  lifecycle, with type-inference extracted to `backend/data/sources/inference.py` and the
-  `get_conn` provider moved to `middleware/deps.py`; `app/helpers.py` dissolved — settings I/O
-  folded into `app/config.py`, `infer_pattern` moved to `backend/domain/sources/create.py`; the
-  `backend/data/base/db.py → app/config.py` `DB_PATH` up-import is gone, locked by
-  `test_db_layering.py`)*. Wave 1 (#44, typed result carriers) already landed. With #49 done,
-  **epic #43 is complete.** Next architecture front: see the F3 deferred items below and
-  `ARCHITECTURE.md §7`.
+- **SRP decomposition — epic #43** *(in progress — epic OPEN).* The per-module splits deferred
+  during the migration, done **inside** the re-homed tree. Wave 1 (#44, typed result carriers)
+  landed first. Waves 2–3: **#45** split `executors.py` *(✅ done)* → **#46** `attach.py`
+  *(✅ done)* → **#47** `registration.py` *(✅ done — split into `classification.py` (DB-free leaf)
+  + `discovery.py` + `registration.py` (transaction owner) + `function_read.py`)* → **#48**
+  api-DIP cleanup *(✅ done — the middleware seam ran raw SQL, a DIP/layer-boundary leak;
+  reads/guards pushed down into `backend`, the source read-path extracted from `ingestion.py`
+  into `backend/domain/sources/read.py`, and `test_source_read.py::test_middleware_seam_has_no_raw_sql`
+  locks the seam SQL-free)* → **#49** `db.py`/`helpers.py` *(✅ done — `db.py` reduced to
+  connection + registry-schema lifecycle, with type-inference extracted to
+  `backend/data/sources/inference.py` and the `get_conn` provider moved to `middleware/deps.py`;
+  `app/helpers.py` dissolved — settings I/O folded into `app/config.py`, `infer_pattern` moved to
+  `backend/domain/sources/create.py`; the `backend/data/base/db.py → app/config.py` `DB_PATH`
+  up-import is gone, locked by `test_db_layering.py`)*.
+  **Wave 4 — OCP:** **#50** `builtins.py` dispatch *(✅ done — the attach-time validation +
+  run-time execution if/elif chains replaced by the `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]`
+  registry, mirroring the runner's `STEP_EXECUTORS`; adding a built-in is one `BuiltinSpec`
+  registration, no chain edits; guard test `tests/test_builtins.py::test_builtin_dispatch_is_registry_driven`)*
+  → **#51** single type-descriptor table for classification (OCP) *(open)*.
+  **Wave 5:** **#52** a single DuckDB→Python type normalizer (DRY) *(open)* → **#53** dead-code /
+  stale-doc / `REFACTOR_PLAN.md` prune *(open)*. **Active front: #51 next**, then #52/#53.
+  See `ARCHITECTURE.md §7`.
 
 ---
 
