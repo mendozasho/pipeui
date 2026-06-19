@@ -5,7 +5,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor, act } from "@testing-library/react";
-import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
+import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
 
 afterEach(() => {
   cleanup();
@@ -1256,5 +1256,100 @@ describe("FilterModal", () => {
     expect(screen.getByTestId("filter-operator").value).toBe("lte");
     expect(screen.getByTestId("filter-value").value).toBe("50");
     expect(screen.getByText("Save filter")).toBeTruthy();
+  });
+});
+
+
+// ===========================================================================
+// RenameModal — column→new-name pairs (rename built-in, end-to-end)
+// ===========================================================================
+
+function renderRename(extra = {}) {
+  const onSubmit = extra.onSubmit || vi.fn(() => Promise.resolve({ ok: true, step_id: "r1" }));
+  const onClose = extra.onClose || vi.fn();
+  const utils = render(
+    React.createElement(RenameModal, {
+      open: true,
+      onClose,
+      currentSource: extra.currentSource || LEFT_SOURCE,
+      onSubmit,
+      initialConfig: extra.initialConfig || null,
+    })
+  );
+  return { ...utils, onSubmit, onClose };
+}
+
+describe("RenameModal", () => {
+  it("renders one from→to pair initially", () => {
+    renderRename();
+    expect(screen.getByTestId("rename-from-0")).toBeTruthy();
+    expect(screen.getByTestId("rename-to-0")).toBeTruthy();
+  });
+
+  it("disables submit until at least one complete pair", () => {
+    renderRename();
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("rename-from-0"), { target: { value: "amount" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);  // no new name yet
+    fireEvent.change(screen.getByTestId("rename-to-0"), { target: { value: "total" } });
+    expect(screen.getByText("Add step").disabled).toBe(false);
+  });
+
+  it("submits {renames: {from: to}} for a single pair", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderRename({ onSubmit });
+    fireEvent.change(screen.getByTestId("rename-from-0"), { target: { value: "amount" } });
+    fireEvent.change(screen.getByTestId("rename-to-0"), { target: { value: "total" } });
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ renames: { amount: "total" } }));
+  });
+
+  it("supports multiple pairs via Add another", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderRename({ onSubmit });
+    fireEvent.change(screen.getByTestId("rename-from-0"), { target: { value: "amount" } });
+    fireEvent.change(screen.getByTestId("rename-to-0"), { target: { value: "total" } });
+    fireEvent.click(screen.getByText("+ Add another"));
+    fireEvent.change(screen.getByTestId("rename-from-1"), { target: { value: "region" } });
+    fireEvent.change(screen.getByTestId("rename-to-1"), { target: { value: "area" } });
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ renames: { amount: "total", region: "area" } })
+    );
+  });
+
+  it("blocks submit when two columns map to the same new name", () => {
+    renderRename();
+    fireEvent.change(screen.getByTestId("rename-from-0"), { target: { value: "amount" } });
+    fireEvent.change(screen.getByTestId("rename-to-0"), { target: { value: "x" } });
+    fireEvent.click(screen.getByText("+ Add another"));
+    fireEvent.change(screen.getByTestId("rename-from-1"), { target: { value: "region" } });
+    fireEvent.change(screen.getByTestId("rename-to-1"), { target: { value: "x" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/same new name/)).toBeTruthy();
+  });
+
+  it("pre-fills saved pairs in order on edit, labelled 'Save rename' (Principle 7)", () => {
+    renderRename({ initialConfig: { renames: { amount: "total", region: "area" } } });
+    expect(screen.getByTestId("rename-from-0").value).toBe("amount");
+    expect(screen.getByTestId("rename-to-0").value).toBe("total");
+    expect(screen.getByTestId("rename-from-1").value).toBe("region");
+    expect(screen.getByTestId("rename-to-1").value).toBe("area");
+    expect(screen.getByText("Save rename")).toBeTruthy();
+  });
+});
+
+describe("RenameModal — order preservation (Principle 7, non-alphabetical)", () => {
+  it("seeds + re-emits saved pairs in saved order, NOT alphabetical", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    // Saved order is zebra THEN apple — an alphabetical re-sort would flip them.
+    renderRename({ onSubmit, initialConfig: { renames: { zebra: "z", apple: "a" } } });
+    expect(screen.getByTestId("rename-from-0").value).toBe("zebra");
+    expect(screen.getByTestId("rename-from-1").value).toBe("apple");
+    // Re-submit unchanged → emitted key order must match saved order (Object.keys IS
+    // order-sensitive, unlike toHaveBeenCalledWith object equality).
+    fireEvent.click(screen.getByText("Save rename"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(Object.keys(onSubmit.mock.calls[0][0].renames)).toEqual(["zebra", "apple"]);
   });
 });

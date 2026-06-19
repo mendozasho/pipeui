@@ -130,6 +130,28 @@ def _validate_filter_config(cfg: dict) -> str | None:
     return None
 
 
+def _validate_rename_config(cfg: dict) -> str | None:
+    """Attach-time shape check for a rename built-in (#40).
+
+    Config: ``{"renames": {"<old>": "<new>", ...}}`` — a non-empty mapping; every old
+    and new name a non-empty string; new names unique (no two columns map to the same
+    target). Run-time existence + target-collision are checked in ``_execute_rename``
+    (step status=failed), the same split filter uses.
+    """
+    renames = cfg.get("renames")
+    if not isinstance(renames, dict) or not renames:
+        return "rename config must include a non-empty 'renames' mapping"
+    for old, new in renames.items():
+        if not isinstance(old, str) or not old.strip():
+            return "every rename source column must be a non-empty name"
+        if not isinstance(new, str) or not new.strip():
+            return f"rename target for {old!r} must be a non-empty name"
+    new_names = list(renames.values())
+    if len(set(new_names)) != len(new_names):
+        return "rename targets must be unique — no two columns may map to the same new name"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # attach / detach / patch
 # ---------------------------------------------------------------------------
@@ -156,6 +178,15 @@ def attach_builtin(
     # Source must exist
     if conn.execute("SELECT 1 FROM source_registry WHERE source_id = ?", [source_id]).fetchone() is None:
         return {"ok": False, "detail": f"source_id {source_id!r} not found"}
+
+    # Singleton built-ins (e.g. rename, #40) allow at most one per source. The flag
+    # lives on the BuiltinSpec, so a future singleton type is one registration — no
+    # type-specific branch here (OCP).
+    if spec.singleton and conn.execute(
+        "SELECT 1 FROM source_builtin_map WHERE source_id = ? AND builtin_type = ?",
+        [source_id, builtin_type],
+    ).fetchone() is not None:
+        return {"ok": False, "detail": f"only one {builtin_type!r} step is allowed per source"}
 
     # Position = MAX(position)+1 across both map tables for this source
     sfm_max = conn.execute(
@@ -305,8 +336,13 @@ def get_unified_pipeline(
             "position": bstep.position,
         })
 
-    # Sort unified list by position
-    steps.sort(key=lambda s: (s["position"], s.get("set_name") or s.get("builtin_type") or ""))
+    # Sort unified list by position; a rename built-in is pinned last (#40), matching
+    # the execution order in run.py and the canvas order in get_pipeline.
+    steps.sort(key=lambda s: (
+        1 if s.get("builtin_type") == "rename" else 0,
+        s["position"],
+        s.get("set_name") or s.get("builtin_type") or "",
+    ))
 
     return {
         "source": {
@@ -517,6 +553,35 @@ def _execute_filter(
     return result
 
 
+def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Execute a rename built-in (#40) — rename the selected columns in the working df.
+
+    Config: ``{"renames": {"<old>": "<new>", ...}}``. Operates on the FULL working df
+    (including columns added by upstream joins) and is output-only — it does NOT touch
+    the source's real schema (``column_registry`` / instance table).
+
+    Run-time checks (raise ``ValueError`` → step status=failed, the same split filter uses):
+      - every source column named in ``renames`` must exist in the working df;
+      - no target name may collide with a *surviving* column (an existing column not
+        itself being renamed away).
+
+    ``conn`` is unused (rename is pure pandas) but kept for the uniform executor signature.
+    """
+    renames = cfg["renames"]
+    cols = list(df.columns)
+
+    missing = [old for old in renames if old not in cols]
+    if missing:
+        raise ValueError(f"rename: column(s) not found in the working data: {missing}")
+
+    surviving = set(cols) - set(renames.keys())
+    collisions = sorted({new for new in renames.values() if new in surviving})
+    if collisions:
+        raise ValueError(f"rename: target name(s) already exist in the working data: {collisions}")
+
+    return df.rename(columns=renames)
+
+
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -531,10 +596,13 @@ class BuiltinSpec:
     - ``execute(conn, df, cfg, run_transforms) -> (df, consumed_result_id)`` — runs the
       step. ``run_transforms`` is the injected runner (DIP) used only by the transformed-join
       materialize path; pivot/filter accept-and-ignore it and return ``consumed_result_id=None``.
+    - ``singleton`` — at most one step of this type per source (enforced in attach_builtin);
+      rename is singleton + pinned-last (#40).
     """
 
     validate: Callable[[dict], "str | None"]
     execute: Callable[..., "tuple[pd.DataFrame, str | None]"]
+    singleton: bool = False
 
 
 # The dispatch table both attach_builtin (validation) and execute_builtin_step
@@ -555,5 +623,10 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
     "filter": BuiltinSpec(
         validate=_validate_filter_config,
         execute=lambda conn, df, cfg, run_transforms: (_execute_filter(conn, df, cfg), None),
+    ),
+    "rename": BuiltinSpec(
+        validate=_validate_rename_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_rename(conn, df, cfg), None),
+        singleton=True,
     ),
 }

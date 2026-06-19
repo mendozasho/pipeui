@@ -201,8 +201,14 @@ def get_pipeline(
         })
 
     # Order the unified list by position; tie-break on set_name/builtin_type for
-    # determinism (mirrors get_unified_pipeline's sort key).
-    steps.sort(key=lambda s: (s["position"], s.get("set_name") or s.get("builtin_type") or ""))
+    # determinism (mirrors get_unified_pipeline's sort key). #40: a rename built-in is
+    # pinned last (it runs on the final output), so it sorts after everything else on
+    # the canvas regardless of position — matching the execution order in run.py.
+    steps.sort(key=lambda s: (
+        1 if s.get("builtin_type") == "rename" else 0,
+        s["position"],
+        s.get("set_name") or s.get("builtin_type") or "",
+    ))
 
     return {
         "source": {

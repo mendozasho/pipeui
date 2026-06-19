@@ -176,9 +176,19 @@ def run_pipeline(
     # transform chain — on full-pipeline and transforms runs, not on a validations-only
     # or single-set run. Merge with function steps by position; Python's stable sort
     # keeps function steps ahead of a built-in that ties the same position.
+    # #40: a rename built-in is PINNED LAST — it operates on the final output (incl.
+    # joined columns), so it always executes after every other step regardless of its
+    # stored position. The primary sort key flags rename; all other steps keep their
+    # by-position order, so pipelines without a rename sort identically to before.
+    # NOTE (#83): "rename" is a magic string repeated in 3 sort sites (here,
+    # get_pipeline, get_unified_pipeline). When a 2nd pinned-* built-in lands, promote
+    # this to a BuiltinSpec flag + one shared sort helper — do not add a third literal.
     want_builtins = run_type in ("transforms", "all")
     builtin_steps = get_builtin_steps(conn, source_id) if want_builtins else []
-    active_steps = sorted(fn_steps + builtin_steps, key=lambda s: s.position)
+    active_steps = sorted(
+        fn_steps + builtin_steps,
+        key=lambda s: (1 if getattr(s, "builtin_type", None) == "rename" else 0, s.position),
+    )
 
     # Which function types this run processes; each step runs every function of these
     # types that it holds (a set is a transparent container).

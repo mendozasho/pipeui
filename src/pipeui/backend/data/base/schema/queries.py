@@ -152,6 +152,9 @@ INSERT OR IGNORE INTO builtin_registry (builtin_id, builtin_type, display_name, 
    '{"index_columns": "array", "pivot_column": "string", "value_columns": "array"}'),
   ('a1b2c3d4-0001-0001-0001-000000000003'::UUID, 'filter', 'Filter',
    'Keep only rows matching a condition (column + operator + value). Supported operators: eq, neq, gt, gte, lt, lte, contains, not_contains, is_null, is_not_null.',
-   '{"column": "string", "operator": "string", "value": "any"}');
+   '{"column": "string", "operator": "string", "value": "any"}'),
+  ('a1b2c3d4-0001-0001-0001-000000000004'::UUID, 'rename', 'Rename',
+   'Rename selected columns in the report output. Runs last in the pipeline; one per report. Output-only — does not change the source schema.',
+   '{"renames": "object"}');
 """
 """Creates the base application tables on initialization."""
