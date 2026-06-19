@@ -141,8 +141,6 @@ def migrate_column(
             "error": "source_not_found",
             "reason": f"source_id {source_id!r} not found in source_registry",
         }
-    primary_key = source_row[0]
-
     # Step 3: Shared-row detection — all sources referencing this column_id
     shared_rows = conn.execute(
         """

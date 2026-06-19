@@ -144,15 +144,6 @@ def fetch_steps(
                 "output_targets": [r[0] for r in fn_target_rows],
             })
 
-        # Derive the step's dominant function_type
-        fn_types = {f["function_type"] for f in functions}
-        if "transform" in fn_types:
-            step_function_type = "transform"
-        elif "validation" in fn_types:
-            step_function_type = "validation"
-        else:
-            step_function_type = "unknown"
-
         # Output-target columns for a `replace` transform step, in position order
         # (bundle i -> target i). Empty for append steps and replace-with-default.
         target_rows = conn.execute(
@@ -177,7 +168,6 @@ def fetch_steps(
             "position": position,
             "output_mode": output_mode,
             "append_name": append_name,
-            "function_type": step_function_type,
             "output_targets": output_targets,
             "functions": functions,
         }))

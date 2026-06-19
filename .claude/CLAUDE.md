@@ -127,12 +127,14 @@ These cover this project's governance and design discipline. The *mechanics* of 
   JIT from `source_registry` + `column_registry` at ingestion.
 - **Repository layout (`src`-style).** The Python package lives under `src/` so
   it is never importable without an install step (prevents accidental shadow
-  imports). The frontend is a peer directory at the repo root, not inside the
-  package:
+  imports). The frontend lives inside the package at `src/pipeui/frontend/`
+  (served by FastAPI as static files); `package.json`/`vitest.config.js` are at
+  the repo root:
   ```
-  src/pipeui/     ← installable Python package (backend + API)
-  frontend/       ← React app (no build step; CDN React + Babel standalone)
-  tests/          ← pytest suite
+  src/pipeui/            ← installable Python package (backend + API)
+  src/pipeui/frontend/   ← React app (no build step; CDN React + Babel standalone)
+  tests/                 ← pytest suite
+  package.json  vitest.config.js   ← frontend (vitest) at repo root
   pyproject.toml
   ```
 - **`api/` lives inside `src/pipeui/`.** FastAPI route modules (`sources.py`,
