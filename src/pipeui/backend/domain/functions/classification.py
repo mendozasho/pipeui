@@ -68,7 +68,7 @@ def _derive_lookups(
 _BY_TYPE, _VALIDATION_RETURN_TYPES = _derive_lookups(_TYPE_DESCRIPTORS)
 
 
-def _annotation_to_str(annotation: Any) -> str | None:
+def annotation_to_str(annotation: Any) -> str | None:
     """Convert a parameter/return annotation to its canonical param_type string.
 
     Returns None when the annotation is inspect.Parameter.empty / inspect.Signature.empty.
@@ -93,11 +93,11 @@ def _annotation_to_str(annotation: Any) -> str | None:
     return ann_str
 
 
-def _is_known_param_type(type_str: str) -> bool:
+def is_known_param_type(type_str: str) -> bool:
     return type_str in _BY_TYPE
 
 
-def _is_known_return_type(type_str: str) -> bool:
+def is_known_return_type(type_str: str) -> bool:
     return type_str in _BY_TYPE
 
 
@@ -105,7 +105,7 @@ def derive_function_class(param_types: list[str]) -> str:
     """Derive function_class from the list of param_type strings (§11).
 
     The least-granular (highest granularity-index) param drives the class. Raises
-    ``KeyError`` on an unknown param type (callers gate with ``_is_known_param_type``).
+    ``KeyError`` on an unknown param type (callers gate with ``is_known_param_type``).
     """
     driver = max((_BY_TYPE[pt] for pt in param_types), key=lambda d: d.granularity)
     return driver.function_class

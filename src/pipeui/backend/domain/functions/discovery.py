@@ -17,9 +17,9 @@ import types
 from pathlib import Path
 
 from pipeui.backend.domain.functions.classification import (
-    _annotation_to_str,
-    _is_known_param_type,
-    _is_known_return_type,
+    annotation_to_str,
+    is_known_param_type,
+    is_known_return_type,
     derive_function_class,
     derive_function_return_type,
     derive_function_type,
@@ -66,21 +66,21 @@ def _inspect_function(fn_name: str, fn_obj) -> dict | str:
             return "variadic parameters not supported"
 
     for p in params:
-        ann = _annotation_to_str(p.annotation)
+        ann = annotation_to_str(p.annotation)
         if ann is None:
             return f"untyped parameter `{p.name}`"
-        if not _is_known_param_type(ann):
+        if not is_known_param_type(ann):
             return f"unsupported parameter type `{ann}` on `{p.name}`"
 
-    ret_ann = _annotation_to_str(sig.return_annotation)
+    ret_ann = annotation_to_str(sig.return_annotation)
     if ret_ann is None:
         return "missing return annotation"
-    if not _is_known_return_type(ret_ann):
+    if not is_known_return_type(ret_ann):
         return f"unsupported return type `{ret_ann}`"
 
     # --- derivation ---
     param_names = [p.name for p in params]
-    param_types_list = [_annotation_to_str(p.annotation) for p in params]  # type: ignore[misc]
+    param_types_list = [annotation_to_str(p.annotation) for p in params]  # type: ignore[misc]
     # #258: capture each param's Python default so the executor can fall back to it
     # and the frontend can distinguish required params from optional ones.
     param_has_default = [p.default is not inspect.Parameter.empty for p in params]
