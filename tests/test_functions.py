@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from pipeui.backend.domain.functions import classification
 from pipeui.backend.domain.functions.classification import (
     derive_function_class,
     derive_function_return_type,
@@ -137,6 +138,63 @@ class TestDeriveFunctionType:
     @pytest.mark.unit
     def test_pd_dataframe_return_is_transform(self):
         assert derive_function_type("pd.DataFrame") == "transform"
+
+
+class TestSingleTypeDescriptorTable:
+    """#51 (OCP): classification reads from ONE ordered type-descriptor table, so
+    adding a supported type is a single ``_TYPE_DESCRIPTORS`` entry — no edits
+    scattered across separate maps."""
+
+    @pytest.mark.unit
+    def test_legacy_multi_maps_removed(self):
+        """The four coupled literal maps the table replaced no longer exist — a
+        guard against regressing to multi-map maintenance."""
+        for legacy in ("_PARAM_GRANULARITY", "_GRANULARITY_TO_CLASS",
+                       "_RETURN_TYPE_MAP", "_VALIDATION_RETURNS"):
+            assert not hasattr(classification, legacy), (
+                f"{legacy} should be gone — classification has one source of truth"
+            )
+
+    @pytest.mark.unit
+    def test_derived_lookups_come_from_the_table(self):
+        """``_BY_TYPE`` and ``_VALIDATION_RETURN_TYPES`` are derived from the table,
+        never maintained independently — re-deriving must reproduce them exactly."""
+        table = classification._TYPE_DESCRIPTORS
+        assert classification._BY_TYPE == {d.type_str: d for d in table}
+        assert classification._VALIDATION_RETURN_TYPES == frozenset(
+            d.return_type for d in table if d.is_validation_return
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("descriptor", classification._TYPE_DESCRIPTORS,
+                             ids=lambda d: d.type_str)
+    def test_every_descriptor_routes_through_all_derivations(self, descriptor):
+        """Each row drives all five public derivations/gates — proof the functions
+        share the single table, so one new row wires every consumer at once."""
+        assert classification._is_known_param_type(descriptor.type_str)
+        assert classification._is_known_return_type(descriptor.type_str)
+        assert derive_function_class([descriptor.type_str]) == descriptor.function_class
+        assert derive_function_return_type(descriptor.type_str) == descriptor.return_type
+        expected_fn_type = "validation" if descriptor.is_validation_return else "transform"
+        assert derive_function_type(descriptor.return_type) == expected_fn_type
+
+    @pytest.mark.unit
+    def test_one_new_entry_is_recognized_everywhere(self, monkeypatch):
+        """Adding ONE descriptor row (and re-deriving the lookups the module's own
+        way) makes every gate and derivation recognize the new type — the headline
+        OCP guarantee: no second edit site."""
+        new = classification.TypeDescriptor(
+            "decimal", 0, "scalar", "scalar", is_validation_return=False
+        )
+        extended = classification._TYPE_DESCRIPTORS + (new,)
+        monkeypatch.setattr(classification, "_BY_TYPE",
+                            {d.type_str: d for d in extended})
+        monkeypatch.setattr(classification, "_VALIDATION_RETURN_TYPES",
+                            frozenset(d.return_type for d in extended if d.is_validation_return))
+        assert classification._is_known_param_type("decimal")
+        assert classification._is_known_return_type("decimal")
+        assert derive_function_class(["decimal"]) == "scalar"
+        assert derive_function_return_type("decimal") == "scalar"
 
 
 class TestInspectFunction:
