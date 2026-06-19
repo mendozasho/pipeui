@@ -1,4 +1,4 @@
-"""Behavioral guarantees for built-in pipeline steps (join, pivot, filter).
+"""Behavioral guarantees for built-in pipeline steps (join, pivot, filter, rename).
 
 Guarantees:
   B1. attach_builtin creates a source_builtin_map row for a valid join config.
@@ -12,10 +12,11 @@ Guarantees:
   B8. execute_builtin_step (join) produces a DataFrame with the correct merged shape.
   B9. execute_builtin_step (pivot) output columns match the aggregation specification.
   B10. get_unified_pipeline returns None for an unknown source_id.
-  B11. builtin_registry is seeded with exactly 3 rows (join, pivot, filter) on a fresh DB.
+  B11. builtin_registry is seeded with the built-in rows (join, pivot, filter, rename) on a fresh DB.
   B12. Re-running create_schema on an existing DB does not duplicate builtin rows.
-  B13. GET /builtins returns all 3 rows with required fields.
+  B13. GET /builtins returns all rows with required fields.
   B14. source_builtin_map accepts builtin_type = "filter" without error.
+  B15. rename built-in: validate/execute, singleton-per-source, pinned last (#40).
 """
 from __future__ import annotations
 
@@ -35,7 +36,10 @@ from pipeui.backend.domain.functions.builtins import (
     execute_builtin_step,
     get_unified_pipeline,
     patch_builtin,
+    _validate_rename_config,
+    _execute_rename,
 )
+from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.runner.run import run_pipeline
 from pipeui.backend.data.runner.steps import StepContext
 
@@ -368,13 +372,10 @@ def test_unified_pipeline_unknown_source(db):
 # B11 — builtin_registry seeded with exactly 3 rows on fresh DB
 # ---------------------------------------------------------------------------
 
-def test_builtin_registry_seeded_with_three_rows(db):
+def test_builtin_registry_seeded_with_builtin_rows(db):
     rows = db.execute("SELECT builtin_type FROM builtin_registry ORDER BY builtin_type").fetchall()
     types = [r[0] for r in rows]
-    assert len(types) == 3
-    assert "filter" in types
-    assert "join" in types
-    assert "pivot" in types
+    assert set(types) == {"join", "pivot", "filter", "rename"}
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +387,7 @@ def test_create_schema_idempotent_no_duplicates(db):
     create_schema(db)
     create_schema(db)
     count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
-    assert count == 3
+    assert count == 4  # join, pivot, filter, rename
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +405,9 @@ def test_get_builtins_endpoint(db):
     resp = client.get("/builtins")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 3
+    assert len(data) == 4
     types = {row["builtin_type"] for row in data}
-    assert types == {"join", "pivot", "filter"}
+    assert types == {"join", "pivot", "filter", "rename"}
     for row in data:
         assert "builtin_id" in row
         assert "display_name" in row
@@ -714,8 +715,8 @@ def test_builtin_dispatch_is_registry_driven(db):
     (execution) to it; unregistering removes it. This is the OCP the registry buys."""
     import pipeui.backend.domain.functions.builtins as b
 
-    # The shipped registry holds exactly the three built-in types, each a BuiltinSpec.
-    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter"}
+    # The shipped registry holds exactly the built-in types, each a BuiltinSpec.
+    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter", "rename"}
     assert all(isinstance(s, b.BuiltinSpec) for s in b.BUILTIN_EXECUTORS.values())
 
     source_id, _ = _make_source(db, "ocp")
@@ -740,3 +741,58 @@ def test_builtin_dispatch_is_registry_driven(db):
     finally:
         b.BUILTIN_EXECUTORS.clear()
         b.BUILTIN_EXECUTORS.update(saved)
+
+
+# ---------------------------------------------------------------------------
+# Rename built-in (#40) — validate, execute, singleton, pinned-last
+# ---------------------------------------------------------------------------
+
+def test_validate_rename_config_shapes():
+    assert _validate_rename_config({"renames": {"a": "b"}}) is None
+    assert _validate_rename_config({}) is not None                          # missing
+    assert _validate_rename_config({"renames": {}}) is not None             # empty
+    assert _validate_rename_config({"renames": "x"}) is not None            # not a dict
+    assert _validate_rename_config({"renames": {"": "b"}}) is not None      # empty source
+    assert _validate_rename_config({"renames": {"a": ""}}) is not None      # empty target
+    assert _validate_rename_config({"renames": {"a": "x", "b": "x"}}) is not None  # dup target
+
+
+def test_execute_rename_renames_columns():
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    out = _execute_rename(None, df, {"renames": {"a": "A"}})
+    assert list(out.columns) == ["A", "b"]
+
+
+def test_execute_rename_missing_column_raises():
+    df = pd.DataFrame({"a": [1]})
+    with pytest.raises(ValueError, match="not found"):
+        _execute_rename(None, df, {"renames": {"zzz": "Z"}})
+
+
+def test_execute_rename_target_collision_raises():
+    # Renaming a -> b collides with the surviving column b.
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    with pytest.raises(ValueError, match="already exist"):
+        _execute_rename(None, df, {"renames": {"a": "b"}})
+
+
+def test_attach_rename_is_singleton(source):
+    conn, source_id, _ = source
+    first = attach_builtin(conn, source_id, "rename", {"renames": {"x": "y"}})
+    assert first["ok"] is True
+    second = attach_builtin(conn, source_id, "rename", {"renames": {"p": "q"}})
+    assert second["ok"] is False
+    assert "rename" in second["detail"]
+
+
+def test_rename_pinned_last_in_pipeline_display(source):
+    conn, source_id, col_ids = source
+    col_name = conn.execute(
+        "SELECT column_name FROM column_registry WHERE column_id = ?", [col_ids[0]]
+    ).fetchone()[0]
+    # Attach rename FIRST (lower position) then a filter — rename must still sort last.
+    assert attach_builtin(conn, source_id, "rename", {"renames": {col_name: "renamed"}})["ok"] is True
+    assert attach_builtin(conn, source_id, "filter", {"column": col_name, "operator": "is_null"})["ok"] is True
+    pipe = get_pipeline(conn, source_id)
+    builtin_types = [s["builtin_type"] for s in pipe["steps"] if s.get("step_type") == "builtin"]
+    assert builtin_types[-1] == "rename", builtin_types  # pinned last despite lower position

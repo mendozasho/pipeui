@@ -777,7 +777,14 @@ function builtinConfigSummary(step, sources) {
     const val = cfg.value != null ? String(cfg.value) : "";
     return `Filter · ${col} ${opStr} ${val}`.trim();
   }
-  // Generic fallback for other built-in types (only join + filter are wired).
+  if (step.builtin_type === "rename") {
+    const entries = Object.entries(cfg.renames || {});
+    if (!entries.length) return "Rename";
+    const shown = entries.slice(0, 3).map(([o, n]) => `${o}→${n}`).join(", ");
+    const more = entries.length > 3 ? ` +${entries.length - 3}` : "";
+    return `Rename · ${shown}${more}`;
+  }
+  // Generic fallback for other built-in types (only join + filter + rename are wired).
   const label = step.builtin_type ? step.builtin_type.charAt(0).toUpperCase() + step.builtin_type.slice(1) : "Step";
   return label;
 }
@@ -2035,6 +2042,129 @@ function FilterModal({ open, onClose, currentSource, onSubmit, initialConfig }) 
 }
 
 // ---------------------------------------------------------------------------
+// RenameModal — configure a built-in rename step: rename selected columns in the
+// report output (#40). One or more column→new-name pairs. The "from" field is a
+// datalist — pick a registered column OR type a join-added one (the free-text
+// escape hatch). Edit mode restores saved pairs in order (Principle 7). The step is
+// pinned last + one-per-report (enforced backend-side). Mirrors the Filter/Join
+// create/edit contract (open / onClose / onSubmit / initialConfig).
+// ---------------------------------------------------------------------------
+
+function RenameModal({ open, onClose, currentSource, onSubmit, initialConfig }) {
+  const { Modal, Btn } = window.__UI__;
+  const [pairs, setPairs] = useState([{ from: "", to: "" }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const isEdit = !!initialConfig;
+
+  useEffect(() => {
+    if (!open) return;
+    const saved = initialConfig && initialConfig.renames;
+    if (saved && Object.keys(saved).length) {
+      // Preserve saved order (JSON object insertion order) — Principle 7 round-trip.
+      setPairs(Object.entries(saved).map(([from, to]) => ({ from, to: String(to) })));
+    } else {
+      setPairs([{ from: "", to: "" }]);
+    }
+    setSubmitting(false);
+    setSubmitError(null);
+  }, [open, initialConfig]);
+
+  const columns = (currentSource && currentSource.columns) || [];
+  const listId = "rename-cols";
+
+  const complete = pairs.filter(p => p.from.trim() && p.to.trim());
+  const fromNames = complete.map(p => p.from.trim());
+  const toNames = complete.map(p => p.to.trim());
+  const dupFrom = new Set(fromNames).size !== fromNames.length;
+  const dupTo = new Set(toNames).size !== toNames.length;
+  const canSubmit = complete.length > 0 && !dupFrom && !dupTo;
+
+  function setPair(i, key, val) {
+    setPairs(prev => prev.map((p, idx) => (idx === i ? { ...p, [key]: val } : p)));
+  }
+  function addPair() { setPairs(prev => [...prev, { from: "", to: "" }]); }
+  function removePair(i) {
+    setPairs(prev => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
+  }
+
+  function submit() {
+    if (!canSubmit || submitting) return;
+    const renames = {};
+    complete.forEach(p => { renames[p.from.trim()] = p.to.trim(); });
+    setSubmitting(true);
+    setSubmitError(null);
+    Promise.resolve(onSubmit({ renames }))
+      .then(res => {
+        setSubmitting(false);
+        if (res && res.ok === false) { setSubmitError(res.detail || "Could not add rename step."); return; }
+        onClose && onClose();
+      })
+      .catch(e => { setSubmitting(false); setSubmitError(String(e && e.message ? e.message : e)); });
+  }
+
+  const footer = (
+    <>
+      <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+      <Btn variant="primary" onClick={submit} disabled={!canSubmit || submitting}>
+        {isEdit ? "Save rename" : "Add step"}
+      </Btn>
+    </>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEdit ? "Edit rename" : "Add rename"} width={460} footer={footer}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-3)" }}>
+          Rename columns in the report output. Runs last; one rename step per report.
+        </div>
+        <datalist id={listId}>
+          {columns.map(c => <option key={c.column_id || c.column_name} value={c.column_name} />)}
+        </datalist>
+        {pairs.map((p, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              data-testid={"rename-from-" + i}
+              list={listId}
+              placeholder="Column"
+              value={p.from}
+              onChange={e => setPair(i, "from", e.target.value)}
+              style={{ ..._filterFieldStyle, flex: 1 }}
+            />
+            <span style={{ color: "var(--text-4)", fontSize: 13 }}>→</span>
+            <input
+              data-testid={"rename-to-" + i}
+              placeholder="New name"
+              value={p.to}
+              onChange={e => setPair(i, "to", e.target.value)}
+              style={{ ..._filterFieldStyle, flex: 1 }}
+            />
+            <button
+              type="button"
+              data-testid={"rename-remove-" + i}
+              onClick={() => removePair(i)}
+              disabled={pairs.length <= 1}
+              title="Remove"
+              style={{
+                background: "none", border: "none", color: "var(--text-4)", fontSize: 16,
+                padding: "0 4px", cursor: pairs.length > 1 ? "pointer" : "default",
+                opacity: pairs.length > 1 ? 1 : 0.3,
+              }}
+            >×</button>
+          </div>
+        ))}
+        <div>
+          <Btn variant="ghost" onClick={addPair}>+ Add another</Btn>
+        </div>
+        {dupFrom && <div style={{ fontSize: 12, color: "var(--bad)" }}>A column is renamed more than once.</div>}
+        {dupTo && <div style={{ fontSize: 12, color: "var(--bad)" }}>Two columns map to the same new name.</div>}
+        {submitError && <div style={{ fontSize: 12, color: "var(--bad)" }}>{submitError}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Side panel
 // ---------------------------------------------------------------------------
 
@@ -2056,6 +2186,8 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
   const [joinSources, setJoinSources] = useState([]);
   // Filter built-in modal (open from a filter-card drop or a placed filter edit)
   const [filterModalOpen, setFilterModalOpen] = useState(false);
+  // Rename built-in modal (open from a rename-card drop or a placed rename edit)
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
   // Edit a placed built-in step (#209): holds the step being edited, or null. When
   // set, the join modal opens seeded from its builtin_config and saves via PATCH.
   const [editingBuiltin, setEditingBuiltin] = useState(null);
@@ -2168,8 +2300,36 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       });
   }
 
+  // Attach (POST) or edit (PATCH) a rename built-in step. Mirrors submitFilterStep
+  // with builtin_type="rename"; the backend pins it last + enforces one-per-source.
+  function submitRenameStep(builtinConfig) {
+    if (editingBuiltin) {
+      return fetch("/sources/" + source.source_id + "/attach-builtin/" + editingBuiltin.step_id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ builtin_config: builtinConfig }),
+      })
+        .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+        .then(res => {
+          if (res.ok) { loadPipeline(); flash && flash("Rename step updated.", "ok"); }
+          return res;
+        });
+    }
+    return fetch("/sources/" + source.source_id + "/attach-builtin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ builtin_type: "rename", builtin_config: builtinConfig }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+      .then(res => {
+        if (res.ok) { loadPipeline(); flash && flash("Rename step added.", "ok"); }
+        return res;
+      });
+  }
+
   // Open the right modal seeded from a placed built-in step's config (#209 edit).
-  // Routes by builtin_type: join -> JoinModal, filter -> FilterModal (others: no-op).
+  // Routes by builtin_type: join -> JoinModal, filter -> FilterModal, rename ->
+  // RenameModal (others: no-op).
   function handleEditBuiltin(step) {
     if (!step) return;
     if (step.builtin_type === "join") {
@@ -2178,6 +2338,9 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     } else if (step.builtin_type === "filter") {
       setEditingBuiltin(step);
       setFilterModalOpen(true);
+    } else if (step.builtin_type === "rename") {
+      setEditingBuiltin(step);
+      setRenameModalOpen(true);
     }
   }
 
@@ -2188,6 +2351,11 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
 
   function handleCloseFilterModal() {
     setFilterModalOpen(false);
+    setEditingBuiltin(null);
+  }
+
+  function handleCloseRenameModal() {
+    setRenameModalOpen(false);
     setEditingBuiltin(null);
   }
 
@@ -2225,13 +2393,15 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     const setId = e.dataTransfer.getData("palette/set_id");
     const builtinType = e.dataTransfer.getData("palette/builtin_type");
 
-    // Builtin drop — join + filter open their configuration modals; remaining
-    // built-ins (e.g. pivot) are not wired yet.
+    // Builtin drop — join + filter + rename open their configuration modals;
+    // remaining built-ins (e.g. pivot) are not wired yet.
     if (builtinType) {
       if (builtinType === "join") {
         setJoinModalOpen(true);
       } else if (builtinType === "filter") {
         setFilterModalOpen(true);
+      } else if (builtinType === "rename") {
+        setRenameModalOpen(true);
       } else {
         const label = builtinType.charAt(0).toUpperCase() + builtinType.slice(1);
         flash && flash(`${label} modal coming soon`, "ok");
@@ -2468,6 +2638,14 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         onSubmit={submitFilterStep}
         initialConfig={editingBuiltin && editingBuiltin.builtin_type === "filter" ? editingBuiltin.builtin_config : null}
       />
+
+      <RenameModal
+        open={renameModalOpen}
+        onClose={handleCloseRenameModal}
+        currentSource={(pipeline && pipeline.source) || source}
+        onSubmit={submitRenameStep}
+        initialConfig={editingBuiltin && editingBuiltin.builtin_type === "rename" ? editingBuiltin.builtin_config : null}
+      />
     </div>
   );
 }
@@ -2588,4 +2766,4 @@ window.__ScreenBuilder__ = ScreenBuilder;
 // loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
 // these export statements are valid there too; the app itself consumes the
 // components via the window.__ScreenBuilder__ global above.
-export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
+export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
