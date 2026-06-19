@@ -186,7 +186,7 @@ def get_pipeline(
             "functions": functions,
         })
 
-    # 6. Append placed built-in steps (join/pivot/filter) — #209. Each carries
+    # 6. Append placed built-in steps — #209. Each carries
     #    step_type="builtin", builtin_type, builtin_config, position. The canvas
     #    dispatches on step_type; built-in steps interleave by position.
     #    get_builtin_steps now produces the typed BuiltinStepContext carrier; this

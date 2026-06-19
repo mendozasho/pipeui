@@ -7,9 +7,11 @@ These terms are canonical for every ez-skills pipeline phase.
 ## Pipeline steps
 
 **Built-in step**:
-A pipeline step backed by app-provided SQL logic (join, pivot, filter) rather than a
+A pipeline step backed by app-provided logic (join, pivot, filter, rename) rather than a
 user-uploaded function. Persisted in `source_builtin_map`, identified by `step_id`,
-configured by a `builtin_config` blob. Today only `join` is wired end-to-end.
+configured by a `builtin_config` blob. All four types are wired end-to-end and registered
+in `BUILTIN_EXECUTORS` (`backend/domain/functions/builtins.py`); `rename` is singleton
+(one per source) and pinned last in the pipeline.
 _Avoid_: built-in function, builtin
 
 **Function step**:
@@ -26,7 +28,10 @@ _Avoid_: attached step (when the distinction from a palette card matters)
 
 **Unified pipeline**:
 The position-ordered merge of a source's function steps and built-in steps into one list,
-each tagged with `step_type`.
+each tagged with `step_type`. One exception to pure position order: a `rename` built-in is
+**pinned last** regardless of its stored position (it operates on the final output). This
+pinned-last sort is duplicated across three sites — `get_unified_pipeline`, `run.py`, and
+`pipeline_read.py` (the magic string `"rename"`, tracked as cleanup in #83).
 _Avoid_: combined pipeline, full pipeline
 
 **step_type**:
@@ -199,7 +204,7 @@ or inject it). This table is the canonical "where does new code go" map.
 | `pipeline_read.py` | **Pipeline read/serialize** — `get_pipeline`: read committed pipeline state (columns + ordered function/built-in steps) into the API wire dict. Pure read, no transaction. | a pipeline read/serialize concern. |
 | `suggest.py` | **Binding suggestion** — `suggest_bindings` (+ `_params_for_*`, `_SUGGEST_TYPES`, `_SCALAR_TYPES`): dry-run per-param column suggestions for the attach/edit modal, no writes. Returns `current_bindings` in saved `alias_map.position` order (Principle 7 / #260). | a binding-suggestion concern. |
 | `step_edit.py` | **Placed-step edit** — `patch_pipeline_step` (+ `_VALID_OUTPUT_MODES`): edit a placed step's position / output_mode / bindings / scalars; transactional on the `alias_map` rewrite. | a placed-step edit concern. |
-| `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter, dispatched through the `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]` registry (a frozen `BuiltinSpec(validate, execute)` carrier mirroring the runner's `STEP_EXECUTORS`); both `attach_builtin` (validation) and `execute_builtin_step` (execution) look up by `builtin_type` instead of an if/elif chain (OCP — #50). Also `list_builtin_catalog` (the `builtin_registry` read + `config_schema` JSON parse the GET /builtins seam used to do inline). Lives here because a built-in is a *complex function* (a step backing, peer to a function set). | a new built-in type (e.g. rename) registers a `BuiltinSpec` (validator + `_execute_*`) in `BUILTIN_EXECUTORS` — no dispatch edit — or a built-in catalog read. ⚠ *contract-mediated `functions⇄runner` coupling: imports `runner.resolve` (`resolve_frame`); `runner.executors` imports it (`execute_builtin_step`). Resolution = the execution-model convergence (#41).* |
+| `builtins.py` *(L2)* | **Built-in steps** — definition (config + validation) + execution of join/pivot/filter/rename, dispatched through the `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]` registry (a frozen `BuiltinSpec(validate, execute, singleton)` carrier mirroring the runner's `STEP_EXECUTORS`); both `attach_builtin` (validation + the `singleton` one-per-source guard) and `execute_builtin_step` (execution) look up by `builtin_type` instead of an if/elif chain (OCP — #50). Also `list_builtin_catalog` (the `builtin_registry` read + `config_schema` JSON parse the GET /builtins seam used to do inline). Lives here because a built-in is a *complex function* (a step backing, peer to a function set). | a new built-in type registers a `BuiltinSpec` (validator + `_execute_*`, plus `singleton=True` for one-per-source like `rename`) in `BUILTIN_EXECUTORS` — no dispatch edit — or a built-in catalog read. ⚠ *contract-mediated `functions⇄runner` coupling: imports `runner.resolve` (`resolve_frame`); `runner.executors` imports it (`execute_builtin_step`). Resolution = the execution-model convergence (#41).* |
 | **`backend/domain/runner/`** — run orchestration + execution | | |
 | `resolve.py` *(L2)* | **Input resolution** — where a step reads its input: raw instance table vs transformed output, materialize-if-absent, cycle guard (`resolve_frame`, `FrameRef`). Runner **injected** (no orchestrator import). | a new input mode, materialize/cycle rule, or provenance field. |
 | `executors.py` *(L3)* | **Step execution** — the `StepExecutor` registry + per-type executors (function, set-adapter, built-in) and the mechanics of running a step's functions into results (the transform/validation dispatchers + per-function-class arms). Depends **down** on `param_resolve`/`sql_exec`/`interpret`. | a new **step type** (a new `StepExecutor` in `STEP_EXECUTORS`), or new per-function execution mechanics. |

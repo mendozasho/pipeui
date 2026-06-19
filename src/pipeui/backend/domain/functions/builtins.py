@@ -1,4 +1,5 @@
-"""Built-in pipeline steps: join and pivot.
+"""Built-in pipeline steps — app-provided steps registered in ``BUILTIN_EXECUTORS``
+(currently join, pivot, filter, rename; the registry is the source of truth).
 
 attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
     Creates a source_builtin_map row and returns {"ok": True, "step_id": "..."}.
@@ -369,13 +370,13 @@ def execute_builtin_step(
 
     Returns ``(result_df, consumed_result_id)``. ``consumed_result_id`` is the
     resolved transformed-output ``result_id`` when a join consumed a transformed
-    source (lineage — PRD User Story 7), else ``None`` (pivot/filter never consume
-    another source, and a raw join consumes the source's own data, not a result).
+    source (lineage — PRD User Story 7), else ``None`` (non-join built-ins never
+    consume another source, and a raw join consumes the source's own data, not a result).
 
     ``run_transforms`` is the injected runner (DIP) threaded to ``resolve_frame`` so a
     transformed join can materialize a never-run right source without builtins
     importing the orchestrator. Required only on the materialize path of a
-    transformed join; ``None`` for raw joins and pivot/filter.
+    transformed join; ``None`` for raw joins and all non-join built-ins.
 
     Uses DuckDB directly (no worker subprocess).
     Raises ValueError for bad config; other exceptions propagate.
@@ -595,7 +596,7 @@ class BuiltinSpec:
     - ``validate(cfg) -> str | None`` — attach-time config-shape check; error string or None.
     - ``execute(conn, df, cfg, run_transforms) -> (df, consumed_result_id)`` — runs the
       step. ``run_transforms`` is the injected runner (DIP) used only by the transformed-join
-      materialize path; pivot/filter accept-and-ignore it and return ``consumed_result_id=None``.
+      materialize path; non-join built-ins accept-and-ignore it and return ``consumed_result_id=None``.
     - ``singleton`` — at most one step of this type per source (enforced in attach_builtin);
       rename is singleton + pinned-last (#40).
     """

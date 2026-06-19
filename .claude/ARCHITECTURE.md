@@ -6,7 +6,8 @@
 > dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
 > `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
 > The SRP-decomposition epic #43 that followed is **in progress** — Waves 1–4 (#44–#50)
-> are done; Wave 4 #51 and Wave 5 (#52, #53) remain open; epic #43 itself is OPEN — see §7.
+> are done; #53 is done (PR #84 merged); Wave 4 #51 and Wave 5 #52 remain open;
+> epic #43 itself is OPEN — see §7.
 
 The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
 carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
@@ -184,9 +185,9 @@ to `backend/data/sources/inference.py`, the `get_conn` provider moved to `middle
   `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]` registry, mirroring `STEP_EXECUTORS`; a new
   built-in registers a `BuiltinSpec` with no dispatch edit). #51 — a single type-descriptor
   table for classification (OCP) — is **open**.
-- **Wave 5 — DRY + cleanup:** #52 (a single DuckDB→Python type normalizer, DRY) and #53
-  (dead-code / stale-doc / `REFACTOR_PLAN.md` prune) are **open**.
+- **Wave 5 — DRY + cleanup:** #52 (a single DuckDB→Python type normalizer, DRY) is **open**;
+  #53 (dead-code / stale-doc / `REFACTOR_PLAN.md` prune) is **done** (PR #84 merged).
 
 **Next.** The §4 layer migration (#55) is complete; the SRP-decomposition epic (#43) is still
-open — the active front is **#51** (type-descriptor table), then Wave 5 (#52, #53). The next
-structural reshape after #43 closes will be tracked as a new epic when opened.
+open — the active front is **#51** (type-descriptor table), then #52 (#53 is done, PR #84 merged).
+The next structural reshape after #43 closes will be tracked as a new epic when opened.

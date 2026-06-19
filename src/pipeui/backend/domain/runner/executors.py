@@ -463,13 +463,13 @@ def _builtin_result(
     rows_affected: int | None,
     consumed_result_id: str | None = None,
 ) -> StepResultEntry:
-    """Build a step-results entry for a built-in step (join/pivot/filter).
+    """Build a step-results entry for a built-in step.
 
     Reuses the transform RunResult shape (function_type='transform') so the Results
     screen renders it like any other transform step; the built-in type is the label.
 
     ``consumed_result_id`` is the resolved transformed-output ``result_id`` a join
-    consumed (lineage — PRD User Story 7); None for raw joins and for pivot/filter.
+    consumed (lineage — PRD User Story 7); None for raw joins and for all non-join built-ins.
     """
     btype = step.builtin_type
     rr = RunResult(
@@ -846,7 +846,7 @@ class FunctionSetExecutor:
 
 
 class BuiltinStepExecutor:
-    """Executes a built-in step (join/pivot/filter).
+    """Executes a built-in step.
 
     Mirrors the pre-refactor inline built-in branch exactly: reshape the working
     frame via ``execute_builtin_step``, stage it, and record one ``_builtin_result``

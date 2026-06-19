@@ -83,11 +83,11 @@ CREATE TABLE IF NOT EXISTS function_set_map (
     position    INTEGER NOT NULL
 );
 
--- Catalog of built-in pipeline step types (join, pivot, filter).
+-- Catalog of built-in pipeline step types (rows seeded by SEED_BUILTINS below).
 -- Seeded once at create_schema time; builtin_type is the stable identifier.
 CREATE TABLE IF NOT EXISTS builtin_registry (
     builtin_id    UUID PRIMARY KEY,
-    builtin_type  VARCHAR UNIQUE NOT NULL,  -- "join" | "pivot" | "filter"
+    builtin_type  VARCHAR UNIQUE NOT NULL,  -- one row per type; values seeded by SEED_BUILTINS
     display_name  VARCHAR NOT NULL,
     description   TEXT,
     config_schema JSON
@@ -131,12 +131,12 @@ CREATE TABLE IF NOT EXISTS function_output_config (
     PRIMARY KEY (source_function_map_id, function_id)
 );
 
--- Built-in pipeline steps (join, pivot, filter) attached to a source.
--- Each row is a join, pivot, or filter configuration stored as JSON.
+-- Built-in pipeline steps attached to a source.
+-- Each row is a built-in step configuration stored as JSON.
 CREATE TABLE IF NOT EXISTS source_builtin_map (
     step_id       UUID PRIMARY KEY,
     source_id     UUID NOT NULL,   -- references source_registry(source_id)
-    builtin_type  VARCHAR NOT NULL, -- "join" | "pivot" | "filter"
+    builtin_type  VARCHAR NOT NULL, -- valid types seeded in builtin_registry (see SEED_BUILTINS)
     builtin_config JSON    NOT NULL,
     position      INTEGER NOT NULL DEFAULT 0
 );

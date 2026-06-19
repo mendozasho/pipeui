@@ -1,4 +1,4 @@
-"""API routes for built-in pipeline steps (join, pivot, filter).
+"""API routes for built-in pipeline steps (types registered in ``BUILTIN_EXECUTORS``).
 
 GET    /builtins                                       — list all builtin_registry rows
 POST   /sources/{source_id}/attach-builtin          — attach a built-in step
@@ -76,7 +76,7 @@ def attach_builtin_route(
     body: AttachBuiltinBody,
     conn: duckdb.DuckDBPyConnection = Depends(get_conn),
 ):
-    """Attach a built-in step (join or pivot) to a source."""
+    """Attach a built-in step to a source."""
     sid = _parse_source_id(source_id)
     result = attach_builtin(conn, sid, body.builtin_type, body.builtin_config)
     if not result.get("ok"):
