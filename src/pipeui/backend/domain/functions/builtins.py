@@ -336,8 +336,13 @@ def get_unified_pipeline(
             "position": bstep.position,
         })
 
-    # Sort unified list by position
-    steps.sort(key=lambda s: (s["position"], s.get("set_name") or s.get("builtin_type") or ""))
+    # Sort unified list by position; a rename built-in is pinned last (#40), matching
+    # the execution order in run.py and the canvas order in get_pipeline.
+    steps.sort(key=lambda s: (
+        1 if s.get("builtin_type") == "rename" else 0,
+        s["position"],
+        s.get("set_name") or s.get("builtin_type") or "",
+    ))
 
     return {
         "source": {

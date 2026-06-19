@@ -796,3 +796,25 @@ def test_rename_pinned_last_in_pipeline_display(source):
     pipe = get_pipeline(conn, source_id)
     builtin_types = [s["builtin_type"] for s in pipe["steps"] if s.get("step_type") == "builtin"]
     assert builtin_types[-1] == "rename", builtin_types  # pinned last despite lower position
+
+
+def test_execute_rename_swap_is_allowed():
+    # a->b and b->a swap: neither target collides with a SURVIVING column (both are
+    # renamed away), so it must NOT raise — guards the `surviving = cols - keys`
+    # nuance against a naive `new in columns` check.
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    out = _execute_rename(None, df, {"renames": {"a": "b", "b": "a"}})
+    assert out["a"].iloc[0] == 2 and out["b"].iloc[0] == 1  # labels swapped
+
+
+def test_rename_pinned_last_in_execution(db):
+    """#40: a rename built-in EXECUTES last (run.py), not just displays last — even when
+    attached at a lower position than another step."""
+    source_id, _ = _make_source(db, "rexec")
+    _make_instance_table(db, source_id, pd.DataFrame({"a": [1, 2], "b": [3, 4]}))
+    # rename attached FIRST (position 0), filter SECOND (position 1).
+    assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+    assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+    out = run_pipeline(db, source_id, "all")
+    order = [s["builtin_type"] for s in out["steps"] if s.get("step_type") == "builtin"]
+    assert order == ["filter", "rename"], order  # rename runs last despite lower position
