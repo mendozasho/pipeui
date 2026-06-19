@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import uuid
 
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import duckdb
@@ -143,16 +144,12 @@ def attach_builtin(
 
     Returns {"ok": True, "step_id": "<uuid>"} or {"ok": False, "detail": "..."}.
     """
-    if builtin_type not in ("join", "pivot", "filter"):
-        return {"ok": False, "detail": f"builtin_type must be 'join', 'pivot', or 'filter'; got {builtin_type!r}"}
+    spec = BUILTIN_EXECUTORS.get(builtin_type)
+    if spec is None:
+        return {"ok": False, "detail": f"builtin_type must be one of {sorted(BUILTIN_EXECUTORS)}; got {builtin_type!r}"}
 
-    # Validate config shape
-    if builtin_type == "join":
-        err = _validate_join_config(builtin_config)
-    elif builtin_type == "pivot":
-        err = _validate_pivot_config(builtin_config)
-    else:
-        err = _validate_filter_config(builtin_config)
+    # Validate config shape (attach-time) via the registered validator
+    err = spec.validate(builtin_config)
     if err:
         return {"ok": False, "detail": err}
 
@@ -352,14 +349,10 @@ def execute_builtin_step(
     if isinstance(cfg, str):
         cfg = json.loads(cfg)
 
-    if btype == "join":
-        return _execute_join(conn, df, cfg, run_transforms=run_transforms)
-    elif btype == "pivot":
-        return _execute_pivot(conn, df, cfg), None
-    elif btype == "filter":
-        return _execute_filter(conn, df, cfg), None
-    else:
+    spec = BUILTIN_EXECUTORS.get(btype)
+    if spec is None:
         raise ValueError(f"Unknown builtin_type: {btype!r}")
+    return spec.execute(conn, df, cfg, run_transforms)
 
 
 def _execute_join(
@@ -522,3 +515,45 @@ def _execute_filter(
         conn.execute(f'DROP VIEW IF EXISTS "{_filter_view}"')
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Built-in dispatch registry (OCP — #50)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BuiltinSpec:
+    """The validate + execute pair for one built-in type — mirrors the runner's
+    ``STEP_EXECUTORS`` registry so a new built-in (e.g. rename, #40) REGISTERS here
+    instead of editing the attach-time validation and run-time execution if/elif chains.
+
+    - ``validate(cfg) -> str | None`` — attach-time config-shape check; error string or None.
+    - ``execute(conn, df, cfg, run_transforms) -> (df, consumed_result_id)`` — runs the
+      step. ``run_transforms`` is the injected runner (DIP) used only by the transformed-join
+      materialize path; pivot/filter accept-and-ignore it and return ``consumed_result_id=None``.
+    """
+
+    validate: Callable[[dict], "str | None"]
+    execute: Callable[..., "tuple[pd.DataFrame, str | None]"]
+
+
+# The dispatch table both attach_builtin (validation) and execute_builtin_step
+# (execution) look up by builtin_type. Adapter lambdas normalize the executors'
+# differing shapes (join takes run_transforms + returns a consumed_result_id; pivot/
+# filter return a bare df) to the uniform BuiltinSpec.execute signature.
+BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
+    "join": BuiltinSpec(
+        validate=_validate_join_config,
+        execute=lambda conn, df, cfg, run_transforms: _execute_join(
+            conn, df, cfg, run_transforms=run_transforms
+        ),
+    ),
+    "pivot": BuiltinSpec(
+        validate=_validate_pivot_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_pivot(conn, df, cfg), None),
+    ),
+    "filter": BuiltinSpec(
+        validate=_validate_filter_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_filter(conn, df, cfg), None),
+    ),
+}

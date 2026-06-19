@@ -5,7 +5,8 @@
 > `api/`, `workflow/`, `validation/`, `sql_user_table/`, and top-level `schema/` are all
 > dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
 > `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
-> The SRP-decomposition epic #43 (#45–#49) that followed is also **complete** — see §7.
+> The SRP-decomposition epic #43 that followed is **in progress** — Waves 1–4 (#44–#50)
+> are done; Wave 4 #51 and Wave 5 (#52, #53) remain open; epic #43 itself is OPEN — see §7.
 
 The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
 carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
@@ -17,7 +18,7 @@ carved up the runner cleanly but only the runner. This doc lifts that same disci
 
 | Layer | Single responsibility | Current modules |
 | --- | --- | --- |
-| **`frontend/`** | What the user sees — UI, design, view state. Imports no backend code; talks to `middleware` only over HTTP. | the React app (untouched this pass) |
+| **`frontend/`** (`src/pipeui/frontend/`) | What the user sees — UI, design, view state. Imports no backend code; talks to `middleware` only over HTTP. | the React app (untouched this pass) |
 | **`middleware/`** | The API seam — HTTP routes, request/response shaping, CRUD endpoints, the data↔frontend contracts. Calls `backend` only. | `middleware/*` |
 | **`backend/`** | Everything server-side. Decomposed **per feature** over two sub-layers, `data` (foundation) and `domain` (logic above it). Its size is irrelevant — depth is expressed as nesting. | `backend/data/{base,sources,functions,runner}/`, `backend/domain/{sources,functions,runner}/` |
 
@@ -57,7 +58,9 @@ backend/
     runner/                 # run orchestration, executors, resolve, builtins, worker, export
 ```
 
-`frontend/` may adopt the same per-feature + `base/` shape.
+`frontend/` (the React app at `src/pipeui/frontend/`, served as the FastAPI static dir;
+`package.json`/`vitest.config.js` at the repo root) may adopt the same per-feature + `base/`
+shape.
 
 ---
 
@@ -162,21 +165,28 @@ rewrites + green suite). All slices landed:
 - [x] **Slice 4** — `api/` → `middleware/`; `api/` dissolved.
 - [x] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`.
 
-**The SRP-decomposition epic #43 (complete).** The per-module splits the migration deliberately
-deferred, done **inside** the re-homed tree: `executors.py` (#45, ✅ done), `attach.py`
-(#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into `classification` (DB-free
-leaf), `discovery`, `registration` (transaction owner), and `function_read`), the api-DIP cleanup
-(#48, ✅ done — the middleware seam ran raw SQL; reads/guards pushed down into `backend`, the
-source read-path extracted from `ingestion.py` into `backend/domain/sources/read.py`, and a
-guard test locks the seam SQL-free), and `db.py`/`helpers.py` (#49, ✅ done): `db.py` reduced to
-connection + registry-schema lifecycle, type-inference extracted to
-`backend/data/sources/inference.py`, the `get_conn` provider moved to `middleware/deps.py`, and
+**The SRP-decomposition epic #43 (in progress — epic OPEN).** The per-module splits the
+migration deliberately deferred, done **inside** the re-homed tree. Waves 1–3: `executors.py`
+(#45, ✅ done), `attach.py` (#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into
+`classification` (DB-free leaf), `discovery`, `registration` (transaction owner), and
+`function_read`), the api-DIP cleanup (#48, ✅ done — the middleware seam ran raw SQL; reads/guards
+pushed down into `backend`, the source read-path extracted from `ingestion.py` into
+`backend/domain/sources/read.py`, and a guard test locks the seam SQL-free), and `db.py`/`helpers.py`
+(#49, ✅ done): `db.py` reduced to connection + registry-schema lifecycle, type-inference extracted
+to `backend/data/sources/inference.py`, the `get_conn` provider moved to `middleware/deps.py`, and
 `app/helpers.py` dissolved (settings I/O → `app/config.py`, `infer_pattern` →
 `backend/domain/sources/create.py`). #49 also resolved the `backend/data/base/db.py` →
 `app/config.py` `DB_PATH` up-import (the data layer is now app-free, locked by
 `test_db_layering.py`).
 
-**Next.** With the §4 layer migration (#55) and the SRP-decomposition epic (#43) both complete,
-no architecture-track epic is open. The remaining roadmap front is feature work (ROADMAP.md
-Phase F3 / Active Deferred Work); the next structural reshape will be tracked as a new epic when
-opened.
+- **Wave 4 — built-in & type-descriptor OCP:** `builtins.py` dispatch (#50, ✅ done — the
+  attach-time validation + run-time execution if/elif chains replaced by the
+  `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]` registry, mirroring `STEP_EXECUTORS`; a new
+  built-in registers a `BuiltinSpec` with no dispatch edit). #51 — a single type-descriptor
+  table for classification (OCP) — is **open**.
+- **Wave 5 — DRY + cleanup:** #52 (a single DuckDB→Python type normalizer, DRY) and #53
+  (dead-code / stale-doc / `REFACTOR_PLAN.md` prune) are **open**.
+
+**Next.** The §4 layer migration (#55) is complete; the SRP-decomposition epic (#43) is still
+open — the active front is **#51** (type-descriptor table), then Wave 5 (#52, #53). The next
+structural reshape after #43 closes will be tracked as a new epic when opened.

@@ -701,3 +701,42 @@ def test_raw_join_step_result_has_no_consumed_result_id(db):
     entry = builtin_results[0]
     assert entry["status"] == "ok", entry.get("error")
     assert entry["consumed_result_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# OCP — builtin dispatch is registry-driven (#50)
+# ---------------------------------------------------------------------------
+
+def test_builtin_dispatch_is_registry_driven(db):
+    """#50: a built-in type is reachable purely by REGISTERING a BuiltinSpec in
+    BUILTIN_EXECUTORS — no edit to any attach-time or run-time if/elif chain. Registering
+    a throwaway type routes BOTH attach_builtin (validation) and execute_builtin_step
+    (execution) to it; unregistering removes it. This is the OCP the registry buys."""
+    import pipeui.backend.domain.functions.builtins as b
+
+    # The shipped registry holds exactly the three built-in types, each a BuiltinSpec.
+    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter"}
+    assert all(isinstance(s, b.BuiltinSpec) for s in b.BUILTIN_EXECUTORS.values())
+
+    source_id, _ = _make_source(db, "ocp")
+    seen: dict = {}
+    spec = b.BuiltinSpec(
+        validate=lambda cfg: None if cfg.get("ok") else "bad cfg",
+        execute=lambda conn, df, cfg, run_transforms: (seen.setdefault("ran", df), None),
+    )
+    saved = dict(b.BUILTIN_EXECUTORS)
+    b.BUILTIN_EXECUTORS["_ocp_probe"] = spec
+    try:
+        # attach-time validation dispatches through the registered validator
+        bad = b.attach_builtin(db, source_id, "_ocp_probe", {})
+        assert bad["ok"] is False and "bad cfg" in bad["detail"]
+        good = b.attach_builtin(db, source_id, "_ocp_probe", {"ok": True})
+        assert good["ok"] is True
+
+        # run-time execution dispatches through the registered executor
+        df = pd.DataFrame({"a": [1, 2]})
+        out, consumed = execute_builtin_step(db, df, _builtin_step("_ocp_probe", {"ok": True}))
+        assert seen.get("ran") is df and consumed is None
+    finally:
+        b.BUILTIN_EXECUTORS.clear()
+        b.BUILTIN_EXECUTORS.update(saved)
