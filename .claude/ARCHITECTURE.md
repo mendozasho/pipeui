@@ -5,9 +5,8 @@
 > `api/`, `workflow/`, `validation/`, `sql_user_table/`, and top-level `schema/` are all
 > dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
 > `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
-> The SRP-decomposition epic #43 that followed is **in progress** — Waves 1–4 (#44–#50)
-> are done; #53 is done (PR #84 merged); Wave 4 #51 and Wave 5 #52 remain open;
-> epic #43 itself is OPEN — see §7.
+> The SRP-decomposition epic #43 that followed is **complete** — all five waves (#44–#53)
+> are merged and the epic is closed — see §7.
 
 The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
 carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
@@ -166,7 +165,7 @@ rewrites + green suite). All slices landed:
 - [x] **Slice 4** — `api/` → `middleware/`; `api/` dissolved.
 - [x] **Slice 5** — composition root (`main`, `config`, `helpers`, `cli`) → `app/`.
 
-**The SRP-decomposition epic #43 (in progress — epic OPEN).** The per-module splits the
+**The SRP-decomposition epic #43 (complete — epic CLOSED).** The per-module splits the
 migration deliberately deferred, done **inside** the re-homed tree. Waves 1–3: `executors.py`
 (#45, ✅ done), `attach.py` (#46, ✅ done), `functions/registration.py` (#47, ✅ done — split into
 `classification` (DB-free leaf), `discovery`, `registration` (transaction owner), and
@@ -184,10 +183,14 @@ to `backend/data/sources/inference.py`, the `get_conn` provider moved to `middle
   attach-time validation + run-time execution if/elif chains replaced by the
   `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]` registry, mirroring `STEP_EXECUTORS`; a new
   built-in registers a `BuiltinSpec` with no dispatch edit). #51 — a single type-descriptor
-  table for classification (OCP) — is **open**.
-- **Wave 5 — DRY + cleanup:** #52 (a single DuckDB→Python type normalizer, DRY) is **open**;
+  table for classification (OCP) — is **done**: the scattered param/return-type maps replaced
+  by the one `_TYPE_DESCRIPTORS` table in `backend/domain/functions/classification.py`, both
+  lookups derived from it via `_derive_lookups`; a new supported type is one `TypeDescriptor` row.
+- **Wave 5 — DRY + cleanup:** #52 (a single DuckDB→Python type normalizer, DRY) is **done**:
+  `normalize_column_type` in `backend/data/base/schema/constants.py` is the one "known DuckDB
+  type, else VARCHAR" rule, consumed by `ingestion.py`, `inference.py`, and `create.py`.
   #53 (dead-code / stale-doc / `REFACTOR_PLAN.md` prune) is **done** (PR #84 merged).
 
-**Next.** The §4 layer migration (#55) is complete; the SRP-decomposition epic (#43) is still
-open — the active front is **#51** (type-descriptor table), then #52 (#53 is done, PR #84 merged).
-The next structural reshape after #43 closes will be tracked as a new epic when opened.
+**Next.** Both architecture epics are closed: the §4 layer migration (#55) and the
+SRP-decomposition epic (#43, all five waves #44–#53 merged). No SRP/migration front remains
+open. The next structural reshape will be tracked as a new epic when one is opened.
