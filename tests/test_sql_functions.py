@@ -10,7 +10,7 @@ import pytest
 from pipeui.backend.domain.functions.discovery import discover_sql_functions_in_file
 from pipeui.backend.domain.functions.registration import scan_functions
 from pipeui.backend.domain.functions.function_read import list_functions
-from pipeui.backend.domain.runner.sql_exec import _execute_sql_function
+from pipeui.backend.domain.runner.sql_exec import execute_sql_function
 from pipeui.backend.data.base.tables import instance_table_name
 from tests.conftest import make_registered_source
 
@@ -257,7 +257,7 @@ class TestSqlFunctionExecution:
             SELECT * FROM {source_table} WHERE val IS NOT NULL
         """)
 
-        result = _execute_sql_function(db, str(sql_file), source_id)
+        result = execute_sql_function(db, str(sql_file), source_id)
         import pandas as pd
         assert isinstance(result, pd.DataFrame), f"Expected DataFrame, got {type(result)}: {result}"
         assert len(result) == 2
@@ -275,7 +275,7 @@ class TestSqlFunctionExecution:
             SELECT * FROM this_table_does_not_exist_xyz
         """)
 
-        result = _execute_sql_function(db, str(sql_file), source_id)
+        result = execute_sql_function(db, str(sql_file), source_id)
         assert isinstance(result, FailedFunctionEntry), f"Expected FailedFunctionEntry, got {result}"
         assert result.has_failures()
 
@@ -294,7 +294,7 @@ class TestSqlFunctionExecution:
         """)
 
         import pandas as pd
-        result = _execute_sql_function(db, str(sql_file), source_id)
+        result = execute_sql_function(db, str(sql_file), source_id)
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 2
         assert list(result["id"]) == [1, 2]

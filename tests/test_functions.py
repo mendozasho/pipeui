@@ -180,8 +180,8 @@ class TestSingleTypeDescriptorTable:
         share the single table, so one new row wires every consumer at once. The
         function_type leg checks against an independent validation-return set, not
         the descriptor's own flag, so a mislabeled row fails here."""
-        assert classification._is_known_param_type(descriptor.type_str)
-        assert classification._is_known_return_type(descriptor.type_str)
+        assert classification.is_known_param_type(descriptor.type_str)
+        assert classification.is_known_return_type(descriptor.type_str)
         assert derive_function_class([descriptor.type_str]) == descriptor.function_class
         assert derive_function_return_type(descriptor.type_str) == descriptor.return_type
         # The table's flag must match the documented vocabulary (catches a flipped flag)...
@@ -211,8 +211,8 @@ class TestSingleTypeDescriptorTable:
         monkeypatch.setattr(classification, "_TYPE_DESCRIPTORS", extended)
         monkeypatch.setattr(classification, "_BY_TYPE", by_type)
         monkeypatch.setattr(classification, "_VALIDATION_RETURN_TYPES", validation_returns)
-        assert classification._is_known_param_type("decimal")
-        assert classification._is_known_return_type("decimal")
+        assert classification.is_known_param_type("decimal")
+        assert classification.is_known_return_type("decimal")
         assert derive_function_class(["decimal"]) == "scalar"
         assert derive_function_return_type("decimal") == "scalar"
         assert derive_function_type("scalar") == "transform"

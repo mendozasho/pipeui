@@ -55,12 +55,12 @@ from pipeui.backend.data.runner.steps import (
     FunctionStepContext,
     StepContext,
 )
-from pipeui.backend.domain.runner.interpret import _interpret_validation_result
+from pipeui.backend.domain.runner.interpret import interpret_validation_result
 from pipeui.backend.domain.runner.param_resolve import (
     RequiredParamError,
     resolve_scalar_kwargs,
 )
-from pipeui.backend.domain.runner.sql_exec import _execute_sql_function
+from pipeui.backend.domain.runner.sql_exec import execute_sql_function
 from pipeui.backend.domain.runner.worker import call_function
 
 
@@ -314,7 +314,7 @@ def _execute_transform_step(
         if module_path and module_path.endswith(".sql"):
             if conn is None or source_id is None:
                 return working, "SQL function execution requires conn and source_id", run_results
-            result = _execute_sql_function(conn, module_path, source_id)
+            result = execute_sql_function(conn, module_path, source_id)
             if isinstance(result, FailedFunctionEntry):
                 return working, _fail_msg(result, "SQL execution failed"), run_results
             current = result
@@ -550,8 +550,8 @@ def _execute_validation_step(
                     error="SQL function execution requires conn and source_id",
                 ))
                 continue
-            sql_result = _execute_sql_function(conn, module_path, source_id)
-            results.append(_interpret_validation_result(
+            sql_result = execute_sql_function(conn, module_path, source_id)
+            results.append(interpret_validation_result(
                 sql_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
             ))
             continue
@@ -588,7 +588,7 @@ def _execute_validation_step(
                     kwarg_name = p["param_name"]
                     break
             df_result = call_function(fn_source, fn_name, kwarg_name, original, extra_kwargs=extra_kwargs)
-            results.append(_interpret_validation_result(
+            results.append(interpret_validation_result(
                 df_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
             ))
             continue
@@ -629,7 +629,7 @@ def _execute_validation_step(
         if bound_param is None:
             # No bound column param — pass the full original table once.
             scalar_result = call_function(fn_source, fn_name, kwarg_name, original, extra_kwargs=extra_kwargs)
-            results.append(_interpret_validation_result(
+            results.append(interpret_validation_result(
                 scalar_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
             ))
             continue
@@ -678,7 +678,7 @@ def _run_validation_bundle(
     else:
         result = call_function(fn_source, fn_name, kwarg_name, column_series, extra_kwargs=extra_kwargs)
 
-    return _interpret_validation_result(
+    return interpret_validation_result(
         result, original, fn_id=fn_id, fn_name=fn_name, bound_col=bound_col, emit=emit,
     )
 

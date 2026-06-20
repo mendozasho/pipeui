@@ -21,7 +21,7 @@ from pipeui.backend.data.base.fails import FailedFunctionEntry
 from pipeui.backend.data.base.tables import instance_table_name
 
 
-def _execute_sql_function(
+def execute_sql_function(
     conn: duckdb.DuckDBPyConnection,
     module_path: str,
     source_id: uuid.UUID,

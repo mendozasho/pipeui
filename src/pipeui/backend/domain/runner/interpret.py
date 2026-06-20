@@ -15,7 +15,7 @@ import pandas as pd
 from pipeui.backend.data.base.fails import FailedFunctionEntry
 
 
-def _interpret_validation_result(result, original, *, fn_id, fn_name, bound_col, emit):
+def interpret_validation_result(result, original, *, fn_id, fn_name, bound_col, emit):
     """Normalize a validation worker result to pass/fail counts + failing rows, then emit.
 
     Accepts a pd.Series/pd.DataFrame boolean vector (the scalar-run-normalized output),
