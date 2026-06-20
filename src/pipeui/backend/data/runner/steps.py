@@ -43,7 +43,7 @@ class FunctionSpec:
     dataclass. ``output_mode`` / ``append_name`` / ``output_targets`` are this
     function's own output config (#264; legacy step-level fallback resolved by the
     loader). ``step_type`` lets the set adapter dispatch each member by its own type
-    (today always ``FUNCTION``; a built-in member is #275).
+    (today always ``FUNCTION``; a built-in member is #41).
     """
 
     function_id: str
