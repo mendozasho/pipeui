@@ -789,7 +789,7 @@ class FunctionSetExecutor:
     the adapter expands the set's members into one single-member sub-context each and
     dispatches it through ``STEP_EXECUTORS`` *by the member's own step type* — not
     hardcoded to function — so a set behaves exactly like its members placed
-    individually, and a built-in member becomes additive later (#275) without
+    individually, and a built-in member becomes additive later (#41) without
     re-plumbing the contract (heterogeneous-member readiness).
 
     Behavior preservation: a plain function member resolves to the per-member
@@ -826,7 +826,7 @@ class FunctionSetExecutor:
         ``StepContext.from_function`` factory — never a bare constructor.
 
         Members are ``FunctionSpec`` (function members). A built-in member is not
-        type-expressible yet (storing built-ins in a set is #275, which will widen the
+        type-expressible yet (storing built-ins in a set is #41, which will widen the
         member type to a union); until then every member routes to ``FUNCTION`` ->
         ``FunctionStepExecutor`` (behavior-preserving). The sub-context reuses the
         set's step-level fields with a one-element ``functions`` tuple and the set's
