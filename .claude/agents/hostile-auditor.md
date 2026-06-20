@@ -109,9 +109,17 @@ and tests actually back up what they claim.
   smeared across modules instead of one module owning the capability and exposing a named
   interface. This is NOT excused by "it's defined in one home module and imported from
   there" — being correctly homed is not the test; whether the privacy marker matches the
-  actual usage boundary is. Run a WIDE grep:
-  `grep -rnE "from [A-Za-z0-9_.]+ import .*\b_[A-Za-z]" --include="*.py"` (ignore dunders
-  like `__future__`/`__all__`); for each hit confirm the `_name` is *defined in a different
+  actual usage boundary is. **Detect with an AST scan, NOT a line grep.** A line-based grep
+  (`grep -rnE "from [A-Za-z0-9_.]+ import .*\b_[A-Za-z]" --include="*.py"`) only sees
+  single-line imports and SILENTLY MISSES multi-line parenthesized imports
+  (`from a import (\n    _foo,\n)`) — the exact form real reach-ins hide in, which is how
+  they slip past audits. Use it only as a quick first pass. The authoritative scan walks
+  every source `.py` with Python's `ast` and flags each `ImportFrom` whose imported
+  `alias.name` (NOT its `as`-alias) starts with a single `_` and is not a dunder:
+  `python3 -c "import ast,glob; [print(f'{f}:{n.lineno} {a.name}') for f in glob.glob('**/*.py',recursive=True) if '/.venv/' not in f and 'site-packages' not in f for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.ImportFrom) for a in n.names if a.name.startswith('_') and not a.name.startswith('__')]"`
+  (point the glob at the project's source tree; skip vendored dirs). If the project ships a
+  guard test for this rule (e.g. an AST-based `tests/test_module_boundaries.py`), run it and
+  treat a failure as the finding. For each hit confirm the `_name` is *defined in a different
   module* than the importer. Classify:
   - **Responsibility smell / missing contract (FINDING):** a `_`-private helper imported and
     called by one or more sibling modules. Fix: promote it to a public name on its owner
