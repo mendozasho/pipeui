@@ -6,9 +6,11 @@ from pathlib import Path
 
 import duckdb
 
-import re
-
-from pipeui.backend.data.base.schema.constants import DUCKDB_TO_PYTHON, IngestionMethod
+from pipeui.backend.data.base.schema.constants import (
+    DUCKDB_TO_PYTHON,
+    IngestionMethod,
+    normalize_column_type,
+)
 from pipeui.backend.data.base.tables import build_create_table_sql, instance_table_name
 from pipeui.backend.data.base.fails import FailedRegistryEntry
 
@@ -37,13 +39,13 @@ def _load_to_temp(conn: duckdb.DuckDBPyConnection, file_path: str, temp_name: st
 
 
 def _py_type(raw: str) -> type:
-    """Map a raw DuckDB type string to its Python equivalent via DUCKDB_TO_PYTHON.
+    """Map a raw DuckDB type string to its Python equivalent.
 
-    Strips parameterization first (e.g. VARCHAR(100) → VARCHAR).
-    Unmapped types fall back to str (same as VARCHAR).
+    Normalizes via the canonical ``normalize_column_type`` (strips parameterization,
+    unknown → VARCHAR, #52), then maps to the Python type. Unmapped types fall back to
+    str (same as VARCHAR).
     """
-    base = re.split(r"[\s(]", raw.upper())[0]
-    return DUCKDB_TO_PYTHON.get(base, str)
+    return DUCKDB_TO_PYTHON[normalize_column_type(raw)]
 
 
 def _diff_schema(

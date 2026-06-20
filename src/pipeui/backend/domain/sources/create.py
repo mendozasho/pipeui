@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id
-from pipeui.backend.data.base.schema.constants import IngestionMethod, DUCKDB_TO_PYTHON
+from pipeui.backend.data.base.schema.constants import IngestionMethod, normalize_column_type
 from pipeui.backend.data.base.db import get_db_path
 from pipeui.backend.data.sources.inference import infer_column_types
 from pipeui.backend.data.base.fails import FailedRegistryEntry
@@ -155,8 +155,9 @@ def create_source(
 
     # Try to infer column types from the file. Will later add the ones not in the column registry
     raw_columns = infer_column_types(conn, file_path)
-    # Defensive fallback: any type not in our known set (e.g. from a mock or future DuckDB type)
-    columns = [(name, t if t in DUCKDB_TO_PYTHON else "VARCHAR") for name, t in raw_columns]
+    # Defensive normalize: any type not in our known set (e.g. from a mock or future
+    # DuckDB type) falls back to VARCHAR — the single canonical rule (#52).
+    columns = [(name, normalize_column_type(t)) for name, t in raw_columns]
 
     # [1] [stage in create-flow cache]
     # We stage so that any errors can be rolled back to previous working state.

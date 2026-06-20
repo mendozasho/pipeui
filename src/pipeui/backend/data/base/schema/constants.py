@@ -1,4 +1,5 @@
 import enum
+import re
 
 DUCKDB_TO_PYTHON: dict[str, type] = {
     "DOUBLE": float,
@@ -21,6 +22,24 @@ DUCKDB_TO_PYTHON: dict[str, type] = {
     "BOOL": bool,
 }
 """DuckDB to Python type mapping."""
+
+
+def normalize_column_type(raw: str) -> str:
+    """Normalize a raw DuckDB column-type string to a known canonical type name.
+
+    The single source of the "known DuckDB type, else VARCHAR" rule (#52). Upper-cases
+    and strips parameterization (``VARCHAR(100)`` → ``VARCHAR``, ``DECIMAL(18,3)`` →
+    ``DECIMAL``), then returns the base type if it is a key in ``DUCKDB_TO_PYTHON``,
+    else ``"VARCHAR"`` — the safe widening fallback. An empty/falsy input is treated as
+    unknown and falls back to ``"VARCHAR"``.
+
+    Result is always a ``DUCKDB_TO_PYTHON`` key, so ``DUCKDB_TO_PYTHON[normalize_column_type(x)]``
+    is always safe.
+    """
+    if not raw:
+        return "VARCHAR"
+    base = re.split(r"[\s(]", raw.upper())[0]
+    return base if base in DUCKDB_TO_PYTHON else "VARCHAR"
 
 
 PYTHON_TO_DUCKDB = mapping = {
