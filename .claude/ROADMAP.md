@@ -45,7 +45,7 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   `backend/{data,domain}/` + `app/`. All 5 slices + the `builtins → functions/` relocation
   landed, each behavior-preserving + hostile-audited; `validation/`, `workflow/`,
   `sql_user_table/`, top-level `schema/`, and `api/` dissolved.
-- **SRP decomposition — epic #43** *(in progress — epic OPEN).* The per-module splits deferred
+- **SRP decomposition — epic #43** *(✅ complete — epic CLOSED).* The per-module splits deferred
   during the migration, done **inside** the re-homed tree. Wave 1 (#44, typed result carriers)
   landed first. Waves 2–3: **#45** split `executors.py` *(✅ done)* → **#46** `attach.py`
   *(✅ done)* → **#47** `registration.py` *(✅ done — split into `classification.py` (DB-free leaf)
@@ -63,10 +63,15 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   run-time execution if/elif chains replaced by the `BUILTIN_EXECUTORS: dict[str, BuiltinSpec]`
   registry, mirroring the runner's `STEP_EXECUTORS`; adding a built-in is one `BuiltinSpec`
   registration, no chain edits; guard test `tests/test_builtins.py::test_builtin_dispatch_is_registry_driven`)*
-  → **#51** single type-descriptor table for classification (OCP) *(open)*.
-  **Wave 5:** **#52** a single DuckDB→Python type normalizer (DRY) *(open)* → **#53** dead-code /
+  → **#51** single type-descriptor table for classification (OCP) *(✅ done — the scattered
+  param/return-type maps replaced by the single `_TYPE_DESCRIPTORS` table in
+  `classification.py`, with both lookups derived from it via `_derive_lookups`; a new supported
+  type is one `TypeDescriptor` row)*.
+  **Wave 5:** **#52** a single DuckDB→Python type normalizer (DRY) *(✅ done — `normalize_column_type`
+  in `backend/data/base/schema/constants.py` is the one "known DuckDB type, else VARCHAR" rule,
+  consumed by `ingestion.py`, `inference.py`, and `create.py`)* → **#53** dead-code /
   stale-doc / `REFACTOR_PLAN.md` prune *(✅ done — PR #84 merged)*.
-  **Active front: #51 next**, then #52. See `ARCHITECTURE.md §7`.
+  All five waves (#44–#53) merged; epic #43 closed. See `ARCHITECTURE.md §7`.
 
 ---
 
