@@ -1376,3 +1376,32 @@ def test_patch_invalid_function_output_returns_structured_error_not_500(client, 
     })
     assert bad_entry.status_code == 422
     assert "detail" in bad_entry.json()
+
+
+@pytest.mark.integration
+def test_get_pipeline_emits_per_function_output_after_patch(client, db):
+    """[4 backend support / Principle 7] After a function_output PATCH, GET /pipelines
+    returns each member's persisted output_mode / append_name / ordered output_targets
+    so the Builder can render and round-trip the per-function control."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {
+            str(fn_one_id): {"output_mode": "append", "append_name": "delta"},
+            str(fn_two_id): {"output_mode": "replace", "output_targets": [str(col_ids[1]), str(col_ids[0])]},
+        },
+    })
+
+    body = client.get(f"/pipelines/{source_id}").json()
+    step = next(s for s in body["steps"] if s["source_function_map_id"] == str(sfm_id))
+    fns = {f["function_id"]: f for f in step["functions"]}
+
+    assert fns[str(fn_one_id)]["output_mode"] == "append"
+    assert fns[str(fn_one_id)]["append_name"] == "delta"
+    assert fns[str(fn_one_id)]["output_targets"] == []
+
+    assert fns[str(fn_two_id)]["output_mode"] == "replace"
+    # ordered targets round-trip as [{column_id, column_name}, ...] in position order
+    two_targets = [t["column_id"] for t in fns[str(fn_two_id)]["output_targets"]]
+    assert two_targets == [str(col_ids[1]), str(col_ids[0])]

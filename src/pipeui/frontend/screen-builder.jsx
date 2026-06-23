@@ -650,13 +650,121 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
 // Step card
 // ---------------------------------------------------------------------------
 
+// Per-function Append/Replace output control (param-binding-output-mode #104).
+// Each transform function within a set carries its OWN output mode + append name /
+// ordered replace targets. Changing one PATCHes function_output scoped to that
+// function_id only — sibling members are never touched. Relocated here from the old
+// set-level control (a single set-level choice could not represent a mixed set).
+function FunctionOutputControl({ fn, columns, sourceId, sfmId }) {
+  const [mode, setMode] = useState(fn.output_mode || "append");
+  const [appendName, setAppendName] = useState(fn.append_name || "");
+  // replaceTargets: ordered list of column_ids (bundle i -> target i).
+  const [targets, setTargets] = useState(
+    () => (fn.output_targets || []).map(t => t.column_id)
+  );
+  const cols = columns || [];
+
+  // PATCH function_output scoped to THIS function only. Accepts overrides so a
+  // state setter and the request fire from the same values (state updates are async).
+  function patch(next = {}) {
+    const nextMode = next.mode !== undefined ? next.mode : mode;
+    const nextAppend = next.appendName !== undefined ? next.appendName : appendName;
+    const nextTargets = next.targets !== undefined ? next.targets : targets;
+    const cfg = { output_mode: nextMode };
+    if (nextMode === "append") {
+      if (nextAppend.trim() !== "") cfg.append_name = nextAppend.trim();
+    } else {
+      cfg.output_targets = nextTargets.filter(Boolean);
+    }
+    fetch("/pipelines/" + sourceId + "/steps/" + sfmId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ function_output: { [fn.function_id]: cfg } }),
+    }).catch(() => {});
+  }
+
+  function handleModeChange(e) {
+    const newMode = e.target.value;
+    setMode(newMode);
+    patch({ mode: newMode });
+  }
+
+  function handleTargetChange(i, colId) {
+    const next = targets.slice();
+    next[i] = colId;
+    setTargets(next);
+    patch({ targets: next });
+  }
+
+  // A replace function overwrites at least one target column; default to one row.
+  const targetSlots = mode === "replace" ? Math.max(targets.length, 1) : 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "4px 0 6px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Output:</span>
+        <select
+          data-testid={"fn-output-mode-" + fn.function_id}
+          value={mode}
+          onChange={handleModeChange}
+          style={{
+            fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
+            border: "1px solid var(--border)", background: "var(--panel-2)",
+            color: "var(--text)", cursor: "pointer",
+          }}
+        >
+          <option value="append">Append</option>
+          <option value="replace">Replace</option>
+        </select>
+      </div>
+      {mode === "append" && (
+        <input
+          data-testid={"fn-append-name-" + fn.function_id}
+          type="text"
+          placeholder="New column name (optional)"
+          value={appendName}
+          onChange={e => setAppendName(e.target.value)}
+          onBlur={() => patch()}
+          style={{
+            fontSize: 11, padding: "3px 6px", borderRadius: "var(--radius)",
+            border: "1px solid var(--border)", background: "var(--panel-2)",
+            color: "var(--text)", maxWidth: 220,
+          }}
+        />
+      )}
+      {mode === "replace" && (
+        <div data-testid={"fn-replace-targets-" + fn.function_id}
+          style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {Array.from({ length: targetSlots }, (_, i) => (
+            <select
+              key={i}
+              data-testid={"fn-replace-target-" + fn.function_id + "-" + i}
+              value={targets[i] || ""}
+              onChange={e => handleTargetChange(i, e.target.value)}
+              style={{
+                fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
+                border: "1px solid var(--border)", background: "var(--panel-2)",
+                color: "var(--text)", maxWidth: 220,
+              }}
+            >
+              <option value="">Replace target column…</option>
+              {cols.map(c => (
+                <option key={c.column_id} value={c.column_id}>{c.column_name}</option>
+              ))}
+            </select>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, onNavigateResults, onEdit }) {
   const { OrderBadge } = window.__UI__;
   const setType = deriveSetType(step.functions);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   const [removing, setRemoving] = useState(false);
-  const [outputMode, setOutputMode] = useState(step.output_mode || "append");
-  const showOutputMode = setType === "Transform" || setType === "Mixed";
+  const columns = step.columns || (step.source && step.source.columns) || [];
 
   function handleRemove() {
     if (removing) return;
@@ -664,17 +772,6 @@ function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, o
     fetch("/pipelines/" + sourceId + "/steps/" + step.source_function_map_id, { method: "DELETE" })
       .then(r => { if (r.ok || r.status === 204) onRemoved(); else setRemoving(false); })
       .catch(() => setRemoving(false));
-  }
-
-  function handleOutputModeChange(e) {
-    const newMode = e.target.value;
-    const prev = outputMode;
-    setOutputMode(newMode);
-    fetch("/pipelines/" + sourceId + "/steps/" + step.source_function_map_id, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ output_mode: newMode }),
-    }).catch(() => setOutputMode(prev));
   }
 
   return (
@@ -743,26 +840,21 @@ function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, o
       </div>
 
       {step.functions.map(fn => (
-        <FunctionRow key={fn.function_id} fn={fn} />
-      ))}
-
-      {showOutputMode && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4 }}>
-          <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Output:</span>
-          <select
-            value={outputMode}
-            onChange={handleOutputModeChange}
-            style={{
-              fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
-              border: "1px solid var(--border)", background: "var(--panel-2)",
-              color: "var(--text)", cursor: "pointer",
-            }}
-          >
-            <option value="append">Append</option>
-            <option value="replace">Replace</option>
-          </select>
+        <div key={fn.function_id}>
+          <FunctionRow fn={fn} />
+          {/* Per-function output control (#104): transform members carry their own
+              Append/Replace + append-name / replace-targets. Validation functions
+              produce no output column, so they show no control. */}
+          {fn.function_type === "transform" && (
+            <FunctionOutputControl
+              fn={fn}
+              columns={columns}
+              sourceId={sourceId}
+              sfmId={step.source_function_map_id}
+            />
+          )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -894,7 +986,7 @@ function BuiltinStepCard({ step, sourceId, order, sources, onRemoved, onEdit }) 
 // Pipeline canvas — drag-to-reorder
 // ---------------------------------------------------------------------------
 
-function PipelineCanvas({ sourceId, steps, sources, onReloadPipeline, resultTags, onNavigateResults, onEditStep, onEditBuiltin }) {
+function PipelineCanvas({ sourceId, steps, sources, columns, onReloadPipeline, resultTags, onNavigateResults, onEditStep, onEditBuiltin }) {
   const [localSteps, setLocalSteps] = useState(steps);
   const dragIndexRef = useRef(null);
 
@@ -963,7 +1055,7 @@ function PipelineCanvas({ sourceId, steps, sources, onReloadPipeline, resultTags
         return (
           <StepCard
             key={step.source_function_map_id}
-            step={step}
+            step={{ ...step, columns: step.columns || columns }}
             sourceId={sourceId}
             order={index + 1}
             onRemoved={onReloadPipeline}
@@ -2620,6 +2712,7 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
             sourceId={source.source_id}
             steps={pipeline.steps}
             sources={allSources}
+            columns={(pipeline.source && pipeline.source.columns) || []}
             onReloadPipeline={loadPipeline}
             resultTags={resultTags}
             onNavigateResults={() => onNavigate && onNavigate("results", {})}
