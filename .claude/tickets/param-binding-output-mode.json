@@ -1,0 +1,54 @@
+{
+  "feature_slug": "param-binding-output-mode",
+  "last_projected_at": "2026-06-23T22:34:30Z",
+  "tickets": {
+    "1": {
+      "parent_issue": 99,
+      "parent_hash": "a06484b61d5abf95457df3d3f961c9ccc570e4226a955a2512895afcdcf59ea8",
+      "sub_issues": [
+        {
+          "issue": 101,
+          "owns_acceptance": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "hash": "bba35d210d0c04f79431ff68a60d53c89b5499ff6141fa2639eb9a16dbb56ea1"
+        },
+        {
+          "issue": 102,
+          "owns_acceptance": [
+            4,
+            5,
+            6
+          ],
+          "hash": "1163e2b7f8b3119b52788a9b12992c305ebd42b9eba32b673e30a310f7112010"
+        }
+      ]
+    },
+    "2": {
+      "parent_issue": 100,
+      "parent_hash": "b44349fb8079a576034bc59e9cc701d508d540bdc5d66868b79b3d07cacad0f0",
+      "sub_issues": [
+        {
+          "issue": 103,
+          "owns_acceptance": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "hash": "35d876886540a7c1e4468709f06e182d25ae0d0b5df653c0341c06b794fc89f0"
+        },
+        {
+          "issue": 104,
+          "owns_acceptance": [
+            4
+          ],
+          "hash": "3f676ed9e1bfaaf7c78b66c8bad6aadc409278563d0e9de653728e0998d65f4c"
+        }
+      ]
+    }
+  }
+}
