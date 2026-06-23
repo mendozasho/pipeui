@@ -88,18 +88,41 @@
 <body>
   <div id="root"></div>
 
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <!--
+    CDN deps are PINNED to exact versions. Floating tags (react@18, xlsx-latest,
+    @babel/standalone unpinned) let an upstream release change behaviour with no
+    repo change — exactly how the JSX-runtime black-screen regression arrived.
+    Bump these deliberately, never implicitly.
+  -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
-  <script type="text/babel" data-type="module" src="data.jsx"></script>
-  <script type="text/babel" data-type="module" src="ui.jsx"></script>
-  <script type="text/babel" data-type="module" src="screen-data.jsx"></script>
-  <script type="text/babel" data-type="module" src="screen-modules.jsx"></script>
-  <script type="text/babel" data-type="module" src="screen-builder.jsx"></script>
-  <script type="text/babel" data-type="module" src="screen-results.jsx"></script>
-  <script type="text/babel" data-type="module" src="screen-settings.jsx"></script>
-  <script type="text/babel" data-type="module" src="app.jsx"></script>
+  <!--
+    Force the CLASSIC JSX runtime. Our files are loaded as Babel "modules"
+    (data-type="module", needed so their trailing `export {...}` for the vitest
+    harness parses). Babel's default for module scripts is the AUTOMATIC runtime,
+    which emits `import { jsx } from "react/jsx-runtime"` — a bare specifier the
+    browser cannot resolve (no bundler / import map; React is a UMD global). That
+    import failure is silent at the page level and leaves #root empty (black
+    screen). The classic runtime emits React.createElement against the global
+    React instead, so no module resolution is needed. Applied explicitly via
+    data-presets on every Babel script below.
+  -->
+  <script>
+    Babel.registerPreset("pipeui-react", {
+      presets: [[Babel.availablePresets["react"], { runtime: "classic" }]],
+    });
+  </script>
+
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="data.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="ui.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="screen-data.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="screen-modules.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="screen-builder.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="screen-results.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="screen-settings.jsx"></script>
+  <script type="text/babel" data-type="module" data-presets="pipeui-react" src="app.jsx"></script>
 </body>
 </html>
