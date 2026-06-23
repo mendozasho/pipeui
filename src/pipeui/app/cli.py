@@ -39,3 +39,10 @@ def main():
         print("Usage: pipeui <init|start>")
         sys.exit(1)
     {"init": cmd_init, "start": cmd_start}[sys.argv[1]]()
+
+
+# Enables `python -m pipeui.app.cli <init|start>`, the invocation start.sh uses.
+# That bypasses the generated `pipeui` console script, which drifts stale when the
+# package is reorganized (it hard-codes the entry-point import path).
+if __name__ == "__main__":
+    main()
