@@ -21,7 +21,8 @@ function strParam(overrides = {}) {
     param_id: "p-str",
     param_name: "label",
     param_type: "str",
-    param_kind: "column",
+    param_kind: "scalar",
+    binding_kind: "value_or_column",
     function_name: "fn_alpha",
     suggested_columns: [],
     current_scalar_value: null,
@@ -35,12 +36,31 @@ function scalarParam(overrides = {}) {
     param_name: "threshold",
     param_type: "int",
     param_kind: "scalar",
+    binding_kind: "value_or_column",
     function_name: "fn_alpha",
     suggested_columns: [],
     current_scalar_value: null,
     ...overrides,
   };
 }
+
+// A numeric (int/float/bool) param — value_or_column, like str. The feature gives it
+// the same Plain string / Column-backed toggle. (param-binding-output-mode #99 / #102)
+function numericParam(overrides = {}) {
+  return {
+    param_id: "p-num",
+    param_name: "ratio",
+    param_type: "float",
+    param_kind: "scalar",
+    binding_kind: "value_or_column",
+    function_name: "fn_alpha",
+    suggested_columns: [],
+    current_scalar_value: null,
+    has_default: false,
+    ...overrides,
+  };
+}
+
 
 const SOURCE_COLUMNS = [
   { column_id: "c1", column_name: "amount", column_type: "DOUBLE" },
@@ -131,9 +151,11 @@ describe("PendingStepCard — scalar values", () => {
 
   it("onSave sends a blank scalar as empty string so a cleared field reverts to default", () => {
     // A blank is sent (not omitted) so the backend clears any persisted override on
-    // edit; attach skips blanks, PATCH deletes the row. (#191)
+    // edit; attach skips blanks, PATCH deletes the row. (#191) The param declares a
+    // Python default so a blank value is a valid (saveable) state under the #99
+    // Save-guard — clearing the field reverts to that default.
     const onSave = vi.fn();
-    renderCard([scalarParam()], { onSave });
+    renderCard([scalarParam({ has_default: true })], { onSave });
     fireEvent.click(screen.getByText("Save"));
     const [, scalars] = onSave.mock.calls[0];
     expect(scalars).toEqual({ "p-int": "" });
@@ -191,6 +213,131 @@ describe("PendingStepCard — edit-state restore", () => {
     const [bindings, scalars] = onSave.mock.calls[0];
     expect(bindings).toEqual([{ param_id: "p-str", column_ids: ["c1"] }]);
     expect(scalars).toEqual({ "p-str": "" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PendingStepCard — numeric column-binding (param-binding-output-mode #99 / #102)
+// Acceptance [4][5][6]. A numeric (int/float/bool) value_or_column param gets the
+// same Plain string / Column-backed toggle str has, driven by the API binding_kind.
+// ---------------------------------------------------------------------------
+
+describe("PendingStepCard — numeric column-binding toggle (#102)", () => {
+  it("[4] renders the Plain string / Column-backed toggle for a numeric param, driven by binding_kind", () => {
+    renderCard([numericParam()]);
+    expect(screen.getByText("Plain string")).toBeTruthy();
+    expect(screen.getByText("Column-backed")).toBeTruthy();
+  });
+
+  it("[4] the toggle is driven by binding_kind, not a hardcoded type — a numeric with an unknown param_type but value_or_column kind still toggles", () => {
+    // Prove the predicate keys off binding_kind: an exotic numeric label that no
+    // hardcoded ["str","int","float","bool"] list would match still gets the toggle.
+    renderCard([numericParam({ param_type: "Decimal", binding_kind: "value_or_column" })]);
+    expect(screen.getByText("Plain string")).toBeTruthy();
+    expect(screen.getByText("Column-backed")).toBeTruthy();
+  });
+
+  it("[4] a column_only (pd.Series) param shows NO text/column toggle — only column binding", () => {
+    renderCard([seriesParam({ param_id: "p-series", param_name: "series" })]);
+    expect(screen.queryByText("Plain string")).toBeNull();
+    expect(screen.getByText(/Bind column\(s\)/)).toBeTruthy();
+  });
+
+  it("[4] defaults to Plain string mode showing a text input (numeric constant), not a column list", () => {
+    renderCard([numericParam()]);
+    expect(screen.getByPlaceholderText("float")).toBeTruthy();
+    expect(screen.queryByText(/Bind column\(s\)/)).toBeNull();
+  });
+
+  it("[4] switching a numeric to Column-backed reveals the column binding list", () => {
+    renderCard([numericParam()]);
+    fireEvent.click(screen.getByText("Column-backed"));
+    expect(screen.getByText(/Bind column\(s\)/)).toBeTruthy();
+    expect(screen.getByText("amount")).toBeTruthy();
+  });
+
+  it("[4] column mode saving sends the binding and clears the typed scalar (single source of truth)", () => {
+    const onSave = vi.fn();
+    // Numeric opens in text mode holding "5"; user switches to column and binds a column.
+    renderCard([numericParam({ current_scalar_value: "5" })], { onSave });
+    fireEvent.click(screen.getByText("Column-backed"));
+    fireEvent.click(screen.getByText("amount"));
+    fireEvent.click(screen.getByText("Save"));
+    const [bindings, scalars] = onSave.mock.calls[0];
+    expect(bindings).toEqual([{ param_id: "p-num", column_ids: ["c1"] }]);
+    // Stale scalar cleared so the binding is the only source of truth.
+    expect(scalars).toEqual({ "p-num": "" });
+  });
+});
+
+describe("PendingStepCard — numeric restore + Save-guard (#102)", () => {
+  it("[5] re-opens a numeric param in Column-backed mode when it has saved column bindings", () => {
+    renderCard([numericParam({ current_bindings: [{ column_id: "c1", column_name: "amount" }] })]);
+    expect(screen.getByText(/Bind column\(s\)/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText("float")).toBeNull();
+  });
+
+  it("[5] restores a numeric param's saved bound-column ORDER (position, not alphabetical)", () => {
+    const onSave = vi.fn();
+    // Saved order is region(c2) then amount(c1) — reverse of alphabetical.
+    renderCard([numericParam({
+      current_bindings: [
+        { column_id: "c2", column_name: "region" },
+        { column_id: "c1", column_name: "amount" },
+      ],
+    })], { onSave });
+    fireEvent.click(screen.getByText("Save"));
+    const [bindings] = onSave.mock.calls[0];
+    expect(bindings).toEqual([{ param_id: "p-num", column_ids: ["c2", "c1"] }]);
+  });
+
+  it("[5] blocks Save when a numeric param has no value, no column, and no default (mirrors backend)", () => {
+    // value_or_column numeric in text mode, blank value, has_default false → Save disabled.
+    renderCard([numericParam({ has_default: false, current_scalar_value: null })]);
+    const save = screen.getByText("Save");
+    expect(save.closest("button").disabled).toBe(true);
+  });
+
+  it("[5] allows Save when a blank numeric param declares a Python default", () => {
+    renderCard([numericParam({ has_default: true, current_scalar_value: null })]);
+    const save = screen.getByText("Save");
+    expect(save.closest("button").disabled).toBe(false);
+  });
+
+  it("[5] allows Save once a value is typed for a no-default numeric", () => {
+    renderCard([numericParam({ has_default: false })]);
+    fireEvent.change(screen.getByPlaceholderText("float"), { target: { value: "3" } });
+    const save = screen.getByText("Save");
+    expect(save.closest("button").disabled).toBe(false);
+  });
+
+  it("[5] allows Save once a no-default numeric is bound to a column", () => {
+    renderCard([numericParam({ has_default: false })]);
+    fireEvent.click(screen.getByText("Column-backed"));
+    fireEvent.click(screen.getByText("amount"));
+    const save = screen.getByText("Save");
+    expect(save.closest("button").disabled).toBe(false);
+  });
+});
+
+describe("PendingStepCard — replace-target picker for numeric-bound function (#102)", () => {
+  it("[6] the replace-target picker appears once a numeric param is bound to a column", () => {
+    renderCard([numericParam({ has_default: true })]);
+    // Bind the numeric to a column, then switch output to replace.
+    fireEvent.click(screen.getByText("Column-backed"));
+    fireEvent.click(screen.getByText("amount"));
+    fireEvent.change(screen.getByTestId("output-mode-select"), { target: { value: "replace" } });
+    const targets = screen.getByTestId("replace-targets-p-num");
+    expect(targets).toBeTruthy();
+    const selects = within(targets).getAllByRole("combobox");
+    expect(selects).toHaveLength(1);
+    expect(selects[0].value).toBe("c1");  // defaults to the input column
+  });
+
+  it("[6] no replace-target picker for a numeric still in text mode (not column-bound)", () => {
+    renderCard([numericParam({ has_default: true })]);
+    fireEvent.change(screen.getByTestId("output-mode-select"), { target: { value: "replace" } });
+    expect(screen.queryByTestId("replace-targets-p-num")).toBeNull();
   });
 });
 
@@ -916,6 +1063,7 @@ function seriesParam(overrides = {}) {
     param_name: "cols",
     param_type: "pd.Series",
     param_kind: "column",
+    binding_kind: "column_only",
     function_name: "fn_multi",
     suggested_columns: [],
     current_scalar_value: null,

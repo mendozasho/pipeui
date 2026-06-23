@@ -111,6 +111,31 @@ def derive_function_class(param_types: list[str]) -> str:
     return driver.function_class
 
 
+# The single source of truth for "how may a parameter receive its argument"
+# (CONTEXT.md `binding_kind`). Derived off the EXISTING function_class — NOT a new
+# parallel type literal — so a future bindable type is one descriptor concern, not a
+# four-site edit (OCP/DRY). The three modules that gated binding by their own type
+# sets (suggest, attach) read THIS instead.
+_CLASS_TO_BINDING_KIND: dict[str, str] = {
+    "scalar": "value_or_column",   # int/float/bool/str — a literal value OR a bound column
+    "pd.Series": "column_only",    # always one-or-more bound columns, never a literal
+    "pd.dataframe": "table",       # always the full table, never bound
+}
+
+
+def binding_kind(type_str: str) -> str:
+    """Return how a parameter of ``type_str`` may receive its argument (CONTEXT.md).
+
+    Pure derivation off the existing ``function_class``: ``value_or_column`` for the
+    scalar class (``int``/``float``/``bool``/``str``), ``column_only`` for the
+    ``pd.Series`` class (``pd.Series``/``pd.Series[bool]``), ``table`` for
+    ``pd.DataFrame``. The ONE place this rule lives — ``suggest``, ``attach``, and the
+    Builder UI all key off this. DB-free leaf. Raises ``KeyError`` on an unknown type
+    (callers gate with ``is_known_param_type``).
+    """
+    return _CLASS_TO_BINDING_KIND[derive_function_class([type_str])]
+
+
 def derive_function_return_type(return_annotation_str: str) -> str | None:
     """Map a return annotation string to function_return_type vocabulary (CONTEXT.md)."""
     descriptor = _BY_TYPE.get(return_annotation_str)

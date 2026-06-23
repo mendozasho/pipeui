@@ -9,6 +9,7 @@ import pytest
 
 from pipeui.backend.domain.functions import classification
 from pipeui.backend.domain.functions.classification import (
+    binding_kind,
     derive_function_class,
     derive_function_return_type,
     derive_function_type,
@@ -82,6 +83,41 @@ class TestDeriveClass:
     @pytest.mark.unit
     def test_pd_dataframe_beats_scalar(self):
         assert derive_function_class(["int", "str", "pd.DataFrame"]) == "pd.dataframe"
+
+
+class TestBindingKind:
+    """binding_kind(type_str) — the single derived answer to 'how may this param
+    receive its argument', read off the EXISTING function_class (CONTEXT.md).
+    value_or_column (scalar class: int/float/bool/str) | column_only (pd.Series class)
+    | table (pd.dataframe). Pure leaf — no DB. Acceptance [0] (parent #99)."""
+
+    @pytest.mark.unit
+    def test_int_is_value_or_column(self):
+        assert binding_kind("int") == "value_or_column"
+
+    @pytest.mark.unit
+    def test_float_is_value_or_column(self):
+        assert binding_kind("float") == "value_or_column"
+
+    @pytest.mark.unit
+    def test_bool_is_value_or_column(self):
+        assert binding_kind("bool") == "value_or_column"
+
+    @pytest.mark.unit
+    def test_str_is_value_or_column(self):
+        assert binding_kind("str") == "value_or_column"
+
+    @pytest.mark.unit
+    def test_pd_series_is_column_only(self):
+        assert binding_kind("pd.Series") == "column_only"
+
+    @pytest.mark.unit
+    def test_pd_series_bool_is_column_only(self):
+        assert binding_kind("pd.Series[bool]") == "column_only"
+
+    @pytest.mark.unit
+    def test_pd_dataframe_is_table(self):
+        assert binding_kind("pd.DataFrame") == "table"
 
 
 class TestDeriveReturnType:

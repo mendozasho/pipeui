@@ -788,9 +788,15 @@ def test_dry_run_includes_param_kind_and_available_columns(client, db):
     assert "available_columns" in body
     assert len(body["available_columns"]) == 2
 
+    # param-binding-output-mode #99: param_kind is derived from binding_kind. Only a
+    # column_only param (pd.Series) is "column"; a str is value_or_column → "scalar"
+    # (free-text input that toggles to a column binding, same as a numeric).
     param_kinds = {p["param_name"]: p["param_kind"] for p in body["params"]}
-    assert param_kinds["col"] == "column"
+    assert param_kinds["col"] == "scalar"
     assert param_kinds["n"] == "scalar"
+    binding_kinds = {p["param_name"]: p["binding_kind"] for p in body["params"]}
+    assert binding_kinds["col"] == "value_or_column"
+    assert binding_kinds["n"] == "value_or_column"
 
 
 @pytest.mark.integration
