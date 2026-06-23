@@ -135,13 +135,22 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
   // available_columns is computed server-side from source columns + join step columns
   const availableColumns = dryRunResult.available_columns || [];
 
-  // str params toggle between "text" (scalar) and "column" (column-backed) mode.
-  // On edit re-open, derive the mode from persisted state: existing column
-  // bindings → "column"; otherwise "text". (#191/#192)
+  // A value_or_column param (str, int, float, bool) toggles between "text" (a typed
+  // constant / Python default) and "column" (column-backed) mode. The set of
+  // toggleable params is derived from the API-emitted binding_kind via ONE predicate —
+  // never a scattered ["str","int","float","bool"] literal (param-binding-output-mode #99).
+  // column_only (pd.Series) is always column; table (pd.DataFrame) is auto-filled.
+  function isValueOrColumn(p) { return p.binding_kind === "value_or_column"; }
+  function isColumnOnly(p) { return p.binding_kind === "column_only"; }
+  function isTableParam(p) { return p.binding_kind === "table" || p.param_type === "pd.DataFrame"; }
+
+  // toggleModes: param_id -> "text" | "column", for every value_or_column param.
+  // On edit re-open, derive the mode from persisted state: existing column bindings →
+  // "column"; otherwise "text". (#191/#192, generalized from str-only to all numerics.)
   const [strModes, setStrModes] = React.useState(() => {
     const m = {};
     params.forEach(p => {
-      if (p.param_type === "str") {
+      if (isValueOrColumn(p)) {
         m[p.param_id] = (p.current_bindings || []).length > 0 ? "column" : "text";
       }
     });
@@ -153,11 +162,13 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     params.forEach(p => {
       const restored = (p.current_bindings || []).map(b => b.column_id);
       if (restored.length > 0) {
-        // Edit re-open: restore the step's saved column bindings (#191). Applies
-        // to pd.Series/column_backed params and to a str in column-backed mode.
+        // Edit re-open: restore the step's saved column bindings (#191), in saved
+        // order. Applies to column_only params and to a value_or_column param
+        // (str/numeric) saved in column mode.
         sel[p.param_id] = restored;
-      } else if (p.param_type === "pd.Series" || p.param_type === "column_backed") {
-        // Initial attach: fall back to cross-source suggested columns.
+      } else if (isColumnOnly(p)) {
+        // Initial attach: a column_only param falls back to cross-source suggested
+        // columns. A value_or_column param defaults to text mode (no auto-selection).
         sel[p.param_id] = (p.suggested_columns || []).map(c => c.column_id);
       }
     });
@@ -200,12 +211,24 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     });
   }
 
-  // A column param (pd.Series, column_backed) or str in "column" mode requires ≥1 column selected
-  const requiredParams = params.filter(p =>
-    (p.param_kind === "column" && (p.param_type === "pd.Series" || p.param_type === "column_backed")) ||
-    (p.param_type === "str" && strModes[p.param_id] === "column")
-  );
-  const allRequiredFilled = requiredParams.every(p => (selections[p.param_id] || []).length > 0);
+  // Save-guard — mirrors the backend block-at-attach (param-binding-output-mode #99),
+  // derived from binding_kind so the user is blocked BEFORE the request:
+  //  - column_only (pd.Series): needs ≥1 bound column.
+  //  - value_or_column (str/numeric): satisfied by a bound column OR a non-blank typed
+  //    value OR a declared Python default (has_default). None of the three → blocked,
+  //    exactly like an unbound str, so no per-row crash at run time.
+  //  - table (pd.DataFrame): auto-filled, never blocks.
+  function paramSatisfied(p) {
+    if (isTableParam(p)) return true;
+    const hasColumns = (selections[p.param_id] || []).length > 0;
+    if (isColumnOnly(p)) return hasColumns;
+    // value_or_column
+    if (strModes[p.param_id] === "column") return hasColumns;
+    const v = scalarValues[p.param_id];
+    const hasValue = v != null && String(v).trim() !== "";
+    return hasValue || !!p.has_default;
+  }
+  const allRequiredFilled = params.every(paramSatisfied);
 
   // Equal-length-among-varying guard (slice 3 / §12, ADR-0001). Mirrors the backend
   // attach reject so the user is blocked BEFORE the POST: every VARYING column param
@@ -245,11 +268,11 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     });
   }
 
-  // A param is column-bound when it's a pd.Series/column_backed param, or a str
-  // currently in "column" mode.
+  // A param is column-bound when it's a column_only param (pd.Series), or a
+  // value_or_column param (str/numeric) currently toggled into "column" mode. Derived
+  // from binding_kind via one predicate, not a scattered type literal (#99).
   function isColumnMode(p) {
-    return p.param_type === "pd.Series" || p.param_type === "column_backed" ||
-      (p.param_type === "str" && strModes[p.param_id] === "column");
+    return isColumnOnly(p) || (isValueOrColumn(p) && strModes[p.param_id] === "column");
   }
 
   function handleSave() {
@@ -257,17 +280,18 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
       .filter(isColumnMode)
       .map(p => ({ param_id: p.param_id, column_ids: selections[p.param_id] || [] }))
       .filter(b => b.column_ids.length > 0);
-    // Build the scalar payload. pd.DataFrame params are auto-filled and never scalar.
-    // A param NOT in column mode sends its value — blanks included, so clearing the
-    // input clears the persisted override (backend reverts to the Python default).
-    // A str that moved INTO column mode sends a blank to clear any stale plain-string
-    // value, so the step keeps a single source of truth (the column binding). Without
-    // this the old scalar lingers in source_scalar_map after a text→column switch.
+    // Build the scalar payload. table params (pd.DataFrame) are auto-filled and never
+    // scalar. A value_or_column param NOT in column mode sends its value — blanks
+    // included, so clearing the input clears the persisted override (backend reverts to
+    // the Python default). A value_or_column param (str OR numeric) that moved INTO
+    // column mode sends a blank to clear any stale typed value, so the step keeps a
+    // single source of truth (the column binding) — otherwise the old scalar lingers in
+    // source_scalar_map after a text→column switch (#99, generalized from str-only).
     const scalars = {};
     params.forEach(p => {
-      if (p.param_type === "pd.DataFrame") return;
+      if (isTableParam(p)) return;
       if (isColumnMode(p)) {
-        if (p.param_type === "str") scalars[p.param_id] = "";
+        if (isValueOrColumn(p)) scalars[p.param_id] = "";
       } else {
         scalars[p.param_id] = scalarValues[p.param_id] || "";
       }
@@ -294,12 +318,15 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
 
   // Render one parameter row (scalar input or column selectors).
   function renderParam(p) {
-    const isDataFrame = p.param_type === "pd.DataFrame";
-    const isMultiCol = p.param_type === "pd.Series" || p.param_type === "column_backed";
-    const isStr = p.param_type === "str";
+    const isDataFrame = isTableParam(p);
+    const isMultiCol = isColumnOnly(p);
+    // toggleable = value_or_column (str/int/float/bool): a text/column toggle param.
+    const isToggleable = isValueOrColumn(p);
     const strMode = strModes[p.param_id] || "text";
-    // scalar input shows for int/float/bool and for a str in plain-string mode
-    const isScalar = p.param_kind === "scalar" || (!isDataFrame && !isMultiCol && !(isStr && strMode === "column"));
+    // scalar input shows for a value_or_column param in "text" (plain) mode only — for
+    // int/float/bool and for str in plain-string mode (#99). column_only / table never.
+    const isScalar = isToggleable && strMode !== "column";
+    const showColumnList = isMultiCol || (isToggleable && strMode === "column");
 
     return (
       <div key={p.param_id} style={{
@@ -323,8 +350,8 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
           )}
         </div>
 
-        {/* str mode toggle */}
-        {isStr && (
+        {/* value_or_column mode toggle (str + numeric) — Plain string / Column-backed */}
+        {isToggleable && (
           <div style={{ display: "flex", gap: 4, marginBottom: 2 }}>
             {["text", "column"].map(mode => (
               <button key={mode} onClick={() => setStrModes(prev => ({ ...prev, [p.param_id]: mode }))} style={{
@@ -361,7 +388,7 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
           />
         )}
 
-        {(isMultiCol || (isStr && strMode === "column")) && (
+        {showColumnList && (
           <>
           {/* #188: the function description shows in the group header above; here it
               carries as a tooltip so the bare bind hint is never the only context. */}

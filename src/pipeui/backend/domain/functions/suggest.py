@@ -21,6 +21,8 @@ from typing import Optional
 
 import duckdb
 
+from pipeui.backend.domain.functions.classification import binding_kind
+
 
 def _params_for_set(
     conn: duckdb.DuckDBPyConnection,
@@ -57,14 +59,6 @@ def _params_for_function(
     ).fetchall()
 
 
-# param_types eligible for column binding suggestions
-# governs column-backed suggestion only — scalar params are included separately below
-_SUGGEST_TYPES = {"str", "pd.Series"}
-
-# param_types treated as scalar — rendered as free-text inputs, persisted in source_scalar_map
-_SCALAR_TYPES = {"int", "float", "bool"}
-
-
 def suggest_bindings(
     conn: duckdb.DuckDBPyConnection,
     source_id: uuid.UUID,
@@ -85,6 +79,7 @@ def suggest_bindings(
             "param_name": "...",
             "param_type": "...",
             "param_kind": "column" | "scalar",
+            "binding_kind": "value_or_column" | "column_only",  # classification.py
             "function_name": "...",
             "function_doc": "...",          # owning function's description ("" if none)
             "suggested_columns": [...],     # empty for scalar params
@@ -97,9 +92,11 @@ def suggest_bindings(
         ]
       }
 
-    Column params (str, pd.Series) carry param_kind="column". Scalar params
-    (int, float, bool) carry param_kind="scalar" with empty suggested_columns.
-    pd.DataFrame params are excluded (auto-filled with the full table).
+    Column-only params (pd.Series) carry param_kind="column" and
+    binding_kind="column_only". value_or_column params (int, float, bool, str) carry
+    param_kind="scalar" and binding_kind="value_or_column" — they open as a free-text
+    value but may bind a column (suggested_columns may be populated from prior bindings).
+    pd.DataFrame (binding_kind="table") is excluded (auto-filled with the full table).
 
     current_bindings is the param's existing alias_map rows on THIS source — it
     drives edit-modal pre-selection of column checkboxes. current_scalar_value is
@@ -185,15 +182,25 @@ def suggest_bindings(
     #    persisted source_scalar_map value for scalars AND str in plain-string mode, #191).
     result_params = []
     for p_id, p_name, p_type, fn_name, fn_doc in raw_params:
-        if p_type not in _SUGGEST_TYPES and p_type not in _SCALAR_TYPES:
+        # Eligibility is derived from the single binding_kind rule (classification.py),
+        # never a parallel type literal here (DRY/OCP). `table` (pd.DataFrame) is auto-
+        # filled with the full table and never user-bound, so it is excluded. Both
+        # `value_or_column` (int/float/bool/str — a literal OR a bound column) and
+        # `column_only` (pd.Series — always columns) are surfaced for binding.
+        b_kind = binding_kind(p_type)
+        if b_kind == "table":
             continue  # pd.DataFrame — auto-filled with the full table, never user-bound
 
-        kind = "scalar" if p_type in _SCALAR_TYPES else "column"
+        # param_kind drives the modal's free-text-vs-column-list affordance:
+        # column_only params are pure column pickers; value_or_column params open as a
+        # scalar text input that can toggle to a column binding.
+        kind = "column" if b_kind == "column_only" else "scalar"
 
         # Suggested columns: prior bindings for this param on OTHER sources that
-        # also exist on the target source. Column kinds only.
+        # also exist on the target source. Surfaced for any bindable param (a
+        # value_or_column numeric/str can carry cross-source column suggestions too).
         suggested = []
-        if kind == "column":
+        if b_kind in ("column_only", "value_or_column"):
             prior_rows = conn.execute(
                 """
                 SELECT DISTINCT am.column_id
@@ -242,6 +249,7 @@ def suggest_bindings(
             "param_name": p_name,
             "param_type": p_type,
             "param_kind": kind,
+            "binding_kind": b_kind,
             "function_name": fn_name,
             "function_doc": fn_doc or "",
             "suggested_columns": suggested,
