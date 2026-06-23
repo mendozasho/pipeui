@@ -473,6 +473,130 @@ describe("StepCard — edit button", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// StepCard — per-function Append/Replace output control
+// (param-binding-output-mode #104 / slice 2, acceptance [4])
+// ---------------------------------------------------------------------------
+
+function makeMultiFnStep(overrides = {}) {
+  return {
+    source_function_map_id: "sfm-1",
+    set_id: "set-1",
+    set_name: "Two Member Set",
+    position: 0,
+    output_mode: "append",  // vestigial set-level value
+    columns: [
+      { column_id: "c1", column_name: "amount", column_type: "DOUBLE" },
+      { column_id: "c2", column_name: "region", column_type: "VARCHAR" },
+    ],
+    functions: [
+      {
+        function_id: "fn-1",
+        function_name: "fn_one",
+        function_type: "transform",
+        params: [],
+        output_mode: "append",
+        append_name: "",
+        output_targets: [],
+      },
+      {
+        function_id: "fn-2",
+        function_name: "fn_two",
+        function_type: "transform",
+        params: [],
+        output_mode: "replace",
+        append_name: null,
+        output_targets: [{ column_id: "c1", column_name: "amount" }],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function renderMultiFnStep(step, extra = {}) {
+  return render(
+    React.createElement(StepCard, {
+      step,
+      sourceId: "src-1",
+      order: 1,
+      onRemoved: () => {},
+      isDragging: false,
+      onDragStart: () => {},
+      onDragEnd: () => {},
+      onDragOver: () => {},
+      resultTag: null,
+      onNavigateResults: () => {},
+      onEdit: () => {},
+      ...extra,
+    })
+  );
+}
+
+describe("StepCard — per-function output control (#104 / [4])", () => {
+  it("[4] renders an Append/Replace control per function within the set", () => {
+    renderMultiFnStep(makeMultiFnStep());
+    // Each function has its own output-mode select, keyed by function_id.
+    expect(screen.getByTestId("fn-output-mode-fn-1")).toBeTruthy();
+    expect(screen.getByTestId("fn-output-mode-fn-2")).toBeTruthy();
+    // The persisted per-function mode is reflected.
+    expect(screen.getByTestId("fn-output-mode-fn-1").value).toBe("append");
+    expect(screen.getByTestId("fn-output-mode-fn-2").value).toBe("replace");
+  });
+
+  it("[4] an append function shows its append-name input; a replace function shows replace targets", () => {
+    renderMultiFnStep(makeMultiFnStep());
+    // fn-1 is append → append-name input present, replace targets absent
+    expect(screen.getByTestId("fn-append-name-fn-1")).toBeTruthy();
+    expect(screen.queryByTestId("fn-replace-targets-fn-1")).toBeNull();
+    // fn-2 is replace → replace targets present, append-name absent
+    expect(screen.getByTestId("fn-replace-targets-fn-2")).toBeTruthy();
+    expect(screen.queryByTestId("fn-append-name-fn-2")).toBeNull();
+  });
+
+  it("[4] changing one function's output mode issues a function_output PATCH scoped to that function only", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderMultiFnStep(makeMultiFnStep());
+
+    // Flip fn-1 from append to replace.
+    fireEvent.change(screen.getByTestId("fn-output-mode-fn-1"), { target: { value: "replace" } });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe("/pipelines/src-1/steps/sfm-1");
+    expect(opts.method).toBe("PATCH");
+    const body = JSON.parse(opts.body);
+    // The PATCH carries a function_output map scoped to fn-1 ONLY.
+    expect(Object.keys(body.function_output)).toEqual(["fn-1"]);
+    expect(body.function_output["fn-1"].output_mode).toBe("replace");
+    // Sibling fn-2 is not present in the payload.
+    expect(body.function_output["fn-2"]).toBeUndefined();
+  });
+
+  it("[4] editing a function's append name PATCHes function_output scoped to that function", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderMultiFnStep(makeMultiFnStep());
+
+    fireEvent.change(screen.getByTestId("fn-append-name-fn-1"), { target: { value: "delta" } });
+    // blur / change commits the append name
+    fireEvent.blur(screen.getByTestId("fn-append-name-fn-1"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+    const body = JSON.parse(lastCall[1].body);
+    expect(Object.keys(body.function_output)).toEqual(["fn-1"]);
+    expect(body.function_output["fn-1"].output_mode).toBe("append");
+    expect(body.function_output["fn-1"].append_name).toBe("delta");
+  });
+
+  it("[4] no set-level Output control remains on the step card", () => {
+    renderMultiFnStep(makeMultiFnStep());
+    // The old set-level control is relocated into the function groups.
+    expect(screen.queryByTestId("set-output-mode")).toBeNull();
+  });
+});
+
 // ===========================================================================
 // JoinModal — two-step join source picker (#152)
 // ===========================================================================

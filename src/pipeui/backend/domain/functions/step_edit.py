@@ -35,21 +35,44 @@ def patch_pipeline_step(
     output_mode: str | None = None,
     bindings: dict[uuid.UUID, list[uuid.UUID]] | None = None,
     scalar_values: dict[uuid.UUID, str] | None = None,
+    function_output: dict[uuid.UUID, dict] | None = None,
 ) -> bool:
-    """Update position, output_mode, bindings, and/or scalar_values on a pipeline step.
+    """Update position, output_mode, bindings, scalar_values, and/or per-function
+    output config on a pipeline step.
 
     bindings: param_id -> [column_id, ...]; when present, replaces all alias_map rows
       for this source_function_map in a single transaction.
     scalar_values: param_id -> value string; when present, upserts into source_scalar_map.
       A blank/None value clears the row instead (the param reverts to its Python default).
+    function_output: function_id -> {output_mode, append_name?, output_targets?}; the
+      per-function output config (#264). When present, each entry upserts
+      function_output_config and replaces output_target_map rows for
+      (source_function_map_id, function_id) atomically. A multi-function set can mix
+      append/replace per member. When function_output is provided the now-vestigial
+      set-level source_function_map.output_mode is NOT written (it cannot represent a
+      mixed set; the runner reads the per-function config first, with the set-level
+      value kept only as a legacy fallback for steps lacking a config row).
 
     Returns True on success, False when the row is not found or doesn't
     belong to source_id (caller surfaces a 404).
 
-    Raises ValueError when output_mode is not a valid value.
+    Raises ValueError when an output_mode is not a valid value or a function_output
+    entry is malformed.
     """
     if output_mode is not None and output_mode not in _VALID_OUTPUT_MODES:
         raise ValueError(f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)!r}; got {output_mode!r}")
+
+    # Validate every per-function entry up front so a malformed map is rejected as a
+    # structured ValueError (422) before any row is touched — never a 500 mid-write.
+    if function_output is not None:
+        for fn_id, cfg in function_output.items():
+            if not isinstance(cfg, dict):
+                raise ValueError(f"function_output[{fn_id}] must be a mapping; got {type(cfg).__name__}")
+            fn_mode = cfg.get("output_mode")
+            if fn_mode is not None and fn_mode not in _VALID_OUTPUT_MODES:
+                raise ValueError(
+                    f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)!r}; got {fn_mode!r}"
+                )
 
     row = conn.execute(
         """
@@ -69,7 +92,10 @@ def patch_pipeline_step(
             "UPDATE source_function_map SET position = ? WHERE source_function_map_id = ?",
             [position, source_function_map_id],
         )
-    if output_mode is not None:
+    # When function_output is provided it is the source of truth for per-member output;
+    # the vestigial set-level output_mode is intentionally NOT written (it cannot
+    # represent a mixed set). The legacy step-level path runs only without it.
+    if output_mode is not None and function_output is None:
         conn.execute(
             "UPDATE source_function_map SET output_mode = ? WHERE source_function_map_id = ?",
             [output_mode, source_function_map_id],
@@ -80,6 +106,49 @@ def patch_pipeline_step(
             "UPDATE function_output_config SET output_mode = ? WHERE source_function_map_id = ?",
             [output_mode, source_function_map_id],
         )
+
+    if function_output is not None:
+        # Per-function output config (#264): one config row + ordered target rows per
+        # member, keyed (source_function_map_id, function_id). Atomic — a malformed
+        # entry rolls the whole map back rather than leaving a half-written set.
+        conn.execute("BEGIN")
+        try:
+            for fn_id, cfg in function_output.items():
+                fn_mode = cfg.get("output_mode", "append")
+                append_name = cfg.get("append_name")
+                # append steps carry no targets; persist NULL append_name for replace.
+                persisted_append = append_name if fn_mode == "append" else None
+                conn.execute(
+                    """
+                    INSERT INTO function_output_config
+                        (source_function_map_id, function_id, output_mode, append_name)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (source_function_map_id, function_id)
+                    DO UPDATE SET output_mode = excluded.output_mode,
+                                  append_name = excluded.append_name
+                    """,
+                    [source_function_map_id, fn_id, fn_mode, persisted_append],
+                )
+                # Replace the ordered target rows for this (sfm, function) pair.
+                conn.execute(
+                    "DELETE FROM output_target_map WHERE source_function_map_id = ? AND function_id = ?",
+                    [source_function_map_id, fn_id],
+                )
+                output_targets = cfg.get("output_targets") or []
+                for pos, col_id in enumerate(output_targets):
+                    otm_id = content_hash_id(
+                        "output_target_map", str(source_function_map_id), str(fn_id), str(col_id), str(pos)
+                    )
+                    conn.execute(
+                        "INSERT INTO output_target_map "
+                        "(output_target_map_id, source_function_map_id, function_id, column_id, position) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        [otm_id, source_function_map_id, fn_id, col_id, pos],
+                    )
+            conn.execute("COMMIT")
+        except Exception as exc:
+            conn.execute("ROLLBACK")
+            raise RuntimeError(f"Failed to write per-function output config: {exc}") from exc
 
     if bindings is not None:
         # Equal-length-among-varying guard (slice 3): a binding edit must also keep

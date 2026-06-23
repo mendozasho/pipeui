@@ -1156,3 +1156,252 @@ def test_join_columns_endpoint_404_unknown_source(sources_client):
     """AC3 guard: an unknown source_id is a 404, never a 500."""
     resp = sources_client.get(f"/sources/{uuid.uuid4()}/join-columns")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 (param-binding-output-mode #103) — per-function output mode via the
+# extended step PATCH (function_output map keyed by function_id).
+# ---------------------------------------------------------------------------
+
+def _seed_multi_function_set(conn, source_id, column_ids):
+    """Seed ONE set with two transform members attached to source_id.
+
+    Member A (position 0): fn_one, a column-backed str param bound to column_ids[0].
+    Member B (position 1): fn_two, a column-backed str param bound to column_ids[0].
+
+    Returns (sfm_id, set_id, fn_one_id, fn_two_id).
+    """
+    fn_one_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_one_id, uuid.uuid4(), "column_backed", "fn_one", "One doc", "pd.Series",
+         "a: str", "transform", "/tmp/fn_one.py", True],
+    )
+    p_one = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
+        [p_one, uuid.uuid4(), "a", "str", fn_one_id],
+    )
+
+    fn_two_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_two_id, uuid.uuid4(), "column_backed", "fn_two", "Two doc", "pd.Series",
+         "b: str", "transform", "/tmp/fn_two.py", True],
+    )
+    p_two = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
+        [p_two, uuid.uuid4(), "b", "str", fn_two_id],
+    )
+
+    set_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO function_set VALUES (?, ?, ?, ?)",
+        [set_id, uuid.uuid4(), "Two Member Set", None],
+    )
+    conn.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_one_id, 0])
+    conn.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_two_id, 1])
+
+    sfm_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, output_mode) VALUES (?, ?, ?, ?)",
+        [sfm_id, source_id, set_id, "append"],
+    )
+    conn.execute(
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+        [uuid.uuid4(), column_ids[0], p_one, source_id],
+    )
+    conn.execute(
+        "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id) VALUES (?, ?, ?, ?)",
+        [uuid.uuid4(), column_ids[0], p_two, source_id],
+    )
+    return sfm_id, set_id, fn_one_id, fn_two_id
+
+
+@pytest.mark.integration
+def test_patch_function_output_persists_for_named_function_only(client, db):
+    """[0] PATCH with a function_output map persists output_mode/append_name to
+    function_output_config for the named function_id ONLY (siblings untouched);
+    ordered replace targets persist to output_target_map keyed by (sfm_id, function_id)."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {
+            str(fn_one_id): {
+                "output_mode": "replace",
+                "output_targets": [str(col_ids[1]), str(col_ids[0])],
+            },
+        },
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True}
+
+    # fn_one config written
+    cfg = db.execute(
+        "SELECT output_mode, append_name FROM function_output_config "
+        "WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_one_id],
+    ).fetchone()
+    assert cfg is not None
+    assert cfg[0] == "replace"
+
+    # ordered replace targets keyed by (sfm_id, function_id)
+    targets = db.execute(
+        "SELECT column_id FROM output_target_map "
+        "WHERE source_function_map_id = ? AND function_id = ? ORDER BY position",
+        [sfm_id, fn_one_id],
+    ).fetchall()
+    assert [t[0] for t in targets] == [col_ids[1], col_ids[0]]
+
+    # sibling fn_two NOT touched
+    cfg_two = db.execute(
+        "SELECT output_mode FROM function_output_config "
+        "WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_two_id],
+    ).fetchone()
+    assert cfg_two is None
+    targets_two = db.execute(
+        "SELECT column_id FROM output_target_map "
+        "WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_two_id],
+    ).fetchall()
+    assert targets_two == []
+
+
+@pytest.mark.integration
+def test_patch_function_output_mixed_set_round_trips_independently(client, db):
+    """[1] A set with one append + one replace member round-trips with each member's
+    output config independent."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {
+            str(fn_one_id): {"output_mode": "append", "append_name": "one_out"},
+            str(fn_two_id): {"output_mode": "replace", "output_targets": [str(col_ids[0])]},
+        },
+    })
+    assert resp.status_code == 200, resp.text
+
+    one = db.execute(
+        "SELECT output_mode, append_name FROM function_output_config "
+        "WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_one_id],
+    ).fetchone()
+    assert one == ("append", "one_out")
+    one_targets = db.execute(
+        "SELECT column_id FROM output_target_map WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_one_id],
+    ).fetchall()
+    assert one_targets == []  # append → no targets
+
+    two = db.execute(
+        "SELECT output_mode FROM function_output_config "
+        "WHERE source_function_map_id = ? AND function_id = ?",
+        [sfm_id, fn_two_id],
+    ).fetchone()
+    assert two[0] == "replace"
+    two_targets = db.execute(
+        "SELECT column_id FROM output_target_map WHERE source_function_map_id = ? AND function_id = ? ORDER BY position",
+        [sfm_id, fn_two_id],
+    ).fetchall()
+    assert [t[0] for t in two_targets] == [col_ids[0]]
+
+    # The two members are independent — fn_one append, fn_two replace.
+    assert one[0] != two[0]
+
+
+@pytest.mark.integration
+def test_patch_function_output_does_not_write_set_level_output_mode(client, db):
+    """[2] With function_output given, set-level source_function_map.output_mode is
+    NOT written; a legacy step with no per-function config still resolves via fallback."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    # set-level starts as "append" (from the seed)
+    before = db.execute(
+        "SELECT output_mode FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()[0]
+    assert before == "append"
+
+    resp = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {str(fn_one_id): {"output_mode": "replace", "output_targets": [str(col_ids[0])]}},
+    })
+    assert resp.status_code == 200, resp.text
+
+    # set-level output_mode UNCHANGED — function_output is the source of truth now
+    after = db.execute(
+        "SELECT output_mode FROM source_function_map WHERE source_function_map_id = ?",
+        [sfm_id],
+    ).fetchone()[0]
+    assert after == "append"
+
+    # Legacy fallback: fn_two has NO function_output_config row → step_loader resolves
+    # its output mode from the set-level source_function_map.output_mode.
+    from pipeui.backend.data.runner.step_loader import fetch_steps
+    steps = fetch_steps(db, source_id)
+    step = next(s for s in steps if s.source_function_map_id == str(sfm_id))
+    fns = {f.function_id: f for f in step.functions}
+    assert fns[str(fn_two_id)].output_mode == "append"   # fallback
+    assert fns[str(fn_one_id)].output_mode == "replace"  # per-function config
+
+
+@pytest.mark.integration
+def test_patch_invalid_function_output_returns_structured_error_not_500(client, db):
+    """[3] An invalid output_mode or malformed function_output entry returns a
+    structured error (422), not a 500."""
+    source_id, col_ids = make_registered_source(db, n_columns=1)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    # Invalid output_mode value
+    bad_mode = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {str(fn_one_id): {"output_mode": "obliterate"}},
+    })
+    assert bad_mode.status_code == 422
+    assert "detail" in bad_mode.json()
+
+    # Malformed function_id key (not a UUID)
+    bad_key = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {"not-a-uuid": {"output_mode": "append"}},
+    })
+    assert bad_key.status_code == 422
+    assert "detail" in bad_key.json()
+
+    # Malformed entry (not a dict)
+    bad_entry = client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {str(fn_one_id): "append"},
+    })
+    assert bad_entry.status_code == 422
+    assert "detail" in bad_entry.json()
+
+
+@pytest.mark.integration
+def test_get_pipeline_emits_per_function_output_after_patch(client, db):
+    """[4 backend support / Principle 7] After a function_output PATCH, GET /pipelines
+    returns each member's persisted output_mode / append_name / ordered output_targets
+    so the Builder can render and round-trip the per-function control."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    sfm_id, set_id, fn_one_id, fn_two_id = _seed_multi_function_set(db, source_id, col_ids)
+
+    client.patch(f"/pipelines/{source_id}/steps/{sfm_id}", json={
+        "function_output": {
+            str(fn_one_id): {"output_mode": "append", "append_name": "delta"},
+            str(fn_two_id): {"output_mode": "replace", "output_targets": [str(col_ids[1]), str(col_ids[0])]},
+        },
+    })
+
+    body = client.get(f"/pipelines/{source_id}").json()
+    step = next(s for s in body["steps"] if s["source_function_map_id"] == str(sfm_id))
+    fns = {f["function_id"]: f for f in step["functions"]}
+
+    assert fns[str(fn_one_id)]["output_mode"] == "append"
+    assert fns[str(fn_one_id)]["append_name"] == "delta"
+    assert fns[str(fn_one_id)]["output_targets"] == []
+
+    assert fns[str(fn_two_id)]["output_mode"] == "replace"
+    # ordered targets round-trip as [{column_id, column_name}, ...] in position order
+    two_targets = [t["column_id"] for t in fns[str(fn_two_id)]["output_targets"]]
+    assert two_targets == [str(col_ids[1]), str(col_ids[0])]

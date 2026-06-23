@@ -54,6 +54,7 @@ class PatchStepIn(BaseModel):
     output_mode: str | None = None
     bindings: dict | None = None        # param_id -> [column_id, ...], replaces all alias_map rows
     scalar_values: dict | None = None   # param_id -> value string, upserted into source_scalar_map
+    function_output: dict | None = None  # function_id -> {output_mode, append_name?, output_targets?[col_id]} (#264)
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +285,26 @@ def patch_pipeline_step_route(
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=f"Invalid scalar_values: {exc}")
 
+    # Parse function_output: function_id str -> {output_mode, append_name?, output_targets?[col_id str]}
+    parsed_function_output = None
+    if body.function_output is not None:
+        try:
+            parsed_function_output = {}
+            for fn_id, cfg in body.function_output.items():
+                if not isinstance(cfg, dict):
+                    raise ValueError(f"entry for {fn_id!r} must be a mapping")
+                targets = cfg.get("output_targets")
+                parsed_targets = (
+                    [uuid.UUID(c) for c in targets] if targets is not None else None
+                )
+                parsed_function_output[uuid.UUID(fn_id)] = {
+                    "output_mode": cfg.get("output_mode"),
+                    "append_name": cfg.get("append_name"),
+                    "output_targets": parsed_targets,
+                }
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid function_output: {exc}")
+
     try:
         ok = patch_pipeline_step(
             conn, sid, sfm_id,
@@ -291,6 +312,7 @@ def patch_pipeline_step_route(
             output_mode=body.output_mode,
             bindings=parsed_bindings,
             scalar_values=parsed_scalars,
+            function_output=parsed_function_output,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
