@@ -1,0 +1,83 @@
+{
+  "feature_slug": "param-binding-output-mode",
+  "slice_status": "frozen",
+  "source_prd_hash": "3ec7c46f64d341fec65de0c05868b178b4e039661b33f5c82c4cd44b1834ce35",
+  "decomposition": [
+    {
+      "slice_id": 1,
+      "slice_name": "numeric-column-binding",
+      "intent": "End-to-end: a user can bind an int/float/bool parameter to a column (or keep a typed constant) in the Builder and have it run per-record — backend eligibility through to the modal UI.",
+      "layers": ["business_logic", "ui"],
+      "scope": "Backend: add binding_kind(type_str) to the classification leaf (off the existing function_class; no granularity change); delete suggest._SCALAR_TYPES/_SUGGEST_TYPES and attach._REQUIRES_BINDING, deriving from binding_kind; suggest emits binding_kind + suggested_columns/current_bindings for value_or_column numerics; attach writes alias_map rows for column-bound numerics (single and multi-column, under the existing equal-length-among-varying guard) and generalizes _find_missing_bindings (satisfied by binding OR literal OR has_default). UI (screen-builder.jsx, shared with slice 2): render the Plain string / Column-backed toggle for numerics driven by the emitted binding_kind via one predicate (no scattered type literals); column mode sends bindings + clears the stale scalar; edit-load restores mode and bound-column order (Principle 7); a Save-guard mirrors the backend block-at-attach; the replace-target picker now appears for a numeric-bound function. Runner is untouched; the suggest route is a passthrough so no route change.",
+      "size": "L",
+      "acceptance": [
+        "binding_kind(type_str) returns value_or_column for int/float/bool/str, column_only for pd.Series and pd.Series[bool], and table for pd.DataFrame (pure unit, test_functions.py).",
+        "suggest_bindings returns binding_kind=value_or_column with suggested_columns for an int/float/bool param, and attach writes alias_map rows in position order when such a param is bound to one or more columns (integration, test_attach.py).",
+        "Attaching a numeric param with no binding, no literal, and no Python default returns a structured missing-binding failure; the same param attaches when it has a default or a literal; unequal-length varying numeric columns are rejected by the equal-length guard (integration, test_attach.py).",
+        "A numeric param's current_bindings round-trip in alias_map.position order on edit-load (integration, test_attach.py).",
+        "A numeric param renders the Plain string / Column-backed toggle driven by the API binding_kind (not a hardcoded type); column mode saving sends bindings and clears the typed scalar (vitest, screen-builder.test.jsx).",
+        "Re-opening a step restores a numeric param's saved mode and bound-column order; the Save action is blocked when a numeric param has no value, no column, and no default — mirroring the backend (vitest, screen-builder.test.jsx).",
+        "The replace-target picker appears for a function once its numeric param is bound to a column (vitest, screen-builder.test.jsx)."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        "src/pipeui/backend/domain/functions/classification.py",
+        "src/pipeui/backend/domain/functions/suggest.py",
+        "src/pipeui/backend/domain/functions/attach.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_functions.py",
+        "tests/test_attach.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        ".claude/runs/param-binding-output-mode/1.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/frontend/screen-builder.jsx",
+          "shared_with": [2],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/frontend/screen-builder.test.jsx",
+          "shared_with": [2],
+          "access": "modifies"
+        }
+      ]
+    },
+    {
+      "slice_id": 2,
+      "slice_name": "per-function-output-mode",
+      "intent": "End-to-end: a user can set Append vs Replace independently for each function within a set in the Builder — the edit path through to the modal UI (the per-function storage/execution already exists from #264).",
+      "layers": ["business_logic", "api", "ui"],
+      "scope": "Backend: extend patch_pipeline_step with an optional function_output map (function_id -> {output_mode, append_name, output_targets}) updating function_output_config + output_target_map keyed by (source_function_map_id, function_id) transactionally, and stop writing the vestigial set-level source_function_map.output_mode when function_output is given; widen the existing PATCH /pipelines/{source_id}/steps/{sfm_id} body in middleware/pipelines.py to carry it (no new route, no new table; step_edit stays the single owner; thin route). UI (screen-builder.jsx, shared with slice 1): relocate the Append/Replace control from the set-level step card into each function's group, with per-function append-name / ordered replace-target inputs, wired to the extended PATCH scoped to one function_id. Serializes after slice 1 on the shared modal file.",
+      "size": "M",
+      "acceptance": [
+        "PATCH on a step with a function_output map persists output_mode/append_name to function_output_config for the named function_id only, leaving sibling members untouched; ordered replace targets persist to output_target_map keyed by (sfm_id, function_id) (integration, test_api_pipelines.py).",
+        "A set with two functions — one append, one replace — round-trips with each member's output config independent (integration, test_api_pipelines.py).",
+        "When function_output is provided the set-level source_function_map.output_mode is not written, and a legacy step without per-function config still resolves output mode via the existing fallback (integration/regression, test_api_pipelines.py).",
+        "An invalid output_mode or malformed function_output entry returns a structured error, not a 500 (integration, test_api_pipelines.py).",
+        "Each function within a set renders its own Append/Replace control with its own append-name / replace-target inputs, and changing one issues a function_output PATCH scoped to that function only (vitest, screen-builder.test.jsx)."
+      ],
+      "depends_on": [1],
+      "touched_files": [
+        "src/pipeui/backend/domain/functions/step_edit.py",
+        "src/pipeui/middleware/pipelines.py",
+        "src/pipeui/frontend/screen-builder.jsx",
+        "tests/test_api_pipelines.py",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        ".claude/runs/param-binding-output-mode/2.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/frontend/screen-builder.jsx",
+          "shared_with": [1],
+          "access": "modifies"
+        },
+        {
+          "surface": "src/pipeui/frontend/screen-builder.test.jsx",
+          "shared_with": [1],
+          "access": "modifies"
+        }
+      ]
+    }
+  ]
+}
