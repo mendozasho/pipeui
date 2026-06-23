@@ -1,0 +1,28 @@
+{
+  "feature_slug": "param-binding-output-mode",
+  "ledger_hash": "bed2a8868ecac3c1332ced046fc13b0efff3a88c7c9175c018671f7f9107db6a",
+  "accumulator_branch": "release/param-binding-output-mode",
+  "current_round": 2,
+  "slices": {
+    "1": {
+      "status": "integrated",
+      "branch": "feature/param-binding-output-mode-1",
+      "workspace": "/tmp/pbom-wt-1",
+      "pr": 105,
+      "integrated_at": "2026-06-23",
+      "note": "round 1 — unblocked front"
+    },
+    "2": {
+      "status": "integrated",
+      "branch": "feature/param-binding-output-mode-2",
+      "workspace": "/tmp/pbom-wt-2",
+      "pr": 106,
+      "integrated_at": "2026-06-23",
+      "note": "depends_on slice 1 — now integrated; ready for round 2"
+    }
+  },
+  "integration_order": [
+    1,
+    2
+  ]
+}
