@@ -43,7 +43,8 @@ _Avoid_: kind, bare "type"
 
 **scalar run** _(synonym: scalar loop)_:
 The runner executing a scalar-shaped function — one whose bound parameter takes a single
-value per call (`int`, `float`, or a `str` that is not `column_backed`), or whose return is
+value per call (`int`, `float`, `bool`, or `str` — any `scalar`-class param, see
+`binding_kind`), or whose return is
 a single value — **once per record** of the column under it (R = row count), collecting the
 per-row outputs into one normalized vector. Normalizing a scalar function to a vector is the
 point: it lets the Results layer and any downstream step consume every function's output the
@@ -82,6 +83,17 @@ user pair a constant column (e.g. `country → USA`) with a set of varying colum
 a **scalar param**, which carries a single non-column value (its Python default or a per-run
 override), not a column.
 _Avoid_: constant param, fixed param.
+
+**binding_kind**:
+The single derived answer to "how may this parameter receive its argument", read off the
+parameter's existing `function_class`: **value_or_column** (a `scalar`-class param —
+`int`/`float`/`bool`/`str` — that may take a literal value **or** bind a column);
+**column_only** (a `pd.Series`-class param, always one-or-more bound columns, never a literal);
+**table** (a `pd.DataFrame`, always the full table, never bound). Derived in exactly one place
+(`classification.py`) and read by `suggest`, `attach`, and the Builder UI, so binding
+eligibility is never re-enumerated as parallel type lists. Generalizes the older two-way
+`param_kind` (`column`/`scalar`) split.
+_Avoid_: binding_eligible, togglable.
 
 ## Results
 
