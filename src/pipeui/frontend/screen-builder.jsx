@@ -135,13 +135,22 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
   // available_columns is computed server-side from source columns + join step columns
   const availableColumns = dryRunResult.available_columns || [];
 
-  // str params toggle between "text" (scalar) and "column" (column-backed) mode.
-  // On edit re-open, derive the mode from persisted state: existing column
-  // bindings → "column"; otherwise "text". (#191/#192)
+  // A value_or_column param (str, int, float, bool) toggles between "text" (a typed
+  // constant / Python default) and "column" (column-backed) mode. The set of
+  // toggleable params is derived from the API-emitted binding_kind via ONE predicate —
+  // never a scattered ["str","int","float","bool"] literal (param-binding-output-mode #99).
+  // column_only (pd.Series) is always column; table (pd.DataFrame) is auto-filled.
+  function isValueOrColumn(p) { return p.binding_kind === "value_or_column"; }
+  function isColumnOnly(p) { return p.binding_kind === "column_only"; }
+  function isTableParam(p) { return p.binding_kind === "table" || p.param_type === "pd.DataFrame"; }
+
+  // toggleModes: param_id -> "text" | "column", for every value_or_column param.
+  // On edit re-open, derive the mode from persisted state: existing column bindings →
+  // "column"; otherwise "text". (#191/#192, generalized from str-only to all numerics.)
   const [strModes, setStrModes] = React.useState(() => {
     const m = {};
     params.forEach(p => {
-      if (p.param_type === "str") {
+      if (isValueOrColumn(p)) {
         m[p.param_id] = (p.current_bindings || []).length > 0 ? "column" : "text";
       }
     });
@@ -153,11 +162,13 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     params.forEach(p => {
       const restored = (p.current_bindings || []).map(b => b.column_id);
       if (restored.length > 0) {
-        // Edit re-open: restore the step's saved column bindings (#191). Applies
-        // to pd.Series/column_backed params and to a str in column-backed mode.
+        // Edit re-open: restore the step's saved column bindings (#191), in saved
+        // order. Applies to column_only params and to a value_or_column param
+        // (str/numeric) saved in column mode.
         sel[p.param_id] = restored;
-      } else if (p.param_type === "pd.Series" || p.param_type === "column_backed") {
-        // Initial attach: fall back to cross-source suggested columns.
+      } else if (isColumnOnly(p)) {
+        // Initial attach: a column_only param falls back to cross-source suggested
+        // columns. A value_or_column param defaults to text mode (no auto-selection).
         sel[p.param_id] = (p.suggested_columns || []).map(c => c.column_id);
       }
     });
@@ -200,12 +211,24 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     });
   }
 
-  // A column param (pd.Series, column_backed) or str in "column" mode requires ≥1 column selected
-  const requiredParams = params.filter(p =>
-    (p.param_kind === "column" && (p.param_type === "pd.Series" || p.param_type === "column_backed")) ||
-    (p.param_type === "str" && strModes[p.param_id] === "column")
-  );
-  const allRequiredFilled = requiredParams.every(p => (selections[p.param_id] || []).length > 0);
+  // Save-guard — mirrors the backend block-at-attach (param-binding-output-mode #99),
+  // derived from binding_kind so the user is blocked BEFORE the request:
+  //  - column_only (pd.Series): needs ≥1 bound column.
+  //  - value_or_column (str/numeric): satisfied by a bound column OR a non-blank typed
+  //    value OR a declared Python default (has_default). None of the three → blocked,
+  //    exactly like an unbound str, so no per-row crash at run time.
+  //  - table (pd.DataFrame): auto-filled, never blocks.
+  function paramSatisfied(p) {
+    if (isTableParam(p)) return true;
+    const hasColumns = (selections[p.param_id] || []).length > 0;
+    if (isColumnOnly(p)) return hasColumns;
+    // value_or_column
+    if (strModes[p.param_id] === "column") return hasColumns;
+    const v = scalarValues[p.param_id];
+    const hasValue = v != null && String(v).trim() !== "";
+    return hasValue || !!p.has_default;
+  }
+  const allRequiredFilled = params.every(paramSatisfied);
 
   // Equal-length-among-varying guard (slice 3 / §12, ADR-0001). Mirrors the backend
   // attach reject so the user is blocked BEFORE the POST: every VARYING column param
@@ -245,11 +268,11 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
     });
   }
 
-  // A param is column-bound when it's a pd.Series/column_backed param, or a str
-  // currently in "column" mode.
+  // A param is column-bound when it's a column_only param (pd.Series), or a
+  // value_or_column param (str/numeric) currently toggled into "column" mode. Derived
+  // from binding_kind via one predicate, not a scattered type literal (#99).
   function isColumnMode(p) {
-    return p.param_type === "pd.Series" || p.param_type === "column_backed" ||
-      (p.param_type === "str" && strModes[p.param_id] === "column");
+    return isColumnOnly(p) || (isValueOrColumn(p) && strModes[p.param_id] === "column");
   }
 
   function handleSave() {
@@ -257,17 +280,18 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
       .filter(isColumnMode)
       .map(p => ({ param_id: p.param_id, column_ids: selections[p.param_id] || [] }))
       .filter(b => b.column_ids.length > 0);
-    // Build the scalar payload. pd.DataFrame params are auto-filled and never scalar.
-    // A param NOT in column mode sends its value — blanks included, so clearing the
-    // input clears the persisted override (backend reverts to the Python default).
-    // A str that moved INTO column mode sends a blank to clear any stale plain-string
-    // value, so the step keeps a single source of truth (the column binding). Without
-    // this the old scalar lingers in source_scalar_map after a text→column switch.
+    // Build the scalar payload. table params (pd.DataFrame) are auto-filled and never
+    // scalar. A value_or_column param NOT in column mode sends its value — blanks
+    // included, so clearing the input clears the persisted override (backend reverts to
+    // the Python default). A value_or_column param (str OR numeric) that moved INTO
+    // column mode sends a blank to clear any stale typed value, so the step keeps a
+    // single source of truth (the column binding) — otherwise the old scalar lingers in
+    // source_scalar_map after a text→column switch (#99, generalized from str-only).
     const scalars = {};
     params.forEach(p => {
-      if (p.param_type === "pd.DataFrame") return;
+      if (isTableParam(p)) return;
       if (isColumnMode(p)) {
-        if (p.param_type === "str") scalars[p.param_id] = "";
+        if (isValueOrColumn(p)) scalars[p.param_id] = "";
       } else {
         scalars[p.param_id] = scalarValues[p.param_id] || "";
       }
@@ -294,12 +318,15 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
 
   // Render one parameter row (scalar input or column selectors).
   function renderParam(p) {
-    const isDataFrame = p.param_type === "pd.DataFrame";
-    const isMultiCol = p.param_type === "pd.Series" || p.param_type === "column_backed";
-    const isStr = p.param_type === "str";
+    const isDataFrame = isTableParam(p);
+    const isMultiCol = isColumnOnly(p);
+    // toggleable = value_or_column (str/int/float/bool): a text/column toggle param.
+    const isToggleable = isValueOrColumn(p);
     const strMode = strModes[p.param_id] || "text";
-    // scalar input shows for int/float/bool and for a str in plain-string mode
-    const isScalar = p.param_kind === "scalar" || (!isDataFrame && !isMultiCol && !(isStr && strMode === "column"));
+    // scalar input shows for a value_or_column param in "text" (plain) mode only — for
+    // int/float/bool and for str in plain-string mode (#99). column_only / table never.
+    const isScalar = isToggleable && strMode !== "column";
+    const showColumnList = isMultiCol || (isToggleable && strMode === "column");
 
     return (
       <div key={p.param_id} style={{
@@ -323,8 +350,8 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
           )}
         </div>
 
-        {/* str mode toggle */}
-        {isStr && (
+        {/* value_or_column mode toggle (str + numeric) — Plain string / Column-backed */}
+        {isToggleable && (
           <div style={{ display: "flex", gap: 4, marginBottom: 2 }}>
             {["text", "column"].map(mode => (
               <button key={mode} onClick={() => setStrModes(prev => ({ ...prev, [p.param_id]: mode }))} style={{
@@ -361,7 +388,7 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
           />
         )}
 
-        {(isMultiCol || (isStr && strMode === "column")) && (
+        {showColumnList && (
           <>
           {/* #188: the function description shows in the group header above; here it
               carries as a tooltip so the bare bind hint is never the only context. */}
@@ -623,13 +650,121 @@ function PendingStepCard({ dryRunResult, stepName, onSave, onCancel, saving, sav
 // Step card
 // ---------------------------------------------------------------------------
 
+// Per-function Append/Replace output control (param-binding-output-mode #104).
+// Each transform function within a set carries its OWN output mode + append name /
+// ordered replace targets. Changing one PATCHes function_output scoped to that
+// function_id only — sibling members are never touched. Relocated here from the old
+// set-level control (a single set-level choice could not represent a mixed set).
+function FunctionOutputControl({ fn, columns, sourceId, sfmId }) {
+  const [mode, setMode] = useState(fn.output_mode || "append");
+  const [appendName, setAppendName] = useState(fn.append_name || "");
+  // replaceTargets: ordered list of column_ids (bundle i -> target i).
+  const [targets, setTargets] = useState(
+    () => (fn.output_targets || []).map(t => t.column_id)
+  );
+  const cols = columns || [];
+
+  // PATCH function_output scoped to THIS function only. Accepts overrides so a
+  // state setter and the request fire from the same values (state updates are async).
+  function patch(next = {}) {
+    const nextMode = next.mode !== undefined ? next.mode : mode;
+    const nextAppend = next.appendName !== undefined ? next.appendName : appendName;
+    const nextTargets = next.targets !== undefined ? next.targets : targets;
+    const cfg = { output_mode: nextMode };
+    if (nextMode === "append") {
+      if (nextAppend.trim() !== "") cfg.append_name = nextAppend.trim();
+    } else {
+      cfg.output_targets = nextTargets.filter(Boolean);
+    }
+    fetch("/pipelines/" + sourceId + "/steps/" + sfmId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ function_output: { [fn.function_id]: cfg } }),
+    }).catch(() => {});
+  }
+
+  function handleModeChange(e) {
+    const newMode = e.target.value;
+    setMode(newMode);
+    patch({ mode: newMode });
+  }
+
+  function handleTargetChange(i, colId) {
+    const next = targets.slice();
+    next[i] = colId;
+    setTargets(next);
+    patch({ targets: next });
+  }
+
+  // A replace function overwrites at least one target column; default to one row.
+  const targetSlots = mode === "replace" ? Math.max(targets.length, 1) : 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "4px 0 6px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Output:</span>
+        <select
+          data-testid={"fn-output-mode-" + fn.function_id}
+          value={mode}
+          onChange={handleModeChange}
+          style={{
+            fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
+            border: "1px solid var(--border)", background: "var(--panel-2)",
+            color: "var(--text)", cursor: "pointer",
+          }}
+        >
+          <option value="append">Append</option>
+          <option value="replace">Replace</option>
+        </select>
+      </div>
+      {mode === "append" && (
+        <input
+          data-testid={"fn-append-name-" + fn.function_id}
+          type="text"
+          placeholder="New column name (optional)"
+          value={appendName}
+          onChange={e => setAppendName(e.target.value)}
+          onBlur={() => patch()}
+          style={{
+            fontSize: 11, padding: "3px 6px", borderRadius: "var(--radius)",
+            border: "1px solid var(--border)", background: "var(--panel-2)",
+            color: "var(--text)", maxWidth: 220,
+          }}
+        />
+      )}
+      {mode === "replace" && (
+        <div data-testid={"fn-replace-targets-" + fn.function_id}
+          style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {Array.from({ length: targetSlots }, (_, i) => (
+            <select
+              key={i}
+              data-testid={"fn-replace-target-" + fn.function_id + "-" + i}
+              value={targets[i] || ""}
+              onChange={e => handleTargetChange(i, e.target.value)}
+              style={{
+                fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
+                border: "1px solid var(--border)", background: "var(--panel-2)",
+                color: "var(--text)", maxWidth: 220,
+              }}
+            >
+              <option value="">Replace target column…</option>
+              {cols.map(c => (
+                <option key={c.column_id} value={c.column_id}>{c.column_name}</option>
+              ))}
+            </select>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, onDragEnd, onDragOver, resultTag, onNavigateResults, onEdit }) {
   const { OrderBadge } = window.__UI__;
   const setType = deriveSetType(step.functions);
   const badgeStyle = TYPE_BADGE_COLORS[setType] || TYPE_BADGE_COLORS.Unknown;
   const [removing, setRemoving] = useState(false);
-  const [outputMode, setOutputMode] = useState(step.output_mode || "append");
-  const showOutputMode = setType === "Transform" || setType === "Mixed";
+  const columns = step.columns || (step.source && step.source.columns) || [];
 
   function handleRemove() {
     if (removing) return;
@@ -637,17 +772,6 @@ function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, o
     fetch("/pipelines/" + sourceId + "/steps/" + step.source_function_map_id, { method: "DELETE" })
       .then(r => { if (r.ok || r.status === 204) onRemoved(); else setRemoving(false); })
       .catch(() => setRemoving(false));
-  }
-
-  function handleOutputModeChange(e) {
-    const newMode = e.target.value;
-    const prev = outputMode;
-    setOutputMode(newMode);
-    fetch("/pipelines/" + sourceId + "/steps/" + step.source_function_map_id, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ output_mode: newMode }),
-    }).catch(() => setOutputMode(prev));
   }
 
   return (
@@ -716,26 +840,21 @@ function StepCard({ step, sourceId, order, onRemoved, isDragging, onDragStart, o
       </div>
 
       {step.functions.map(fn => (
-        <FunctionRow key={fn.function_id} fn={fn} />
-      ))}
-
-      {showOutputMode && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4 }}>
-          <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Output:</span>
-          <select
-            value={outputMode}
-            onChange={handleOutputModeChange}
-            style={{
-              fontSize: 11, padding: "2px 6px", borderRadius: "var(--radius)",
-              border: "1px solid var(--border)", background: "var(--panel-2)",
-              color: "var(--text)", cursor: "pointer",
-            }}
-          >
-            <option value="append">Append</option>
-            <option value="replace">Replace</option>
-          </select>
+        <div key={fn.function_id}>
+          <FunctionRow fn={fn} />
+          {/* Per-function output control (#104): transform members carry their own
+              Append/Replace + append-name / replace-targets. Validation functions
+              produce no output column, so they show no control. */}
+          {fn.function_type === "transform" && (
+            <FunctionOutputControl
+              fn={fn}
+              columns={columns}
+              sourceId={sourceId}
+              sfmId={step.source_function_map_id}
+            />
+          )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -867,7 +986,7 @@ function BuiltinStepCard({ step, sourceId, order, sources, onRemoved, onEdit }) 
 // Pipeline canvas — drag-to-reorder
 // ---------------------------------------------------------------------------
 
-function PipelineCanvas({ sourceId, steps, sources, onReloadPipeline, resultTags, onNavigateResults, onEditStep, onEditBuiltin }) {
+function PipelineCanvas({ sourceId, steps, sources, columns, onReloadPipeline, resultTags, onNavigateResults, onEditStep, onEditBuiltin }) {
   const [localSteps, setLocalSteps] = useState(steps);
   const dragIndexRef = useRef(null);
 
@@ -936,7 +1055,7 @@ function PipelineCanvas({ sourceId, steps, sources, onReloadPipeline, resultTags
         return (
           <StepCard
             key={step.source_function_map_id}
-            step={step}
+            step={{ ...step, columns: step.columns || columns }}
             sourceId={sourceId}
             order={index + 1}
             onRemoved={onReloadPipeline}
@@ -2593,6 +2712,7 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
             sourceId={source.source_id}
             steps={pipeline.steps}
             sources={allSources}
+            columns={(pipeline.source && pipeline.source.columns) || []}
             onReloadPipeline={loadPipeline}
             resultTags={resultTags}
             onNavigateResults={() => onNavigate && onNavigate("results", {})}

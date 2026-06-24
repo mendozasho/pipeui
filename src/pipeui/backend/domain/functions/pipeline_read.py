@@ -168,12 +168,41 @@ def get_pipeline(
                     "scalar_value": scalar_value,
                 })
 
+            # Per-function output config (#264 / param-binding-output-mode #104): each
+            # member's output_mode / append_name / ordered replace targets, so the
+            # Builder can render a per-function Append/Replace control that round-trips
+            # the persisted form (Principle 7). Legacy steps without a config row fall
+            # back to the set-level output_mode.
+            cfg_row = conn.execute(
+                "SELECT output_mode, append_name FROM function_output_config "
+                "WHERE source_function_map_id = ? AND function_id = ?",
+                [sfm_id, fn_id],
+            ).fetchone()
+            fn_output_mode = cfg_row[0] if cfg_row else output_mode
+            fn_append_name = cfg_row[1] if cfg_row else None
+            target_rows = conn.execute(
+                """
+                SELECT cr.column_id, cr.column_name
+                FROM output_target_map otm
+                JOIN column_registry cr ON cr.column_id = otm.column_id
+                WHERE otm.source_function_map_id = ? AND otm.function_id = ?
+                ORDER BY otm.position
+                """,
+                [sfm_id, fn_id],
+            ).fetchall()
+            output_targets = [
+                {"column_id": str(r[0]), "column_name": r[1]} for r in target_rows
+            ]
+
             functions.append({
                 "function_id": str(fn_id),
                 "function_name": fn_name,
                 "function_doc": fn_doc,
                 "function_type": fn_type,
                 "params": params,
+                "output_mode": fn_output_mode,
+                "append_name": fn_append_name,
+                "output_targets": output_targets,
             })
 
         steps.append({

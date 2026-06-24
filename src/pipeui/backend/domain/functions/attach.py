@@ -26,6 +26,7 @@ import duckdb
 from pipeui.backend.data.base.ids import content_hash_id, new_id
 from pipeui.backend.data.base.results import normalize_label
 from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
+from pipeui.backend.domain.functions.classification import binding_kind
 
 
 # ---------------------------------------------------------------------------
@@ -36,10 +37,6 @@ from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
 class AttachBinding:
     param_id: uuid.UUID
     column_ids: list[uuid.UUID] = field(default_factory=list)
-
-
-# param_types that require ≥1 alias_map binding
-_REQUIRES_BINDING = {"str", "column_backed", "pd.Series"}
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +137,7 @@ def _resolve_set_and_params(
         resolved_set_id, auto_set = _resolve_or_create_auto_set(conn, function_id, fn_name)
 
         param_rows = conn.execute(
-            "SELECT param_id, param_name, param_type FROM parameter WHERE function_id = ?",
+            "SELECT param_id, param_name, param_type, has_default FROM parameter WHERE function_id = ?",
             [function_id],
         ).fetchall()
         return resolved_set_id, param_rows, auto_set, None
@@ -151,7 +148,7 @@ def _resolve_set_and_params(
 
     param_rows = conn.execute(
         """
-        SELECT p.param_id, p.param_name, p.param_type
+        SELECT p.param_id, p.param_name, p.param_type, p.has_default
         FROM parameter p
         JOIN function_set_map fsm ON fsm.function_id = p.function_id
         WHERE fsm.set_id = ?
@@ -166,23 +163,33 @@ def _find_missing_bindings(
     binding_map: dict,
     scalar_values: dict,
 ) -> list[dict]:
-    """Return the structured-failure entries for required params lacking a binding.
+    """Return the structured-failure entries for params with no way to receive an argument.
 
-    A ``str`` param is exempt when a non-blank literal value is provided for it
-    (plain-string mode, Bug #186): the literal goes to source_scalar_map instead of
-    alias_map. Other binding types (column_backed, pd.Series) still require a column.
+    Generalized optional-binding rule (param-binding-output-mode #99): a parameter is
+    satisfied by ANY of — a column binding, a non-blank typed literal, or a declared
+    Python default (``has_default``). Eligibility is derived from ``binding_kind``
+    (classification.py), never a parallel type literal:
+    - ``table`` (pd.DataFrame) — auto-filled, never requires anything.
+    - ``column_only`` (pd.Series) — needs a column binding (no literal/default path).
+    - ``value_or_column`` (int/float/bool/str) — needs a binding OR a literal OR a default;
+      a numeric/str with none of the three is rejected like an unbound str (Bug #186), so
+      the user is blocked at attach instead of crashing per-row at run time.
     """
     def _has_literal(p_id) -> bool:
         v = scalar_values.get(p_id)
         return v is not None and str(v).strip() != ""
 
-    return [
-        {"param_id": str(p_id), "param_name": p_name, "param_type": p_type}
-        for p_id, p_name, p_type in param_rows
-        if p_type in _REQUIRES_BINDING
-        and not binding_map.get(p_id)
-        and not (p_type == "str" and _has_literal(p_id))
-    ]
+    missing = []
+    for p_id, p_name, p_type, has_default in param_rows:
+        b_kind = binding_kind(p_type)
+        if b_kind == "table":
+            continue
+        if binding_map.get(p_id):
+            continue
+        if b_kind == "value_or_column" and (_has_literal(p_id) or has_default):
+            continue
+        missing.append({"param_id": str(p_id), "param_name": p_name, "param_type": p_type})
+    return missing
 
 
 def _validate_bundles(
@@ -198,7 +205,7 @@ def _validate_bundles(
     """
     bundle_params = [
         {"param_id": str(p_id), "columns": [str(c) for c in binding_map.get(p_id, [])]}
-        for p_id, _, _ in param_rows
+        for p_id, _, _, _ in param_rows
         if binding_map.get(p_id)
     ]
     try:
@@ -274,15 +281,20 @@ def _write_alias_rows(
     source_id: uuid.UUID,
 ) -> None:
     """Write one alias_map row per bound column, position = add-order index so argument
-    bundles align by position at run time."""
-    for p_id, _p_name, p_type in param_rows:
-        if p_type in _REQUIRES_BINDING:
-            for pos, col_id in enumerate(binding_map.get(p_id, [])):
-                am_id = content_hash_id("alias_map", str(p_id), str(col_id), str(source_id))
-                conn.execute(
-                    "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id, position) VALUES (?, ?, ?, ?, ?)",
-                    [am_id, col_id, p_id, source_id, pos],
-                )
+    bundles align by position at run time.
+
+    Written for ANY param that was given columns (param-binding-output-mode #99) — a
+    column-bound numeric (value_or_column) persists its alias_map rows exactly like a
+    str/pd.Series param. A param with no columns (a text-mode literal, a pd.DataFrame,
+    or an unbound default) writes nothing here.
+    """
+    for p_id, _p_name, _p_type, _has_default in param_rows:
+        for pos, col_id in enumerate(binding_map.get(p_id, [])):
+            am_id = content_hash_id("alias_map", str(p_id), str(col_id), str(source_id))
+            conn.execute(
+                "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id, position) VALUES (?, ?, ?, ?, ?)",
+                [am_id, col_id, p_id, source_id, pos],
+            )
 
 
 def _write_output_targets(
@@ -309,7 +321,7 @@ def _write_scalar_values(
 ) -> None:
     """Persist provided scalar / plain-string literals (Bug #186). Only non-blank values
     for params of this attach are written; a blank means "use the Python default"."""
-    param_id_set = {p_id for p_id, _, _ in param_rows}
+    param_id_set = {p_id for p_id, _, _, _ in param_rows}
     for p_id, value in scalar_values.items():
         if p_id not in param_id_set:
             continue

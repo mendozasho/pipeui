@@ -67,6 +67,14 @@ def _make_function(conn, fn_name: str, params: list[tuple[str, str]]) -> tuple[u
     return fn_id, param_ids
 
 
+def _set_param_default(conn, param_id, default_value: str):
+    """Mark a parameter as having a Python default (has_default=TRUE, default_value=str())."""
+    conn.execute(
+        "UPDATE parameter SET has_default = TRUE, default_value = ? WHERE param_id = ?",
+        [default_value, param_id],
+    )
+
+
 def _make_named_set(conn, set_name: str, fn_id: uuid.UUID, position: int = 0) -> uuid.UUID:
     """Insert a function_set + function_set_map for fn_id. Returns set_id."""
     set_id = uuid.uuid4()
@@ -175,9 +183,14 @@ def test_dataframe_param_exempt_from_binding(db):
 
 @pytest.mark.integration
 def test_scalar_param_exempt_from_binding(db):
-    """Guarantee 6: scalar params (non-str, non-pd.Series) don't block save."""
+    """Guarantee 6 (updated to the param-binding-output-mode #99 rule): a scalar
+    (value_or_column) param does not require a column binding WHEN it can receive an
+    argument another way — here a declared Python default. (A scalar with NO binding,
+    NO literal, AND NO default is now blocked — see
+    test_attach_numeric_no_binding_no_literal_no_default_is_structured_failure.)"""
     source_id, _ = make_registered_source(db, n_columns=1)
     fn_id, (param_id,) = _make_function(db, "fn_scalar", [("threshold", "int")])
+    _set_param_default(db, param_id, "0")
 
     result = attach_function(db, source_id, [], function_id=fn_id)
     assert result["ok"] is True
@@ -679,7 +692,10 @@ def test_suggest_includes_scalar_params_with_kind_scalar(db):
 
 @pytest.mark.integration
 def test_suggest_column_params_have_kind_column(db):
-    """Guarantee S10: str/pd.Series params have param_kind='column'."""
+    """Guarantee S10 (updated to the param-binding-output-mode #99 rule): only a
+    column_only param (pd.Series) carries param_kind='column'. A str is now
+    value_or_column (param_kind='scalar') — it opens as a free-text input that can
+    toggle to a column binding, same as a numeric. binding_kind disambiguates the two."""
     source_id, col_ids = make_registered_source(db, n_columns=1)
     fn_id, (p_str, p_series) = _make_function(
         db, "fn_col_kinds",
@@ -687,10 +703,12 @@ def test_suggest_column_params_have_kind_column(db):
     )
 
     result = suggest_bindings(db, source_id, function_id=fn_id)
-    params = result["params"]
+    params = {p["param_name"]: p for p in result["params"]}
     assert len(params) == 2
-    for p in params:
-        assert p["param_kind"] == "column"
+    assert params["col_a"]["param_kind"] == "scalar"
+    assert params["col_a"]["binding_kind"] == "value_or_column"
+    assert params["col_b"]["param_kind"] == "column"
+    assert params["col_b"]["binding_kind"] == "column_only"
 
 
 @pytest.mark.integration
@@ -755,6 +773,7 @@ def test_patch_scalar_values_upserts_into_source_scalar_map(db):
     """Guarantee P1: PATCH with scalar_values upserts into source_scalar_map."""
     source_id, col_ids = make_registered_source(db, n_columns=1)
     fn_id, (p_id,) = _make_function(db, "fn_patch_scalar", [("n", "int")])
+    _set_param_default(db, p_id, "0")  # has a default so the bare attach is valid (#99 rule)
     result = attach_function(db, source_id, [], function_id=fn_id)
     assert result["ok"] is True
     sfm_id = uuid.UUID(result["source_function_map_id"])
@@ -775,6 +794,7 @@ def test_patch_scalar_values_upsert_updates_existing(db):
     """Guarantee P2: second PATCH with same (source_id, param_id) updates, no duplicate row."""
     source_id, col_ids = make_registered_source(db, n_columns=1)
     fn_id, (p_id,) = _make_function(db, "fn_patch_upsert", [("n", "int")])
+    _set_param_default(db, p_id, "0")  # has a default so the bare attach is valid (#99 rule)
     result = attach_function(db, source_id, [], function_id=fn_id)
     sfm_id = uuid.UUID(result["source_function_map_id"])
 
@@ -842,6 +862,8 @@ def test_get_pipeline_scalar_value_none_when_unset(db):
     """Bug #186 (2): a scalar param with no persisted value reports scalar_value=None."""
     source_id, _ = make_registered_source(db, n_columns=1)
     fn_id, (param_id,) = _make_function(db, "fn_pipe_scalar_none", [("threshold", "int")])
+    _set_param_default(db, param_id, "0")  # default makes the bare attach valid (#99 rule);
+    # scalar_value reads source_scalar_map (still empty) so it stays None.
 
     result = attach_function(db, source_id, [], function_id=fn_id)
     assert result["ok"] is True
@@ -1295,3 +1317,185 @@ def test_append_attach_writes_no_output_target_rows(db):
         [result["source_function_map_id"]],
     ).fetchone()[0]
     assert otm_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Slice 1 (param-binding-output-mode #99/#101) — numeric column-binding
+# Acceptance [1][2][3]. A numeric (int/float/bool) param is now value_or_column:
+# it takes a literal value OR binds a column, falling back to the Python default.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_suggest_numeric_param_emits_binding_kind_value_or_column(db):
+    """Acceptance [1] (suggest): a numeric (int/float/bool) param is returned with
+    binding_kind='value_or_column' and a populated suggested_columns list when it has a
+    prior cross-source binding — proving a numeric is now bindable, not column-excluded."""
+    target_source_id, target_col_ids = make_registered_source(db, n_columns=2)
+    other_source_id, _ = make_registered_source(db, n_columns=0)
+    scm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_column_map VALUES (?, ?, ?)",
+        [scm_id, target_col_ids[0], other_source_id],
+    )
+
+    fn_id, (p_id,) = _make_function(db, "fn_num_suggest", [("threshold", "int")])
+    _insert_alias(db, target_col_ids[0], p_id, other_source_id)
+
+    result = suggest_bindings(db, target_source_id, function_id=fn_id)
+    p = next(p for p in result["params"] if p["param_name"] == "threshold")
+    assert p["binding_kind"] == "value_or_column"
+    # A value_or_column numeric surfaces cross-source suggestions like str does.
+    assert len(p["suggested_columns"]) == 1
+    assert p["suggested_columns"][0]["column_id"] == str(target_col_ids[0])
+
+
+@pytest.mark.integration
+def test_suggest_pd_series_emits_binding_kind_column_only(db):
+    """Acceptance [1] (suggest): a pd.Series param carries binding_kind='column_only'."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_series_kind", [("series", "pd.Series")])
+    result = suggest_bindings(db, source_id, function_id=fn_id)
+    assert result["params"][0]["binding_kind"] == "column_only"
+
+
+@pytest.mark.integration
+def test_attach_numeric_param_bound_to_columns_writes_alias_rows_in_order(db):
+    """Acceptance [1] (attach): binding a numeric (float) param to >1 column writes one
+    alias_map row per column IN POSITION (add) order — not just str/pd.Series params."""
+    source_id, col_ids = make_registered_source(db, n_columns=3)
+    fn_id, (p_id,) = _make_function(db, "fn_num_bind", [("ratio", "float")])
+
+    # Provide columns in a NON-alphabetical order to prove position == add-order.
+    ordered = [col_ids[2], col_ids[0], col_ids[1]]
+    result = attach_function(
+        db, source_id,
+        [AttachBinding(param_id=p_id, column_ids=ordered)],
+        function_id=fn_id,
+    )
+    assert result["ok"] is True, result
+
+    rows = db.execute(
+        "SELECT column_id, position FROM alias_map WHERE parameter_id = ? AND source_id = ? ORDER BY position",
+        [p_id, source_id],
+    ).fetchall()
+    got = [(str(cid), pos) for cid, pos in rows]
+    assert got == [(str(ordered[0]), 0), (str(ordered[1]), 1), (str(ordered[2]), 2)]
+
+
+@pytest.mark.integration
+def test_attach_numeric_single_column_bind_writes_alias_row(db):
+    """Acceptance [1] (attach): a single-column numeric bind writes its alias_map row."""
+    source_id, col_ids = make_registered_source(db, n_columns=2)
+    fn_id, (p_id,) = _make_function(db, "fn_num_single", [("n", "int")])
+    result = attach_function(
+        db, source_id,
+        [AttachBinding(param_id=p_id, column_ids=[col_ids[0]])],
+        function_id=fn_id,
+    )
+    assert result["ok"] is True
+    alias_count = db.execute(
+        "SELECT COUNT(*) FROM alias_map WHERE parameter_id = ? AND source_id = ?",
+        [p_id, source_id],
+    ).fetchone()[0]
+    assert alias_count == 1
+
+
+@pytest.mark.integration
+def test_attach_numeric_no_binding_no_literal_no_default_is_structured_failure(db):
+    """Acceptance [2]: a numeric param with NO binding, NO literal, and NO Python default
+    is rejected as a structured missing-binding failure (ok=False), like an unbound str —
+    so the user never hits a per-row crash at run time. No partial rows written."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_num_unbound", [("threshold", "int")])
+    # No has_default set → has_default is FALSE.
+
+    result = attach_function(db, source_id, [], function_id=fn_id)
+    assert result["ok"] is False
+    assert len(result["missing_params"]) == 1
+    assert result["missing_params"][0]["param_name"] == "threshold"
+
+    sfm_count = db.execute("SELECT COUNT(*) FROM source_function_map").fetchone()[0]
+    assert sfm_count == 0
+
+
+@pytest.mark.integration
+def test_attach_numeric_with_default_attaches_without_binding(db):
+    """Acceptance [2]: the SAME numeric param attaches cleanly when it declares a Python
+    default — has_default satisfies the generalized missing-binding rule."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_num_default", [("threshold", "int")])
+    _set_param_default(db, p_id, "10")
+
+    result = attach_function(db, source_id, [], function_id=fn_id)
+    assert result["ok"] is True, result
+
+
+@pytest.mark.integration
+def test_attach_numeric_with_literal_attaches_without_binding(db):
+    """Acceptance [2]: a numeric param with a typed literal value (no binding, no default)
+    attaches — the literal satisfies the rule and is persisted to source_scalar_map."""
+    source_id, _ = make_registered_source(db, n_columns=1)
+    fn_id, (p_id,) = _make_function(db, "fn_num_literal", [("threshold", "int")])
+
+    result = attach_function(
+        db, source_id, [], function_id=fn_id, scalar_values={p_id: "5"},
+    )
+    assert result["ok"] is True, result
+    row = db.execute(
+        "SELECT value FROM source_scalar_map WHERE source_id = ? AND param_id = ?",
+        [source_id, p_id],
+    ).fetchone()
+    assert row is not None and row[0] == "5"
+
+
+@pytest.mark.integration
+def test_attach_numeric_unequal_varying_columns_rejected_by_equal_length_guard(db):
+    """Acceptance [2]: two varying NUMERIC params binding different column counts (3,2)
+    is rejected by the equal-length-among-varying guard as a structured failure (ok=False),
+    not a raised 500 — the guard is type-agnostic and now covers numerics. No rows written."""
+    source_id, col_ids = make_registered_source(db, n_columns=5)
+    fn_id, (p_a, p_b) = _make_function(
+        db, "fn_num_two_varying", [("a", "int"), ("b", "float")]
+    )
+
+    result = attach_function(
+        db, source_id,
+        [
+            AttachBinding(param_id=p_a, column_ids=col_ids[:3]),   # 3 columns
+            AttachBinding(param_id=p_b, column_ids=col_ids[3:5]),  # 2 columns
+        ],
+        function_id=fn_id,
+    )
+    assert result["ok"] is False
+    assert "3" in result["detail"] and "2" in result["detail"]
+
+    sfm_count = db.execute(
+        "SELECT COUNT(*) FROM source_function_map WHERE source_id = ?", [source_id]
+    ).fetchone()[0]
+    alias_count = db.execute(
+        "SELECT COUNT(*) FROM alias_map WHERE source_id = ?", [source_id]
+    ).fetchone()[0]
+    assert sfm_count == 0
+    assert alias_count == 0
+
+
+@pytest.mark.integration
+def test_suggest_numeric_current_bindings_round_trip_in_position_order(db):
+    """Acceptance [3] / Principle 7: a column-bound numeric param's current_bindings round-
+    trip in saved alias_map.position order on edit-load — NOT re-sorted alphabetically.
+    Bind in reverse so saved order (col_2, col_1, col_0) differs from column-name order."""
+    source_id, col_ids = make_registered_source(db, n_columns=3)
+    fn_id, (p_id,) = _make_function(db, "fn_num_order", [("ratio", "float")])
+    reversed_cols = [col_ids[2], col_ids[1], col_ids[0]]
+    attach_function(
+        db, source_id,
+        [AttachBinding(param_id=p_id, column_ids=reversed_cols)],
+        function_id=fn_id,
+    )
+
+    res = suggest_bindings(db, source_id, function_id=fn_id)
+    p = next(p for p in res["params"] if p["param_name"] == "ratio")
+    got = [b["column_id"] for b in p["current_bindings"]]
+    assert got == [str(c) for c in reversed_cols], (
+        f"numeric current_bindings must round-trip in saved position order, got {got}"
+    )
