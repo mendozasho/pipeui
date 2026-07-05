@@ -1,0 +1,50 @@
+{
+  "feature_slug": "position-aware-validation",
+  "discovery_status": "active",
+  "stack_context": "mixed",
+  "intent": "A validation function evaluates against the working frame as of its position in the pipeline (seeing columns/rows produced by upstream built-in steps), instead of always the original source instance table (issue #8).",
+  "definition_of_done": "",
+  "mvp_scope": "",
+  "explicitly_out_of_scope": [
+    "Execution-model convergence (#41)",
+    "Joins-at-the-end pipeline ordering (#42)"
+  ],
+  "affected_components": [
+    "backend/domain/runner/run.py (orchestration, run-mode flags)",
+    "backend/domain/runner/executors.py (validation frame selection, evolve/report split, identity guard)",
+    "backend/domain/functions/builtins.py (BuiltinSpec.preserves_row_identity)",
+    "backend/domain/runner/interpret.py + backend/data/base/results.py (not_applicable status)",
+    "backend/domain/runner/sql_exec.py (SQL-validation frame materialization)",
+    "frontend (render not_applicable validation status)",
+    ".claude/CONTEXT.md"
+  ],
+  "dependencies": [
+    "resolve_frame RAW/TRANSFORMED seam (from runner-resolution-model) \u2014 natural reuse point for SQL-validation materialization"
+  ],
+  "terms_resolved": [],
+  "assumptions": [
+    "Scoping (issue #8 comment): identity classification \u2014 filter/rename/transforms preserve source-record identity; join/pivot break it.",
+    "Scoping: a validation gives the same verdict regardless of run mode (consistent-everywhere); set-mode evolves the full upstream pipeline."
+  ],
+  "resolved_decisions": [
+    {
+      "question": "Semantic model for validations after built-ins (from #8 scoping)",
+      "resolution": "Option C \u2014 identity-preserving: validations evaluate against the working frame at their position when upstream steps preserve source-record identity; after a join/pivot a validation reports a new 'not_applicable' status rather than misreporting failing_rows. Chosen over A (always position-aware, failing_rows undefined post-reshape) and B (per-step opt-in flag) in the #8 scoping session."
+    },
+    {
+      "question": "Is SQL-validation frame materialization in the MVP, or a fast-follow?",
+      "resolution": "In the MVP. 'Consistent everywhere' was the explicit goal; shipping pandas-only would silently recreate the pandas-vs-SQL inconsistency that was just rejected. So SQL validations must also evaluate against the position working frame in v1."
+    },
+    {
+      "question": "Mechanism for making SQL validations see the working frame at their position?",
+      "resolution": "Register the in-memory working frame as a transient DuckDB view per SQL validation and rewrite {source_table} to it (mechanism (a)); unregister after. Chosen over pointing at the persisted staging table (b) because staging is suppressed in validation-only runs and reflects the latest step, not the validation's position. No reliance on the instance table being a real persisted table (no index/constraint dependence), so a view suffices \u2014 no CREATE TEMP TABLE copy. Requires execute_sql_function to accept a target table/view name instead of always substituting the instance table."
+    }
+  ],
+  "open_risks_to_resolve": [
+    "NEXT QUESTION (Q3, paused): not_applicable trigger granularity \u2014 conservative latch (any validation at/after the first join/pivot is not_applicable) vs per-validation column analysis vs an opt-in 'validate reshaped frame anyway' escape hatch. Recommendation on the table: conservative latch for v1.",
+    "SQL-validation mechanism RESOLVED (registered view); remaining: execute_sql_function needs a target-table param (impl detail).",
+    "execute-vs-report decoupling correctness: every run mode evolves the frame (transforms+built-ins) but reports per run_type; staging suppressed in validation-only runs.",
+    "Performance: run_validation_across_sources now runs each source's full transform+built-in pipeline (heavier).",
+    "not_applicable result-model + frontend: how the new status flows through ValidationRunResult.to_dict and is rendered (still open)."
+  ]
+}
