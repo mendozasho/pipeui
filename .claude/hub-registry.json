@@ -3,55 +3,185 @@
   "hub_threshold": 3,
   "harvested_records": [
     "join-source-picker-modal/152",
-    "render-builtin-steps/1"
+    "render-builtin-steps/1",
+    "param-binding-output-mode/1",
+    "param-binding-output-mode/2"
   ],
   "files": {
     "src/pipeui/frontend/screen-builder.jsx": {
-      "slice_count": 2,
-      "layers": ["business_logic", "api", "ui"],
-      "features": ["join-source-picker-modal", "render-builtin-steps"],
+      "slice_count": 4,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "join-source-picker-modal",
+        "render-builtin-steps",
+        "param-binding-output-mode"
+      ],
       "missing": false
     },
     "src/pipeui/frontend/screen-builder.test.jsx": {
-      "slice_count": 2,
-      "layers": ["business_logic", "api", "ui"],
-      "features": ["join-source-picker-modal", "render-builtin-steps"],
+      "slice_count": 4,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "join-source-picker-modal",
+        "render-builtin-steps",
+        "param-binding-output-mode"
+      ],
       "missing": false
     },
     "src/pipeui/frontend/ui.jsx": {
       "slice_count": 1,
-      "layers": ["ui"],
-      "features": ["join-source-picker-modal"],
+      "layers": [
+        "ui"
+      ],
+      "features": [
+        "join-source-picker-modal"
+      ],
       "missing": false
     },
     "src/pipeui/frontend/ui.test.jsx": {
       "slice_count": 1,
-      "layers": ["ui"],
-      "features": ["join-source-picker-modal"],
+      "layers": [
+        "ui"
+      ],
+      "features": [
+        "join-source-picker-modal"
+      ],
       "missing": false
     },
     "src/pipeui/frontend/test-setup.js": {
       "slice_count": 1,
-      "layers": ["ui"],
-      "features": ["join-source-picker-modal"],
+      "layers": [
+        "ui"
+      ],
+      "features": [
+        "join-source-picker-modal"
+      ],
       "missing": false
     },
     "src/pipeui/workflow/attach.py": {
       "slice_count": 1,
-      "layers": ["business_logic", "api", "ui"],
-      "features": ["render-builtin-steps"],
+      "layers": [
+        "business_logic",
+        "api",
+        "ui"
+      ],
+      "features": [
+        "render-builtin-steps"
+      ],
       "missing": false
     },
     "tests/test_attach.py": {
-      "slice_count": 1,
-      "layers": ["business_logic", "api", "ui"],
-      "features": ["render-builtin-steps"],
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "render-builtin-steps",
+        "param-binding-output-mode"
+      ],
       "missing": false
     },
     "tests/test_api_pipelines.py": {
+      "slice_count": 3,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "render-builtin-steps",
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/classification.py": {
       "slice_count": 1,
-      "layers": ["business_logic", "api", "ui"],
-      "features": ["render-builtin-steps"],
+      "layers": [
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/suggest.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/attach.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "tests/test_functions.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/step_edit.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/middleware/pipelines.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/pipeline_read.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode"
+      ],
       "missing": false
     }
   }
