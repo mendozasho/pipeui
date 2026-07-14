@@ -27,9 +27,29 @@ function exportFilename(sourceName, cardType, ext) {
   return `${sanitiseFilename(sourceName)}_${todayStr()}_${cardType}.${ext}`;
 }
 
+// ── Fetch helper ──────────────────────────────────────────────────────────────
+// Wraps fetch so callers get a real Error carrying the HTTP status and the
+// FastAPI {detail} body instead of silently parsing an error payload (#110).
+async function fetchJson(url, opts) {
+  let r;
+  try {
+    r = await fetch(url, opts);
+  } catch {
+    throw new Error("Network error — is the server running?");
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error((body && body.detail) || `Request failed (HTTP ${r.status})`);
+  }
+  return r.json();
+}
+
 // ── Export format module ──────────────────────────────────────────────────────
+// Client-side exporters are used only for small in-memory row sets (validation
+// summaries). Transform tables download server-side via exportTransform (#110).
+// Each exporter returns an error string when nothing was exported, null on success.
 function exportCsv(rows, filenameStem) {
-  if (!rows || rows.length === 0) return;
+  if (!rows || rows.length === 0) return "Nothing to export.";
   const cols = Object.keys(rows[0]);
   const lines = [cols.join(",")];
   for (const row of rows) {
@@ -52,24 +72,68 @@ function exportCsv(rows, filenameStem) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  return null;
 }
 
 function exportXlsx(rows, filenameStem) {
-  if (!rows || rows.length === 0) return;
+  if (!rows || rows.length === 0) return "Nothing to export.";
   if (typeof XLSX === "undefined") {
-    alert("SheetJS (XLSX) not loaded. Cannot export Excel file.");
-    return;
+    return "SheetJS (XLSX) not loaded — cannot export Excel file.";
   }
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Results");
   XLSX.writeFile(wb, filenameStem + ".xlsx");
+  return null;
 }
 
 const EXPORTERS = {
   csv: exportCsv,
   xlsx: exportXlsx,
 };
+
+// ── Server-side transform download (#110) ─────────────────────────────────────
+// Transform tables can reach GB scale — they must never round-trip through JSON.
+// A bare anchor navigation lets the browser stream the file straight to disk;
+// Content-Disposition: attachment keeps the SPA in place.
+
+// xlsx sheet limit is 1,048,576 rows; one is reserved for the header.
+const XLSX_EXPORT_MAX_ROWS = 1048575;
+
+function triggerDownload(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function exportTransform(card, format, flash) {
+  if (!card.source_id) {
+    // Function/set-triggered cards span sources — there is no single transformed
+    // table to download (#110 issue 4).
+    flash("This run isn't tied to a single source — no transformed table to export.", "error");
+    return;
+  }
+  // Cheap preflight: makes the anchor navigation safe (no raw JSON error page)
+  // and catches the empty-table case with a message instead of a dead click.
+  let meta;
+  try {
+    meta = await fetchJson(`/pipelines/${card.source_id}/staging/meta`);
+  } catch (e) {
+    flash(`Export failed: ${e.message}`, "error");
+    return;
+  }
+  if (!meta.exists || meta.row_count === 0) {
+    flash("Nothing to export — no transformed data for this source.", "error");
+    return;
+  }
+  if (format === "xlsx" && meta.row_count > XLSX_EXPORT_MAX_ROWS) {
+    flash(`Too many rows for Excel (${meta.row_count.toLocaleString()}). Export as CSV instead.`, "error");
+    return;
+  }
+  triggerDownload(`/pipelines/${card.source_id}/export/transformed/file?format=${format}`);
+}
 
 // ── Card-type derivation (#193) ───────────────────────────────────────────────
 // The card type is driven by the RunResult's function_type, so a mixed
@@ -345,14 +409,15 @@ function TransformExpand({ card }) {
   useEffect(() => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
+    if (!card.source_id) {
+      // Function/set-triggered cards span sources — no single staging table (#110).
+      setError("This run isn't tied to a single source.");
+      return;
+    }
     setLoading(true);
-    fetch(`/pipelines/${card.source_id}/staging`)
-      .then(r => {
-        if (!r.ok) return r.json().then(e => Promise.reject(e));
-        return r.json();
-      })
+    fetchJson(`/pipelines/${card.source_id}/staging`)
       .then(data => setStagingData(data))
-      .catch(err => setError(err?.detail || "Failed to load staging data"))
+      .catch(err => setError(err.message || "Failed to load staging data"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -632,10 +697,9 @@ function ResultMetaDrawerBody({ card }) {
 }
 
 // ── Single result card ────────────────────────────────────────────────────────
-function ResultCard({ card, selected, onToggleSelect }) {
+function ResultCard({ card, selected, onToggleSelect, flash }) {
   const [expanded, setExpanded] = useState(false);
   const [showExportPicker, setShowExportPicker] = useState(false);
-  const [stagingRowsCache, setStagingRowsCache] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const ts = card.run_at ? timeAgo(card.run_at) : "";
@@ -650,23 +714,11 @@ function ResultCard({ card, selected, onToggleSelect }) {
     if (resolvedCardType === "validation") {
       const label = sanitiseFilename(card.function_name || card.set_name || card.source_name);
       const exportRows = collectValidationResultRows(card);
-      if (exportRows.length > 0) {
-        EXPORTERS[format](exportRows, `${label}_${todayStr()}_validation`);
-      }
-      // No rows — export is disabled; button should not reach here
+      const err = EXPORTERS[format](exportRows, `${label}_${todayStr()}_validation`);
+      if (err && flash) flash(err, "error");
     } else {
-      // Transform: fetch staging if not cached
-      if (stagingRowsCache) {
-        EXPORTERS[format](stagingRowsCache, exportFilename(card.source_name, resolvedCardType, "").slice(0, -1));
-      } else {
-        fetch(`/pipelines/${card.source_id}/staging`)
-          .then(r => r.json())
-          .then(data => {
-            setStagingRowsCache(data.rows);
-            EXPORTERS[format](data.rows, exportFilename(card.source_name, resolvedCardType, "").slice(0, -1));
-          })
-          .catch(() => alert("Failed to fetch staging data for export."));
-      }
+      // Transform: server-side file download — never fetch the rows (#110).
+      exportTransform(card, format, flash || (() => {}));
     }
   }
 
@@ -680,7 +732,7 @@ function ResultCard({ card, selected, onToggleSelect }) {
     ? (card.sources || []).length > 0
     : resolvedCardType === "validation"
       ? collectValidationResultRows(card).length > 0
-      : true;
+      : !!card.source_id;
   const exportDisabled = !hasExportRows;
   const exportLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
   const exportStem = resolvedCardType === "validation"
@@ -842,24 +894,24 @@ function ResultCard({ card, selected, onToggleSelect }) {
 }
 
 // ── Export Selected bar ───────────────────────────────────────────────────────
-function ExportSelectedBar({ selectedIds, cards, onClear }) {
+function ExportSelectedBar({ selectedIds, cards, onClear, flash }) {
   const [format, setFormat] = useState("csv");
 
   function handleExport() {
     const selectedCards = cards.filter(c => selectedIds.has(c.run_id));
     for (const card of selectedCards) {
-      if (card.card_type === "validation") {
+      // Card type derived per RunResult (#193) — matches the single-card path.
+      if (cardTypeForResult(card) === "validation") {
         const bulkLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
         // Same per-result summary as the single-card export (#253): every validation
         // listed, passes and crashes alike.
         const rows = collectValidationResultRows(card);
-        if (rows.length > 0) EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
+        const err = EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
+        if (err && flash) flash(`${bulkLabel}: ${err}`, "error");
       } else {
-        const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${card.card_type}`;
-        fetch(`/pipelines/${card.source_id}/staging`)
-          .then(r => r.json())
-          .then(data => EXPORTERS[format](data.rows, stem))
-          .catch(() => alert(`Failed to fetch staging data for ${card.source_name}.`));
+        // Server-side file download per card (#110). Chrome may prompt once to
+        // allow multiple downloads when several cards are selected — acceptable.
+        exportTransform(card, format, flash || (() => {}));
       }
     }
   }
@@ -990,6 +1042,7 @@ function ScreenResults({ flash, resultCards, resultsContext, onNavigate }) {
           selectedIds={selectedIds}
           cards={resultCards}
           onClear={() => setSelectedIds(new Set())}
+          flash={flash}
         />
       )}
 
@@ -1011,6 +1064,7 @@ function ScreenResults({ flash, resultCards, resultsContext, onNavigate }) {
                   highlighted={highlighted}
                   selected={selectedIds.has(card.run_id)}
                   onToggleSelect={handleToggleSelect}
+                  flash={flash}
                 />
               );
             })}
@@ -1026,4 +1080,8 @@ window.__ScreenResults__ = ScreenResults;
 // Named exports for the dev-time vitest harness only. In the browser the file is
 // loaded as a Babel "module", so these export statements are valid there too; the
 // app consumes the screen via the window.__ScreenResults__ global above.
-export { ScreenResults, ResultCard, SummaryLine, TypeTag, cardTypeForResult, collectValidationResultRows };
+export {
+  ScreenResults, ResultCard, SummaryLine, TypeTag, cardTypeForResult,
+  collectValidationResultRows, fetchJson, exportCsv, exportXlsx,
+  exportTransform, ExportSelectedBar, XLSX_EXPORT_MAX_ROWS,
+};
