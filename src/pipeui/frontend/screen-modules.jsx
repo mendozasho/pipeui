@@ -9,6 +9,70 @@ function fnKind(fn) {
 }
 
 // ---------------------------------------------------------------------------
+// Result-card builders (#110) — pure so they are unit-testable. Both return
+// null when the run touched no sources: a run with nothing attached must flash
+// an explanation, never commit a 0/0 "success" card.
+// ---------------------------------------------------------------------------
+
+function buildSetRunCard(data) {
+  if (!data || !data.sources || data.sources.length === 0) return null;
+  let rowsPassed = 0, rowsFailed = 0;
+  for (const src of data.sources) {
+    for (const step of (src.steps || [])) {
+      rowsPassed += step.rows_passed || 0;
+      rowsFailed += step.rows_failed || 0;
+    }
+  }
+  const total = rowsPassed + rowsFailed;
+  return {
+    run_id: crypto.randomUUID(),
+    card_type: "validation",
+    trigger: "function",
+    source_id: null,
+    source_name: null,
+    function_id: null,
+    function_name: null,
+    set_id: data.set_id,
+    set_name: data.set_name,
+    run_at: new Date().toISOString(),
+    summary: {
+      rows_passed: rowsPassed,
+      rows_failed: rowsFailed,
+      pass_rate: total > 0 ? rowsPassed / total : null,
+    },
+    sources: data.sources,
+    steps: [],
+  };
+}
+
+function buildFunctionRunCard(data) {
+  if (!data || !data.sources || data.sources.length === 0) return null;
+  let rowsPassed = 0, rowsFailed = 0;
+  for (const src of data.sources) {
+    rowsPassed += src.rows_passed || 0;
+    rowsFailed += src.rows_failed || 0;
+  }
+  const total = rowsPassed + rowsFailed;
+  return {
+    run_id: crypto.randomUUID(),
+    card_type: "validation",
+    trigger: "function",
+    source_id: null,
+    source_name: null,
+    function_id: data.function_id,
+    function_name: data.function_name,
+    run_at: new Date().toISOString(),
+    summary: {
+      rows_passed: rowsPassed,
+      rows_failed: rowsFailed,
+      pass_rate: total > 0 ? rowsPassed / total : null,
+    },
+    sources: data.sources,
+    steps: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // FunctionDrawer — detail drawer following the same pattern as SourceDrawer
 // ---------------------------------------------------------------------------
 
@@ -302,31 +366,12 @@ function SetsTab({ flash, allFunctions, addResultCard, onNavigate }) {
           flash && flash(data?.detail || "Run failed", "error");
           return;
         }
-        // Aggregate summary across all sources and steps
-        let rowsPassed = 0, rowsFailed = 0;
-        for (const src of (data.sources || [])) {
-          for (const step of (src.steps || [])) {
-            rowsPassed += step.rows_passed || 0;
-            rowsFailed += step.rows_failed || 0;
-          }
+        const card = buildSetRunCard(data);
+        if (!card) {
+          // Empty run — surface it instead of committing a 0/0 "success" card (#110).
+          flash && flash(`Set "${s.set_name}" is not attached to any source.`, "error");
+          return;
         }
-        const total = rowsPassed + rowsFailed;
-        const passRate = total > 0 ? rowsPassed / total : null;
-        const card = {
-          run_id: crypto.randomUUID(),
-          card_type: "validation",
-          trigger: "function",
-          source_id: null,
-          source_name: null,
-          function_id: null,
-          function_name: null,
-          set_id: data.set_id,
-          set_name: data.set_name,
-          run_at: new Date().toISOString(),
-          summary: { rows_passed: rowsPassed, rows_failed: rowsFailed, pass_rate: passRate },
-          sources: data.sources || [],
-          steps: [],
-        };
         addResultCard && addResultCard(card);
         onNavigate && onNavigate("results", {});
       })
@@ -744,27 +789,15 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
           flash && flash(data?.detail || "Run failed", "error");
           return;
         }
-        // Aggregate summary across all sources
-        let rowsPassed = 0, rowsFailed = 0;
-        for (const src of (data.sources || [])) {
-          rowsPassed += src.rows_passed || 0;
-          rowsFailed += src.rows_failed || 0;
+        const card = buildFunctionRunCard(data);
+        if (!card) {
+          // Empty run — surface it instead of committing a 0/0 "success" card (#110).
+          flash && flash(
+            `"${fn.function_name}" is not attached to any source — attach it in the Builder first.`,
+            "error"
+          );
+          return;
         }
-        const total = rowsPassed + rowsFailed;
-        const passRate = total > 0 ? rowsPassed / total : null;
-        const card = {
-          run_id: crypto.randomUUID(),
-          card_type: "validation",
-          trigger: "function",
-          source_id: null,
-          source_name: null,
-          function_id: data.function_id,
-          function_name: data.function_name,
-          run_at: new Date().toISOString(),
-          summary: { rows_passed: rowsPassed, rows_failed: rowsFailed, pass_rate: passRate },
-          sources: data.sources || [],
-          steps: [],
-        };
         addResultCard && addResultCard(card);
         onNavigate && onNavigate("results", {});
       })
@@ -1006,3 +1039,7 @@ function ScreenModules({ flash, addResultCard, onNavigate }) {
 }
 
 window.__ScreenModules__ = ScreenModules;
+
+// Named exports for the dev-time vitest harness only (same pattern as
+// screen-results.jsx); the app consumes the screen via the global above.
+export { ScreenModules, buildSetRunCard, buildFunctionRunCard };

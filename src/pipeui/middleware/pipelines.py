@@ -11,20 +11,32 @@ or sql_user_table/ directly.
 """
 from __future__ import annotations
 
+import os
+import re
+import tempfile
 import uuid
+from datetime import date
 from typing import Optional
 
 import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from pipeui.middleware.deps import get_conn
 from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, detach_function
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.functions.suggest import suggest_bindings
 from pipeui.backend.domain.functions.step_edit import patch_pipeline_step
-from pipeui.backend.domain.sources.read import source_exists
-from pipeui.backend.domain.runner.export import build_results_report, build_transformed_report
+from pipeui.backend.domain.sources.read import get_source_summary, source_exists
+from pipeui.backend.domain.runner.export import (
+    build_results_report,
+    build_transformed_report,
+    get_staging_meta,
+    write_transformed_csv,
+    write_transformed_xlsx,
+)
 from pipeui.backend.domain.runner.run import get_staging_rows, run_pipeline, run_set_across_sources
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
@@ -346,6 +358,101 @@ def get_staging_rows_route(
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
     return get_staging_rows(conn, sid)
+
+
+@router.get("/{source_id}/staging/meta")
+def get_staging_meta_route(
+    source_id: str,
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Return metadata about the source's latest staging table (#110).
+
+    {"exists": bool, "row_count": int, "columns": [...]} — a cheap preflight for
+    the file-download flow; never materializes rows.
+    404 if source_id is not found in source_registry.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    if not source_exists(conn, sid):
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    return get_staging_meta(conn, sid)
+
+
+# Domain writers + media types per download format (#110).
+_FILE_EXPORT_FORMATS = {
+    "csv": (write_transformed_csv, "text/csv"),
+    "xlsx": (
+        write_transformed_xlsx,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+}
+
+
+def _sanitise_filename(s: str) -> str:
+    # Mirrors the frontend sanitiseFilename so download names match the old UX.
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", s or "")
+
+
+@router.get("/{source_id}/export/transformed/file")
+def download_transformed_file(
+    source_id: str,
+    format: str = Query(default="csv"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Download the source's transformed table as a file (#110).
+
+    ?format=csv|xlsx — the table is written server-side (DuckDB COPY TO for csv,
+    streaming openpyxl for xlsx) and served with Content-Disposition: attachment,
+    so large tables never round-trip through JSON in the browser.
+
+    404 when source_id is unknown or no transform has run yet.
+    422 on invalid source_id, unknown format, or a table too large for xlsx.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    if format not in _FILE_EXPORT_FORMATS:
+        raise HTTPException(status_code=422, detail=f"Unsupported export format: {format!r}")
+    writer, media_type = _FILE_EXPORT_FORMATS[format]
+
+    summary = get_source_summary(conn, sid)
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    fd, tmp_path = tempfile.mkstemp(suffix=f".{format}", prefix="pipeui_export_")
+    os.close(fd)
+    try:
+        n_rows = writer(conn, sid, tmp_path)
+    except ValueError as exc:  # xlsx over the sheet row limit
+        os.remove(tmp_path)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        os.remove(tmp_path)
+        raise
+
+    if n_rows is None:
+        os.remove(tmp_path)
+        raise HTTPException(
+            status_code=404,
+            detail=f"No transformed data available for source {source_id!r}",
+        )
+
+    filename = (
+        f"{_sanitise_filename(summary['source_name'])}_"
+        f"{date.today().isoformat()}_transform.{format}"
+    )
+    return FileResponse(
+        tmp_path,
+        media_type=media_type,
+        filename=filename,
+        background=BackgroundTask(os.remove, tmp_path),
+    )
 
 
 @router.get("/{source_id}/export/results")

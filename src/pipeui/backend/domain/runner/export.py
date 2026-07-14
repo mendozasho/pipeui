@@ -18,6 +18,18 @@ Two consumption exports for the Results screen (PRD: Results surfacing — three
       staging table, so this returns an empty payload rather than raising — that is the
       #193 staging-export-failure fix for a mixed validation/transform set.
 
+File-download exports (#110 — large tables must never round-trip through JSON):
+
+  get_staging_meta(conn, source_id) -> {"exists", "row_count", "columns"}
+      Cheap preflight for the download flow — no row materialization.
+
+  write_transformed_csv(conn, source_id, dest_path) -> row count | None
+      DuckDB-native COPY TO; None when no staging table exists.
+
+  write_transformed_xlsx(conn, source_id, dest_path) -> row count | None
+      openpyxl write-only streaming over Arrow batches; raises ValueError when the
+      table exceeds the xlsx sheet row limit. None when no staging table exists.
+
 §14: this is a workflow-layer module; api/ route modules call it, never schema/ directly.
 The RunResult label normalization (results.normalize_label) is reused read-only — this
 module never modifies results.py.
@@ -30,7 +42,11 @@ from typing import Any
 import duckdb
 
 from pipeui.backend.data.base.results import normalize_label
+from pipeui.backend.data.runner.staging import latest_staging
 from pipeui.backend.domain.runner.run import get_staging_rows
+
+# xlsx sheet limit is 1,048,576 rows; one is reserved for the header.
+XLSX_MAX_DATA_ROWS = 1_048_575
 
 
 # Columns surfaced in the transposed results report, in order. Every RunResult row
@@ -92,3 +108,97 @@ def build_transformed_report(
     exports cleanly (#193).
     """
     return get_staging_rows(conn, source_id)
+
+
+def get_staging_meta(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Return {"exists", "row_count", "columns"} for the source's latest staging table.
+
+    Never materializes rows — one count(*) plus a DESCRIBE. {"exists": False,
+    "row_count": 0, "columns": []} when no transform has run yet.
+    """
+    staged = latest_staging(conn, source_id)
+    if staged is None:
+        return {"exists": False, "row_count": 0, "columns": []}
+    tname, _ts = staged
+    (row_count,) = conn.execute(f'SELECT count(*) FROM "{tname}"').fetchone()
+    columns = [r[0] for r in conn.execute(f'DESCRIBE "{tname}"').fetchall()]
+    return {"exists": True, "row_count": int(row_count), "columns": columns}
+
+
+def write_transformed_csv(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    dest_path: str,
+) -> int | None:
+    """Write the latest staging table to dest_path as CSV; return the row count.
+
+    Returns None when no staging table exists (mirrors the #193 empty-payload
+    contract). NULL/NaN cells become empty CSV fields natively — no JSON
+    round-trip, no Python-side row handling.
+    """
+    staged = latest_staging(conn, source_id)
+    if staged is None:
+        return None
+    tname, _ts = staged
+    # COPY TO cannot take a bound parameter for the path; the staging table name
+    # is repo-generated (staging_{hex}_{ts}) so only the path needs escaping.
+    escaped = dest_path.replace("'", "''")
+    row = conn.execute(
+        f'COPY (SELECT * FROM "{tname}") TO \'{escaped}\' (FORMAT CSV, HEADER)'
+    ).fetchone()
+    return int(row[0])
+
+
+def write_transformed_xlsx(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    dest_path: str,
+) -> int | None:
+    """Write the latest staging table to dest_path as xlsx; return the row count.
+
+    Returns None when no staging table exists. Raises ValueError before writing
+    anything when the table exceeds XLSX_MAX_DATA_ROWS — the format cannot hold
+    it and the caller should steer the user to CSV. Streams Arrow record batches
+    through an openpyxl write-only workbook so the full table is never
+    materialized in memory.
+    """
+    staged = latest_staging(conn, source_id)
+    if staged is None:
+        return None
+    tname, _ts = staged
+
+    (row_count,) = conn.execute(f'SELECT count(*) FROM "{tname}"').fetchone()
+    row_count = int(row_count)
+    if row_count > XLSX_MAX_DATA_ROWS:
+        raise ValueError(
+            f"Table has {row_count:,} rows — the xlsx format holds at most "
+            f"{XLSX_MAX_DATA_ROWS:,} data rows. Export as CSV instead."
+        )
+
+    from openpyxl import Workbook
+
+    columns = [r[0] for r in conn.execute(f'DESCRIBE "{tname}"').fetchall()]
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Transformed")
+    ws.append(columns)
+
+    reader = conn.execute(f'SELECT * FROM "{tname}"').to_arrow_reader(10_000)
+    for batch in reader:
+        for row in batch.to_pylist():
+            ws.append([_xlsx_safe(row[c]) for c in columns])
+    wb.save(dest_path)
+    return row_count
+
+
+def _xlsx_safe(value: Any) -> Any:
+    """Coerce a cell value to a type openpyxl accepts natively."""
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (list, dict)):
+        return str(value)
+    if isinstance(value, float) and value != value:  # NaN is not representable in xlsx
+        return None
+    return value
