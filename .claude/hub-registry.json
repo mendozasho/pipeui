@@ -5,34 +5,59 @@
     "join-source-picker-modal/152",
     "render-builtin-steps/1",
     "param-binding-output-mode/1",
-    "param-binding-output-mode/2"
+    "param-binding-output-mode/2",
+    "runner-execution/1",
+    "runner-execution/2",
+    "runner-execution/3",
+    "runner-execution/4",
+    "runner-execution/4b",
+    "runner-execution/4c",
+    "runner-execution/4d",
+    "runner-execution/5",
+    "runner-execution/6",
+    "runner-resolution-model/1",
+    "runner-resolution-model/2",
+    "runner-resolution-model/3",
+    "runner-resolution-model/4",
+    "runner-resolution-model/5",
+    "runner-execution/anno",
+    "runner-execution/nan-export",
+    "runner-execution/outcfg",
+    "runner-execution/scalar-params",
+    "runner-execution/setiter"
   ],
   "files": {
     "src/pipeui/frontend/screen-builder.jsx": {
-      "slice_count": 4,
+      "slice_count": 8,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "join-source-picker-modal",
         "render-builtin-steps",
-        "param-binding-output-mode"
+        "param-binding-output-mode",
+        "runner-execution",
+        "runner-resolution-model"
       ],
       "missing": false
     },
     "src/pipeui/frontend/screen-builder.test.jsx": {
-      "slice_count": 4,
+      "slice_count": 8,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "join-source-picker-modal",
         "render-builtin-steps",
-        "param-binding-output-mode"
+        "param-binding-output-mode",
+        "runner-execution",
+        "runner-resolution-model"
       ],
       "missing": false
     },
@@ -57,28 +82,6 @@
       "missing": false
     },
     "src/pipeui/frontend/test-setup.js": {
-      "slice_count": 1,
-      "layers": [
-        "ui"
-      ],
-      "features": [
-        "join-source-picker-modal"
-      ],
-      "missing": false
-    },
-    "src/pipeui/workflow/attach.py": {
-      "slice_count": 1,
-      "layers": [
-        "business_logic",
-        "api",
-        "ui"
-      ],
-      "features": [
-        "render-builtin-steps"
-      ],
-      "missing": false
-    },
-    "tests/test_attach.py": {
       "slice_count": 2,
       "layers": [
         "api",
@@ -86,21 +89,53 @@
         "ui"
       ],
       "features": [
-        "render-builtin-steps",
-        "param-binding-output-mode"
+        "join-source-picker-modal",
+        "runner-execution"
       ],
       "missing": false
     },
-    "tests/test_api_pipelines.py": {
-      "slice_count": 3,
+    "src/pipeui/workflow/attach.py": {
+      "slice_count": 4,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "render-builtin-steps",
-        "param-binding-output-mode"
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "tests/test_attach.py": {
+      "slice_count": 5,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "render-builtin-steps",
+        "param-binding-output-mode",
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_api_pipelines.py": {
+      "slice_count": 8,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "render-builtin-steps",
+        "param-binding-output-mode",
+        "runner-execution",
+        "runner-resolution-model"
       ],
       "missing": false
     },
@@ -138,13 +173,14 @@
       "missing": false
     },
     "tests/test_functions.py": {
-      "slice_count": 1,
+      "slice_count": 2,
       "layers": [
         "business_logic",
         "ui"
       ],
       "features": [
-        "param-binding-output-mode"
+        "param-binding-output-mode",
+        "runner-execution"
       ],
       "missing": false
     },
@@ -183,6 +219,543 @@
         "param-binding-output-mode"
       ],
       "missing": false
+    },
+    "src/pipeui/results.py": {
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/workflow/run.py": {
+      "slice_count": 5,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/frontend/screen-results.jsx": {
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "src/pipeui/frontend/screen-data.jsx": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_results.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_run_workflow.py": {
+      "slice_count": 5,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": false
+    },
+    "tests/test_api_pipelines_run.py": {
+      "slice_count": 4,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": false
+    },
+    "tests/test_api_validations.py": {
+      "slice_count": 4,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": false
+    },
+    "src/pipeui/frontend/screen-results.test.jsx": {
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "`src/pipeui/schema/queries.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`src/pipeui/workflow/attach.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`src/pipeui/workflow/run.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`src/pipeui/frontend/screen-builder.jsx`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_schema.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_attach.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_api_pipelines.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_run_workflow.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`src/pipeui/frontend/screen-builder.test.jsx`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_api_pipelines_run.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_api_run_all.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_api_run_set.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_api_validations.py`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`.claude/runs/runner-execution/2.md`": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "src/pipeui/workflow/bundles.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "tests/test_bundle_pairing.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "src/pipeui/schema/queries.py": {
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "src/pipeui/api/pipelines.py": {
+      "slice_count": 3,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "tests/test_schema.py": {
+      "slice_count": 3,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_api_run_set.py": {
+      "slice_count": 1,
+      "layers": [],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_api_run_all.py": {
+      "slice_count": 1,
+      "layers": [],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "tests/test_ingestion.py": {
+      "slice_count": 1,
+      "layers": [],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": false
+    },
+    "src/pipeui/workflow/export.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "src/pipeui/api/validations.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "tests/test_api_staging.py": {
+      "slice_count": 2,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model"
+      ],
+      "missing": false
+    },
+    "`.claude/design.md`": {
+      "slice_count": 1,
+      "layers": [
+        "docs"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`.claude/CLAUDE_REFERENCE.md`": {
+      "slice_count": 1,
+      "layers": [
+        "docs"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`tests/test_docs_runner_execution.py`": {
+      "slice_count": 1,
+      "layers": [
+        "docs"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "`.claude/runs/runner-execution/6.md`": {
+      "slice_count": 1,
+      "layers": [
+        "docs"
+      ],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
+    },
+    "src/pipeui/workflow/resolve.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/workflow/builtins.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/api/sources.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "tests/test_builtins.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic",
+        "ui"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": false
+    },
+    "src/pipeui/workflow/context.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/workflow/executors.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic"
+      ],
+      "features": [
+        "runner-resolution-model"
+      ],
+      "missing": true
+    },
+    "src/pipeui/db.py": {
+      "slice_count": 1,
+      "layers": [],
+      "features": [
+        "runner-execution"
+      ],
+      "missing": true
     }
   }
 }
