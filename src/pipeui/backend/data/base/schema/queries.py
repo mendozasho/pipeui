@@ -155,6 +155,9 @@ INSERT OR IGNORE INTO builtin_registry (builtin_id, builtin_type, display_name, 
    '{"column": "string", "operator": "string", "value": "any"}'),
   ('a1b2c3d4-0001-0001-0001-000000000004'::UUID, 'rename', 'Rename',
    'Rename selected columns in the report output. Runs last in the pipeline; one per report. Output-only — does not change the source schema.',
-   '{"renames": "object"}');
+   '{"renames": "object"}'),
+  ('a1b2c3d4-0001-0001-0001-000000000005'::UUID, 'date_range', 'Date Range',
+   'Keep only rows whose date columns fall in calendar ranges. Conditions in a group all hold (AND); groups are alternatives (OR). Bounds are inclusive; either may be left open. Runs at the end of the pipeline, before Rename; one per report.',
+   '{"groups": "array"}');
 """
 """Creates the base application tables on initialization."""

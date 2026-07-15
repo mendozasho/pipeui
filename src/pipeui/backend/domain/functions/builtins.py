@@ -153,6 +153,11 @@ def _validate_rename_config(cfg: dict) -> str | None:
     return None
 
 
+def _validate_date_range_config(cfg: dict) -> str | None:
+    """Attach-time shape check for a date_range built-in (PRD date-range-filter)."""
+    return None
+
+
 # ---------------------------------------------------------------------------
 # attach / detach / patch
 # ---------------------------------------------------------------------------
@@ -585,6 +590,15 @@ def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict
     return df.rename(columns=renames)
 
 
+def _execute_date_range(
+    conn: duckdb.DuckDBPyConnection,
+    df: pd.DataFrame,
+    cfg: dict,
+) -> pd.DataFrame:
+    """Execute a date_range built-in (PRD date-range-filter)."""
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -645,6 +659,15 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
         # last in the pinned tail; rank 1 belongs to date_range (runs before rename
         # because its conditions reference registered column names that rename relabels).
         pinned_tail=2,
+    ),
+    "date_range": BuiltinSpec(
+        validate=_validate_date_range_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_date_range(conn, df, cfg), None),
+        singleton=True,
+        # PRD date-range-filter: the date filter always applies to the final table
+        # (after every positional step) but before rename, whose relabelling would
+        # invalidate the registered column names the conditions reference.
+        pinned_tail=1,
     ),
 }
 

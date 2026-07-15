@@ -378,7 +378,7 @@ def test_unified_pipeline_unknown_source(db):
 def test_builtin_registry_seeded_with_builtin_rows(db):
     rows = db.execute("SELECT builtin_type FROM builtin_registry ORDER BY builtin_type").fetchall()
     types = [r[0] for r in rows]
-    assert set(types) == {"join", "pivot", "filter", "rename"}
+    assert set(types) == {"join", "pivot", "filter", "rename", "date_range"}
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +390,32 @@ def test_create_schema_idempotent_no_duplicates(db):
     create_schema(db)
     create_schema(db)
     count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
-    assert count == 4  # join, pivot, filter, rename
+    assert count == 5  # join, pivot, filter, rename, date_range
+
+
+# ---------------------------------------------------------------------------
+# B17 (#120) — date_range catalog row migrates onto a pre-feature DB idempotently
+# ---------------------------------------------------------------------------
+
+def test_date_range_seed_migrates_pre_feature_db_idempotently(db):
+    """#117 criterion 1: a DB created before the date_range feature (builtin_registry
+    holds only the original 4 rows) gains the date_range catalog row when
+    create_schema runs again (app startup path — the same INSERT OR IGNORE seed
+    mechanism the rename builtin used), and re-running the migration does not
+    duplicate it (count grows by exactly one)."""
+    # Simulate a pre-feature DB: full schema, but no date_range catalog row.
+    db.execute("DELETE FROM builtin_registry WHERE builtin_type = 'date_range'")
+    pre_count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
+    assert pre_count == 4  # the pre-feature seed set
+
+    create_schema(db)  # the migration: startup re-runs the idempotent seed
+    rows = db.execute("SELECT builtin_type FROM builtin_registry").fetchall()
+    assert ("date_range",) in rows
+    assert len(rows) == pre_count + 1  # grew by exactly one
+
+    create_schema(db)  # idempotent: a second migration pass adds nothing
+    count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
+    assert count == pre_count + 1
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +433,9 @@ def test_get_builtins_endpoint(db):
     resp = client.get("/builtins")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 4
+    assert len(data) == 5
     types = {row["builtin_type"] for row in data}
-    assert types == {"join", "pivot", "filter", "rename"}
+    assert types == {"join", "pivot", "filter", "rename", "date_range"}
     for row in data:
         assert "builtin_id" in row
         assert "display_name" in row
@@ -719,7 +744,7 @@ def test_builtin_dispatch_is_registry_driven(db):
     import pipeui.backend.domain.functions.builtins as b
 
     # The shipped registry holds exactly the built-in types, each a BuiltinSpec.
-    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter", "rename"}
+    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter", "rename", "date_range"}
     assert all(isinstance(s, b.BuiltinSpec) for s in b.BUILTIN_EXECUTORS.values())
 
     source_id, _ = _make_source(db, "ocp")
@@ -891,6 +916,33 @@ def test_pinned_tail_ordering_comes_from_spec_metadata_only(db):
     finally:
         b.BUILTIN_EXECUTORS.clear()
         b.BUILTIN_EXECUTORS.update(saved)
+
+
+def test_date_range_sorts_in_pinned_tail_before_rename(db):
+    """#117 criterion 7 (#120) — date_range sorts in the pinned tail: after every
+    positional step and before rename, at all three ordering consumers (pipeline
+    read, unified pipeline, run execution order), via slice 1's spec-metadata
+    mechanism. Attach order gives rename the LOWEST position and filter the
+    HIGHEST (rename 0, date_range 1, filter 2); stored positions would order them
+    rename, date_range, filter — the pinned tail must reorder to
+    filter, date_range, rename."""
+    source_id, _ = _make_source(db, "drtail")
+    _make_instance_table(db, source_id, pd.DataFrame({
+        "a": [1, 2],
+        "b": [3, 4],
+        "d": [datetime.date(2025, 1, 15), datetime.date(2025, 6, 1)],
+    }))
+
+    assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+    assert attach_builtin(db, source_id, "date_range", {
+        "groups": [{"conditions": [{"column": "d", "start": "2025-01-01", "end": None}]}]
+    })["ok"]
+    assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+
+    read_order, unified_order, run_order = _builtin_order_at_all_three_consumers(db, source_id)
+    assert read_order == ["filter", "date_range", "rename"], read_order
+    assert unified_order == ["filter", "date_range", "rename"], unified_order
+    assert run_order == ["filter", "date_range", "rename"], run_order
 
 
 def test_second_pinned_type_sorts_between_positional_and_rename(db):
