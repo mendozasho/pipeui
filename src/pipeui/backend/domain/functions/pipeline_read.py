@@ -18,6 +18,7 @@ import uuid
 import duckdb
 
 from pipeui.backend.data.runner.step_loader import get_builtin_steps
+from pipeui.backend.domain.functions.builtins import pinned_tail_rank
 
 
 def get_pipeline(
@@ -230,11 +231,13 @@ def get_pipeline(
         })
 
     # Order the unified list by position; tie-break on set_name/builtin_type for
-    # determinism (mirrors get_unified_pipeline's sort key). #40: a rename built-in is
-    # pinned last (it runs on the final output), so it sorts after everything else on
-    # the canvas regardless of position — matching the execution order in run.py.
+    # determinism (mirrors get_unified_pipeline's sort key). Pinned-tail builtins
+    # (e.g. rename, #40) sort after all positional steps on the canvas regardless of
+    # position, in the tail order the BuiltinSpec registry defines (#83/#116 —
+    # pinned_tail_rank is the single ordering authority) — matching the execution
+    # order in run.py.
     steps.sort(key=lambda s: (
-        1 if s.get("builtin_type") == "rename" else 0,
+        pinned_tail_rank(s.get("builtin_type")),
         s["position"],
         s.get("set_name") or s.get("builtin_type") or "",
     ))
