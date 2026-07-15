@@ -17,6 +17,9 @@ Guarantees:
   B13. GET /builtins returns all rows with required fields.
   B14. source_builtin_map accepts builtin_type = "filter" without error.
   B15. rename built-in: validate/execute, singleton-per-source, pinned last (#40).
+  B16. Pinned-tail ordering is spec-metadata-driven (#83/#116): defined once as
+       BuiltinSpec.pinned_tail, consumed by all three ordering sites (pipeline read,
+       unified pipeline, run execution order); a second pinned type is a registration.
 """
 from __future__ import annotations
 
@@ -818,3 +821,108 @@ def test_rename_pinned_last_in_execution(db):
     out = run_pipeline(db, source_id, "all")
     order = [s["builtin_type"] for s in out["steps"] if s.get("step_type") == "builtin"]
     assert order == ["filter", "rename"], order  # rename runs last despite lower position
+
+
+# ---------------------------------------------------------------------------
+# B16 — pinned-tail ordering is spec-metadata-driven (#83 / #116)
+# ---------------------------------------------------------------------------
+
+def _builtin_order_at_all_three_consumers(conn, source_id):
+    """Return the builtin_type order seen by each ordering consumer:
+    (pipeline read payload, unified pipeline payload, run execution order)."""
+    read_order = [
+        s["builtin_type"]
+        for s in get_pipeline(conn, source_id)["steps"]
+        if s.get("step_type") == "builtin"
+    ]
+    unified_order = [
+        s["builtin_type"]
+        for s in get_unified_pipeline(conn, source_id)["steps"]
+        if s.get("step_type") == "builtin"
+    ]
+    run_order = [
+        s["builtin_type"]
+        for s in run_pipeline(conn, source_id, "all")["steps"]
+        if s.get("step_type") == "builtin"
+    ]
+    return read_order, unified_order, run_order
+
+
+def test_rename_pinned_last_in_unified_pipeline(db):
+    """Regression lock (#116 criterion 1) — the third ordering consumer: a rename
+    built-in sorts last in the get_unified_pipeline payload despite a lower stored
+    position. Locks today's behavior through the pinned-tail rewrite (the
+    get_pipeline and run_pipeline consumers are locked by the existing #40 tests)."""
+    source_id, _ = _make_source(db, "runi")
+    # rename attached FIRST (position 0), filter SECOND (position 1).
+    assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+    assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+    pipe = get_unified_pipeline(db, source_id)
+    builtin_types = [s["builtin_type"] for s in pipe["steps"] if s.get("step_type") == "builtin"]
+    assert builtin_types == ["filter", "rename"], builtin_types
+
+
+def test_pinned_tail_ordering_comes_from_spec_metadata_only(db):
+    """#116 criterion 2 — the pinned tail is defined in exactly one place: the
+    BuiltinSpec registry metadata. Overriding rename's registration with a spec that
+    carries NO pinned metadata must make rename sort purely by stored position at
+    ALL THREE consumers. Fails if any ordering site keys on the literal 'rename'."""
+    import pipeui.backend.domain.functions.builtins as b
+
+    source_id, _ = _make_source(db, "unpin")
+    _make_instance_table(db, source_id, pd.DataFrame({"a": [1, 2], "b": [3, 4]}))
+    # rename at position 0, filter at position 1.
+    assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+    assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+
+    saved = dict(b.BUILTIN_EXECUTORS)
+    # Same validate/execute, but WITHOUT pinned metadata — an unpinned rename.
+    b.BUILTIN_EXECUTORS["rename"] = b.BuiltinSpec(
+        validate=saved["rename"].validate,
+        execute=saved["rename"].execute,
+        singleton=True,
+    )
+    try:
+        read_order, unified_order, run_order = _builtin_order_at_all_three_consumers(db, source_id)
+        # Unpinned via the spec -> plain position order everywhere.
+        assert read_order == ["rename", "filter"], read_order
+        assert unified_order == ["rename", "filter"], unified_order
+        assert run_order == ["rename", "filter"], run_order
+    finally:
+        b.BUILTIN_EXECUTORS.clear()
+        b.BUILTIN_EXECUTORS.update(saved)
+
+
+def test_second_pinned_type_sorts_between_positional_and_rename(db):
+    """#116 criterion 3 — a second pinned type is a REGISTRATION, not a fourth sort
+    site: a test double with pinned_tail=1 (rename carries pinned_tail=2) sorts after
+    every positional step and before rename at all three consumers, with no
+    site-specific changes."""
+    import pipeui.backend.domain.functions.builtins as b
+
+    source_id, _ = _make_source(db, "pin2")
+    _make_instance_table(db, source_id, pd.DataFrame({"a": [1, 2], "b": [3, 4]}))
+
+    saved = dict(b.BUILTIN_EXECUTORS)
+    b.BUILTIN_EXECUTORS["_pin_probe"] = b.BuiltinSpec(
+        validate=lambda cfg: None,
+        execute=lambda conn, df, cfg, run_transforms: (df, None),
+        singleton=True,
+        pinned_tail=1,  # tail order: [positional..., _pin_probe (1), rename (2)]
+    )
+    try:
+        # Attach order gives rename the LOWEST position and filter the HIGHEST:
+        # rename (0), _pin_probe (1), filter (2). Stored positions would order
+        # them rename, _pin_probe, filter — the pinned tail must reorder to
+        # filter, _pin_probe, rename.
+        assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+        assert attach_builtin(db, source_id, "_pin_probe", {})["ok"]
+        assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+
+        read_order, unified_order, run_order = _builtin_order_at_all_three_consumers(db, source_id)
+        assert read_order == ["filter", "_pin_probe", "rename"], read_order
+        assert unified_order == ["filter", "_pin_probe", "rename"], unified_order
+        assert run_order == ["filter", "_pin_probe", "rename"], run_order
+    finally:
+        b.BUILTIN_EXECUTORS.clear()
+        b.BUILTIN_EXECUTORS.update(saved)

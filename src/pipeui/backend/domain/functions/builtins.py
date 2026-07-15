@@ -337,10 +337,12 @@ def get_unified_pipeline(
             "position": bstep.position,
         })
 
-    # Sort unified list by position; a rename built-in is pinned last (#40), matching
-    # the execution order in run.py and the canvas order in get_pipeline.
+    # Sort unified list by position; pinned-tail builtins (e.g. rename, #40) sort
+    # after all positional steps in their registered tail order (#83/#116) — the
+    # spec metadata via pinned_tail_rank, matching the execution order in run.py
+    # and the canvas order in get_pipeline.
     steps.sort(key=lambda s: (
-        1 if s.get("builtin_type") == "rename" else 0,
+        pinned_tail_rank(s.get("builtin_type")),
         s["position"],
         s.get("set_name") or s.get("builtin_type") or "",
     ))
@@ -598,12 +600,22 @@ class BuiltinSpec:
       step. ``run_transforms`` is the injected runner (DIP) used only by the transformed-join
       materialize path; non-join built-ins accept-and-ignore it and return ``consumed_result_id=None``.
     - ``singleton`` — at most one step of this type per source (enforced in attach_builtin);
-      rename is singleton + pinned-last (#40).
+      rename is singleton + pinned-tail (#40).
+    - ``pinned_tail`` — ordered pinned-tail metadata (#83/#116). ``None`` (the default)
+      means positional: the step sorts by its stored position among the other
+      positional steps. An ``int >= 1`` pins the step to the tail: it sorts after
+      every positional step, ordered among pinned steps by this rank (lower runs
+      earlier). Current tail order: [positional steps..., date_range (1), rename (2)]
+      — rank 1 is taken by the date_range step (PRD date-range-filter). This is the
+      ONE place the pinned tail is defined; every ordering site (get_pipeline,
+      get_unified_pipeline, run_pipeline) consumes it via ``pinned_tail_rank`` —
+      never key an ordering on a builtin_type literal.
     """
 
     validate: Callable[[dict], "str | None"]
     execute: Callable[..., "tuple[pd.DataFrame, str | None]"]
     singleton: bool = False
+    pinned_tail: Optional[int] = None
 
 
 # The dispatch table both attach_builtin (validation) and execute_builtin_step
@@ -629,5 +641,27 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
         validate=_validate_rename_config,
         execute=lambda conn, df, cfg, run_transforms: (_execute_rename(conn, df, cfg), None),
         singleton=True,
+        # #40: rename operates on the final output (incl. joined columns) so it is
+        # last in the pinned tail; rank 1 belongs to date_range (runs before rename
+        # because its conditions reference registered column names that rename relabels).
+        pinned_tail=2,
     ),
 }
+
+
+def pinned_tail_rank(builtin_type: "str | None") -> int:
+    """Return the pinned-tail sort rank for a step (#83/#116).
+
+    0 for every positional step — function steps (``builtin_type=None``) and any
+    builtin whose spec carries no ``pinned_tail`` — so they keep their by-position
+    order ahead of the tail. Pinned builtins return their spec's ``pinned_tail``
+    rank. Reads ``BUILTIN_EXECUTORS`` at call time, so the registry is the single
+    ordering authority. Use as the primary sort key, before position:
+    ``key=lambda s: (pinned_tail_rank(<builtin_type>), <position>, ...)``.
+    """
+    if builtin_type is None:
+        return 0
+    spec = BUILTIN_EXECUTORS.get(builtin_type)
+    if spec is None or spec.pinned_tail is None:
+        return 0
+    return spec.pinned_tail
