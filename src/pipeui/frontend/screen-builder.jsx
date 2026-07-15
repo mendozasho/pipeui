@@ -903,7 +903,18 @@ function builtinConfigSummary(step, sources) {
     const more = entries.length > 3 ? ` +${entries.length - 3}` : "";
     return `Rename · ${shown}${more}`;
   }
-  // Generic fallback for other built-in types (only join + filter + rename are wired).
+  if (step.builtin_type === "date_range") {
+    const groups = Array.isArray(cfg.groups) ? cfg.groups : [];
+    const conditions = groups.flatMap(g => (g && Array.isArray(g.conditions)) ? g.conditions : []);
+    if (conditions.length === 0) return "Date range";
+    if (groups.length === 1 && conditions.length === 1) {
+      const c = conditions[0];
+      // An open bound (null / "") reads as an ellipsis: "2024-01-01 → …".
+      return `Date range · ${c.column || "?"} ${c.start || "…"} → ${c.end || "…"}`;
+    }
+    return `Date range · ${conditions.length} conditions · ${groups.length} ${groups.length === 1 ? "group" : "groups"}`;
+  }
+  // Generic fallback for other built-in types (join/filter/rename/date_range are wired).
   const label = step.builtin_type ? step.builtin_type.charAt(0).toUpperCase() + step.builtin_type.slice(1) : "Step";
   return label;
 }
@@ -2502,6 +2513,8 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   // Rename built-in modal (open from a rename-card drop or a placed rename edit)
   const [renameModalOpen, setRenameModalOpen] = useState(false);
+  // Date range built-in modal (open from a date_range-card drop or a placed edit)
+  const [dateRangeModalOpen, setDateRangeModalOpen] = useState(false);
   // Edit a placed built-in step (#209): holds the step being edited, or null. When
   // set, the join modal opens seeded from its builtin_config and saves via PATCH.
   const [editingBuiltin, setEditingBuiltin] = useState(null);
@@ -2641,9 +2654,37 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       });
   }
 
+  // Attach (POST) or edit (PATCH) a date_range built-in step. Mirrors
+  // submitRenameStep with builtin_type="date_range"; the backend pins it before
+  // rename at the tail + enforces one-per-source (slices 2-3).
+  function submitDateRangeStep(builtinConfig) {
+    if (editingBuiltin) {
+      return fetch("/sources/" + source.source_id + "/attach-builtin/" + editingBuiltin.step_id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ builtin_config: builtinConfig }),
+      })
+        .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+        .then(res => {
+          if (res.ok) { loadPipeline(); flash && flash("Date range step updated.", "ok"); }
+          return res;
+        });
+    }
+    return fetch("/sources/" + source.source_id + "/attach-builtin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ builtin_type: "date_range", builtin_config: builtinConfig }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+      .then(res => {
+        if (res.ok) { loadPipeline(); flash && flash("Date range step added.", "ok"); }
+        return res;
+      });
+  }
+
   // Open the right modal seeded from a placed built-in step's config (#209 edit).
   // Routes by builtin_type: join -> JoinModal, filter -> FilterModal, rename ->
-  // RenameModal (others: no-op).
+  // RenameModal, date_range -> DateRangeModal (others: no-op).
   function handleEditBuiltin(step) {
     if (!step) return;
     if (step.builtin_type === "join") {
@@ -2655,6 +2696,9 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     } else if (step.builtin_type === "rename") {
       setEditingBuiltin(step);
       setRenameModalOpen(true);
+    } else if (step.builtin_type === "date_range") {
+      setEditingBuiltin(step);
+      setDateRangeModalOpen(true);
     }
   }
 
@@ -2670,6 +2714,11 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
 
   function handleCloseRenameModal() {
     setRenameModalOpen(false);
+    setEditingBuiltin(null);
+  }
+
+  function handleCloseDateRangeModal() {
+    setDateRangeModalOpen(false);
     setEditingBuiltin(null);
   }
 
@@ -2716,6 +2765,15 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         setFilterModalOpen(true);
       } else if (builtinType === "rename") {
         setRenameModalOpen(true);
+      } else if (builtinType === "date_range") {
+        // Singleton drop-again-edits: the backend enforces one date_range per
+        // source, so a drop when one is already placed opens THAT step pre-filled
+        // for editing instead of a doomed empty create.
+        const existing = pipeline && Array.isArray(pipeline.steps)
+          ? pipeline.steps.find(st => st.builtin_type === "date_range")
+          : null;
+        if (existing) setEditingBuiltin(existing);
+        setDateRangeModalOpen(true);
       } else {
         const label = builtinType.charAt(0).toUpperCase() + builtinType.slice(1);
         flash && flash(`${label} modal coming soon`, "ok");
@@ -2889,6 +2947,7 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       </div>
 
       <div
+        data-testid="pipeline-dropzone"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -2960,6 +3019,14 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         currentSource={(pipeline && pipeline.source) || source}
         onSubmit={submitRenameStep}
         initialConfig={editingBuiltin && editingBuiltin.builtin_type === "rename" ? editingBuiltin.builtin_config : null}
+      />
+
+      <DateRangeModal
+        open={dateRangeModalOpen}
+        onClose={handleCloseDateRangeModal}
+        currentSource={(pipeline && pipeline.source) || source}
+        onSubmit={submitDateRangeStep}
+        initialConfig={editingBuiltin && editingBuiltin.builtin_type === "date_range" ? editingBuiltin.builtin_config : null}
       />
     </div>
   );
