@@ -41,6 +41,8 @@ from pipeui.backend.domain.functions.builtins import (
     patch_builtin,
     _validate_rename_config,
     _execute_rename,
+    _validate_date_range_config,
+    _execute_date_range,
 )
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.runner.run import run_pipeline
@@ -846,6 +848,64 @@ def test_rename_pinned_last_in_execution(db):
     out = run_pipeline(db, source_id, "all")
     order = [s["builtin_type"] for s in out["steps"] if s.get("step_type") == "builtin"]
     assert order == ["filter", "rename"], order  # rename runs last despite lower position
+
+
+# ---------------------------------------------------------------------------
+# date_range built-in (#117) — pure config validator (#121)
+# ---------------------------------------------------------------------------
+
+def _dr_cfg(*groups):
+    """Build a date_range config from condition lists: _dr_cfg([c1, c2], [c3])."""
+    return {"groups": [{"conditions": list(conds)} for conds in groups]}
+
+
+def test_validate_date_range_config_rejects_invalid_shapes():
+    """#117 criterion 2 (#121) — the pure validator rejects: zero groups, an empty
+    group, a condition missing a column, a condition with both bounds empty, and
+    start > end. Structural only — no DB access."""
+    # zero groups
+    assert _validate_date_range_config({}) is not None
+    assert _validate_date_range_config({"groups": []}) is not None
+    # an empty group (no conditions)
+    assert _validate_date_range_config(_dr_cfg([])) is not None
+    # a condition missing a column
+    assert _validate_date_range_config(
+        _dr_cfg([{"start": "2025-01-01", "end": "2025-03-31"}])
+    ) is not None
+    # both bounds empty — None and "" both count as absent
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": None, "end": None}])
+    ) is not None
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "", "end": ""}])
+    ) is not None
+    # start > end
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-06-01", "end": "2025-01-01"}])
+    ) is not None
+
+
+def test_validate_date_range_config_accepts_one_sided_and_multi_group():
+    """#117 criterion 2 (#121) — one-sided conditions (start-only / end-only) and
+    multi-group configs are valid; the same column may repeat across groups."""
+    # both bounds
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-01-01", "end": "2025-03-31"}])
+    ) is None
+    # start-only (on-or-after) — open bound as None or ""
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-01-01", "end": None}])
+    ) is None
+    # end-only (on-or-before)
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "", "end": "2025-03-31"}])
+    ) is None
+    # multi-group, multi-condition, same column in two groups
+    assert _validate_date_range_config(_dr_cfg(
+        [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"},
+         {"column": "ship", "start": None, "end": "2025-06-30"}],
+        [{"column": "eff", "start": "2025-01-01", "end": None}],
+    )) is None
 
 
 # ---------------------------------------------------------------------------

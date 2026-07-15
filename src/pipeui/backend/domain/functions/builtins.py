@@ -154,7 +154,35 @@ def _validate_rename_config(cfg: dict) -> str | None:
 
 
 def _validate_date_range_config(cfg: dict) -> str | None:
-    """Attach-time shape check for a date_range built-in (PRD date-range-filter)."""
+    """Attach-time shape check for a date_range built-in (PRD date-range-filter).
+
+    Config: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` — one-level
+    DNF: conditions within a group AND, groups OR. Bounds are inclusive "YYYY-MM-DD"
+    strings; ``None``/``""`` means an open bound, but at least one bound must be set
+    and start must not exceed end. Structural checks only — date-typed column
+    eligibility needs the DB and is enforced at the attach/patch write boundary.
+    """
+    groups = cfg.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return "date_range config must include a non-empty 'groups' list"
+    for group in groups:
+        conditions = group.get("conditions") if isinstance(group, dict) else None
+        if not isinstance(conditions, list) or not conditions:
+            return "every date_range group must include a non-empty 'conditions' list"
+        for cond in conditions:
+            if not isinstance(cond, dict) or not cond.get("column"):
+                return "every date_range condition must include a column"
+            start, end = cond.get("start"), cond.get("end")
+            if start in (None, "") and end in (None, ""):
+                return (
+                    f"condition on {cond['column']!r} must set at least one bound "
+                    "(start and end are both empty)"
+                )
+            if start not in (None, "") and end not in (None, "") and start > end:
+                return (
+                    f"condition on {cond['column']!r} has start {start!r} "
+                    f"after end {end!r}"
+                )
     return None
 
 
