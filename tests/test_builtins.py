@@ -264,7 +264,7 @@ def test_patch_builtin(source):
     step_id = uuid.UUID(result["step_id"])
 
     new_cfg = dict(cfg, join_type="left")
-    assert patch_builtin(conn, source_id, step_id, builtin_config=new_cfg, position=5) is True
+    assert patch_builtin(conn, source_id, step_id, builtin_config=new_cfg, position=5) == {"ok": True}
 
     row = conn.execute(
         "SELECT builtin_config, position FROM source_builtin_map WHERE step_id = ?",
@@ -275,8 +275,8 @@ def test_patch_builtin(source):
     assert stored_cfg["join_type"] == "left"
     assert row[1] == 5
 
-    # Non-existent step_id
-    assert patch_builtin(conn, source_id, uuid.uuid4(), position=99) is False
+    # Non-existent step_id -> None (the route's 404)
+    assert patch_builtin(conn, source_id, uuid.uuid4(), position=99) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1131,6 +1131,17 @@ def test_date_range_sorts_in_pinned_tail_before_rename(db):
         "b": [3, 4],
         "d": [datetime.date(2025, 1, 15), datetime.date(2025, 6, 1)],
     }))
+    # Register "d" as a DATE column — the slice-3 write boundary (#118/#123) requires
+    # date_range condition columns to be date-typed per column_registry.
+    d_col_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO column_registry VALUES (?, ?, ?, ?)",
+        [d_col_id, content_hash_id("column_registry", "d", "DATE", str(source_id)), "d", "DATE"],
+    )
+    db.execute(
+        "INSERT INTO source_column_map VALUES (?, ?, ?)",
+        [content_hash_id("source_column_map", str(source_id), str(d_col_id)), d_col_id, source_id],
+    )
 
     assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
     assert attach_builtin(db, source_id, "date_range", {
@@ -1142,6 +1153,166 @@ def test_date_range_sorts_in_pinned_tail_before_rename(db):
     assert read_order == ["filter", "date_range", "rename"], read_order
     assert unified_order == ["filter", "date_range", "rename"], unified_order
     assert run_order == ["filter", "date_range", "rename"], run_order
+
+
+# ---------------------------------------------------------------------------
+# date_range built-in (#118 / #123) — write-boundary checks over HTTP
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def builtins_client(db):
+    """HTTP client over the builtins middleware router (attach/patch/pipeline routes)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from pipeui.middleware.builtins import router
+    from pipeui.middleware.deps import get_conn
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_conn] = lambda: db
+    yield TestClient(app)
+
+
+def _make_typed_source(conn, columns: dict[str, str]) -> uuid.UUID:
+    """Create a source whose columns carry the given name -> column_type mapping."""
+    source_id = uuid.uuid4()
+    ch = content_hash_id("source_registry", f"typed_{source_id}", "id", "upsert")
+    conn.execute(
+        "INSERT INTO source_registry VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL)",
+        [source_id, ch, f"typed_{source_id}", datetime.date.today(), "upsert", "id"],
+    )
+    for col_name, col_type in columns.items():
+        col_id = uuid.uuid4()
+        col_ch = content_hash_id("column_registry", col_name, col_type, str(source_id))
+        conn.execute(
+            "INSERT INTO column_registry VALUES (?, ?, ?, ?)",
+            [col_id, col_ch, col_name, col_type],
+        )
+        map_id = content_hash_id("source_column_map", str(source_id), str(col_id))
+        conn.execute("INSERT INTO source_column_map VALUES (?, ?, ?)", [map_id, col_id, source_id])
+    return source_id
+
+
+@pytest.mark.integration
+def test_attach_date_range_rejects_non_date_column_naming_it(builtins_client, db):
+    """#118 criterion 1 (#123) — attaching a date_range whose config references a
+    non-date column is rejected at the write boundary (422) with a message naming
+    the offending column; an all-date-column config (DATE, TIMESTAMP, TIMESTAMPTZ)
+    attaches successfully."""
+    source_id = _make_typed_source(db, {
+        "eff": "DATE", "ts": "TIMESTAMP", "tstz": "TIMESTAMPTZ",
+        "amount": "INTEGER", "policy": "VARCHAR",
+    })
+
+    # Non-date column (INTEGER) -> rejected, message names it.
+    resp = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg([{"column": "amount", "start": "2025-01-01", "end": None}]),
+    })
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert "amount" in body["detail"]
+
+    # VARCHAR-held dates are not eligible either (PRD: fix is column-type migration).
+    resp = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg([{"column": "policy", "start": None, "end": "2025-12-31"}]),
+    })
+    assert resp.status_code == 422, resp.text
+    assert "policy" in resp.json()["detail"]
+
+    # A column not registered on this source at all is rejected by name too.
+    resp = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg([{"column": "ghost", "start": "2025-01-01", "end": None}]),
+    })
+    assert resp.status_code == 422, resp.text
+    assert "ghost" in resp.json()["detail"]
+
+    # Nothing was attached by the rejected requests.
+    assert db.execute(
+        "SELECT COUNT(*) FROM source_builtin_map WHERE source_id = ?", [source_id]
+    ).fetchone()[0] == 0
+
+    # All-date config across all three eligible types attaches successfully.
+    resp = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg(
+            [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"},
+             {"column": "ts", "start": None, "end": "2025-06-30"}],
+            [{"column": "tstz", "start": "2025-07-01", "end": None}],
+        ),
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.integration
+def test_patch_date_range_rejects_non_date_column_naming_it(builtins_client, db):
+    """#118 criterion 1 (#123) — PATCHing a date_range config that references a
+    non-date column is rejected at the same write boundary (422, message naming the
+    column) and the persisted config is left unchanged; an all-date patch succeeds."""
+    source_id = _make_typed_source(db, {"eff": "DATE", "amount": "INTEGER"})
+    good_cfg = _dr_cfg([{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"}])
+    attached = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range", "builtin_config": good_cfg,
+    })
+    assert attached.status_code == 200, attached.text
+    step_id = attached.json()["step_id"]
+
+    bad_cfg = _dr_cfg([{"column": "amount", "start": "2025-01-01", "end": None}])
+    resp = builtins_client.patch(f"/sources/{source_id}/attach-builtin/{step_id}", json={
+        "builtin_config": bad_cfg,
+    })
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert "amount" in body["detail"]
+
+    # Rejected patch persisted nothing — the stored config is the attached one.
+    import json as _json
+    stored = db.execute(
+        "SELECT builtin_config FROM source_builtin_map WHERE step_id = ?", [step_id]
+    ).fetchone()[0]
+    assert (_json.loads(stored) if isinstance(stored, str) else stored) == good_cfg
+
+    # An all-date patch still succeeds (404/422 contract preserved for the good path).
+    new_cfg = _dr_cfg([{"column": "eff", "start": None, "end": "2025-12-31"}])
+    resp = builtins_client.patch(f"/sources/{source_id}/attach-builtin/{step_id}", json={
+        "builtin_config": new_cfg,
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True}
+
+
+@pytest.mark.integration
+def test_second_date_range_attach_rejected_by_generic_singleton_flag(builtins_client, db):
+    """#118 criterion 2 (#123) — a second date_range attach on the same source is
+    rejected over HTTP by the generic singleton flag: 422 with the registry's
+    'only one ... step is allowed per source' message; only the first step exists."""
+    source_id = _make_typed_source(db, {"eff": "DATE"})
+    cfg = _dr_cfg([{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"}])
+
+    first = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range", "builtin_config": cfg,
+    })
+    assert first.status_code == 200, first.text
+    assert first.json()["ok"] is True
+
+    second = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg([{"column": "eff", "start": "2025-07-01", "end": None}]),
+    })
+    assert second.status_code == 422, second.text
+    body = second.json()
+    assert body["ok"] is False
+    assert "only one" in body["detail"] and "date_range" in body["detail"]
+
+    # Exactly one date_range step persisted.
+    assert db.execute(
+        "SELECT COUNT(*) FROM source_builtin_map WHERE source_id = ? AND builtin_type = 'date_range'",
+        [source_id],
+    ).fetchone()[0] == 1
 
 
 def test_second_pinned_type_sorts_between_positional_and_rename(db):
