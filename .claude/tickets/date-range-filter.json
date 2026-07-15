@@ -1,0 +1,89 @@
+{
+  "feature_slug": "date-range-filter",
+  "last_projected_at": "2026-07-15T21:10:49.536532+00:00",
+  "tickets": {
+    "1": {
+      "parent_issue": 116,
+      "parent_hash": "2437b326cb325cd85b825a924fec6fa4405c29f8b02b50c12b8d745a583c5aa0",
+      "sub_issues": []
+    },
+    "2": {
+      "parent_issue": 117,
+      "parent_hash": "7c8138f5646dc8d36e1430a380605f834f34fdbb6977f84c92ebb3fe320e0999",
+      "sub_issues": [
+        {
+          "issue": 120,
+          "owns_acceptance": [
+            0,
+            6
+          ],
+          "hash": "bc593587b3c47d9567832e47d4225444331727f5c29132f3f6fbd3fdfc30705d"
+        },
+        {
+          "issue": 121,
+          "owns_acceptance": [
+            1
+          ],
+          "hash": "79f4c8ec506bcaa2a03fdbf79515c0deb2e189e86db578647354faffd1664fde"
+        },
+        {
+          "issue": 122,
+          "owns_acceptance": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "hash": "c93a309185176c0ba231610578033df48451304da58cca3bde17270c62b65925"
+        }
+      ]
+    },
+    "3": {
+      "parent_issue": 118,
+      "parent_hash": "aa0b29dd67f27d0c9b8bda2be2329af61af47ded800d09c3c47ff8494362cd95",
+      "sub_issues": [
+        {
+          "issue": 123,
+          "owns_acceptance": [
+            0,
+            1
+          ],
+          "hash": "ed9e2f2e433808efb4a4463c4410e0892c64a27c97d433cfb13d008125a7c611"
+        },
+        {
+          "issue": 124,
+          "owns_acceptance": [
+            2,
+            3,
+            4
+          ],
+          "hash": "9df52331380fb1e00b0d16e03463d38e15ca13a315db397f15929e1e85205e69"
+        }
+      ]
+    },
+    "4": {
+      "parent_issue": 119,
+      "parent_hash": "3073dabaf60be18af3f0a71bf6f6c8ab67bad495e47a3f43ec17897173ec366c",
+      "sub_issues": [
+        {
+          "issue": 125,
+          "owns_acceptance": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "hash": "9c210c5d2c695593819dc68e83dc7598f381e218ab5999b886724bd5e7a6defa"
+        },
+        {
+          "issue": 126,
+          "owns_acceptance": [
+            0,
+            5
+          ],
+          "hash": "db68a92c6867353724781d192d72011d3c83a4b0876182e2bb9450d46bfb2aac"
+        }
+      ]
+    }
+  }
+}
