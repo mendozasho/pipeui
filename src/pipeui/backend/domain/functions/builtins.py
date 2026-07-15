@@ -1,5 +1,5 @@
 """Built-in pipeline steps — app-provided steps registered in ``BUILTIN_EXECUTORS``
-(currently join, pivot, filter, rename; the registry is the source of truth).
+(currently join, pivot, filter, rename, date_range; the registry is the source of truth).
 
 attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
     Creates a source_builtin_map row and returns {"ok": True, "step_id": "..."}.
@@ -623,8 +623,43 @@ def _execute_date_range(
     df: pd.DataFrame,
     cfg: dict,
 ) -> pd.DataFrame:
-    """Execute a date_range built-in (PRD date-range-filter)."""
-    return df
+    """Execute a date_range built-in (PRD date-range-filter) — keep rows matching
+    the grouped range conditions.
+
+    Config shape: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` —
+    one WHERE of OR-ed group predicates, each group an AND of inclusive range
+    predicates over only the bounds a condition sets (validation guarantees at
+    least one). Columns are CAST to DATE so TIMESTAMP/TIMESTAMPTZ compare at DATE
+    granularity (a 23:59 stamp on the end day is inside; TIMESTAMPTZ uses DuckDB's
+    session-default timezone); bounds are bound as parameters and CAST to DATE. A
+    NULL date fails its condition (SQL semantics) but the row may still pass via
+    another OR group.
+    """
+    err = _validate_date_range_config(cfg)
+    if err:
+        raise ValueError(err)
+
+    group_predicates: list[str] = []
+    params: list[str] = []
+    for group in cfg["groups"]:
+        condition_predicates: list[str] = []
+        for cond in group["conditions"]:
+            col_sql = f'CAST("{cond["column"]}" AS DATE)'
+            for bound, op in ((cond.get("start"), ">="), (cond.get("end"), "<=")):
+                if bound not in (None, ""):
+                    condition_predicates.append(f"{col_sql} {op} CAST(? AS DATE)")
+                    params.append(bound)
+        group_predicates.append("(" + " AND ".join(condition_predicates) + ")")
+    where = " OR ".join(group_predicates)
+
+    _view = f"_builtin_date_range_{uuid.uuid4().hex[:8]}"
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_view}" AS SELECT * FROM df')
+    try:
+        result = conn.execute(f'SELECT * FROM "{_view}" WHERE {where}', params).df()
+    finally:
+        conn.execute(f'DROP VIEW IF EXISTS "{_view}"')
+
+    return result
 
 
 # ---------------------------------------------------------------------------
