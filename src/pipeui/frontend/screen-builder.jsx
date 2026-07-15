@@ -903,7 +903,18 @@ function builtinConfigSummary(step, sources) {
     const more = entries.length > 3 ? ` +${entries.length - 3}` : "";
     return `Rename · ${shown}${more}`;
   }
-  // Generic fallback for other built-in types (only join + filter + rename are wired).
+  if (step.builtin_type === "date_range") {
+    const groups = Array.isArray(cfg.groups) ? cfg.groups : [];
+    const conditions = groups.flatMap(g => (g && Array.isArray(g.conditions)) ? g.conditions : []);
+    if (conditions.length === 0) return "Date range";
+    if (groups.length === 1 && conditions.length === 1) {
+      const c = conditions[0];
+      // An open bound (null / "") reads as an ellipsis: "2024-01-01 → …".
+      return `Date range · ${c.column || "?"} ${c.start || "…"} → ${c.end || "…"}`;
+    }
+    return `Date range · ${conditions.length} conditions · ${groups.length} ${groups.length === 1 ? "group" : "groups"}`;
+  }
+  // Generic fallback for other built-in types (join/filter/rename/date_range are wired).
   const label = step.builtin_type ? step.builtin_type.charAt(0).toUpperCase() + step.builtin_type.slice(1) : "Step";
   return label;
 }
@@ -2284,6 +2295,201 @@ function RenameModal({ open, onClose, currentSource, onSubmit, initialConfig }) 
 }
 
 // ---------------------------------------------------------------------------
+// DateRangeModal — configure a built-in date_range step (#119 / #125). Builds
+// the grouped config {groups: [{conditions: [{column, start, end}]}]} — one-level
+// DNF: conditions within a group AND together, groups OR together. The column
+// picker offers only date-typed columns (DATE/TIMESTAMP/TIMESTAMPTZ — mirrors the
+// backend's _DATE_COLUMN_TYPES). Start/end are native <input type="date"> (frozen
+// decision — no CDN picker, no custom calendar). Mirrors the Filter/Rename
+// create/edit contract (open / onClose / onSubmit / initialConfig).
+// ---------------------------------------------------------------------------
+
+const DATE_RANGE_COLUMN_TYPES = ["DATE", "TIMESTAMP", "TIMESTAMPTZ"];
+
+function DateRangeModal({ open, onClose, currentSource, onSubmit, initialConfig }) {
+  const { Modal, Btn } = window.__UI__;
+  const [groups, setGroups] = useState([{ conditions: [{ column: "", start: "", end: "" }] }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const isEdit = !!initialConfig;
+
+  // Reset on open. Edit mode seeds a deep copy of the saved groups in persisted
+  // order, preserving bound values exactly (null stays null, "" stays "") so an
+  // untouched save re-emits an identical config (Principle 7 round-trip).
+  useEffect(() => {
+    if (!open) return;
+    const saved = initialConfig && Array.isArray(initialConfig.groups) ? initialConfig.groups : null;
+    if (saved && saved.length) {
+      setGroups(saved.map(g => ({
+        conditions: (g.conditions || []).map(c => ({ column: c.column, start: c.start, end: c.end })),
+      })));
+    } else {
+      setGroups([{ conditions: [{ column: "", start: "", end: "" }] }]);
+    }
+    setSubmitting(false);
+    setSubmitError(null);
+  }, [open, initialConfig]);
+
+  const columns = ((currentSource && currentSource.columns) || []).filter(
+    c => DATE_RANGE_COLUMN_TYPES.includes(c.column_type)
+  );
+
+  // Functional updates throughout — two edits coalesced into one React batch must
+  // each see the prior update (same reasoning as KeyPairBuilder.setSide).
+  function setCondition(gi, ci, key, val) {
+    setGroups(prev => prev.map((g, i) =>
+      i === gi
+        ? { ...g, conditions: g.conditions.map((c, j) => (j === ci ? { ...c, [key]: val } : c)) }
+        : g
+    ));
+  }
+  function addCondition(gi) {
+    setGroups(prev => prev.map((g, i) =>
+      i === gi ? { ...g, conditions: [...g.conditions, { column: "", start: "", end: "" }] } : g
+    ));
+  }
+  function addGroup() {
+    setGroups(prev => [...prev, { conditions: [{ column: "", start: "", end: "" }] }]);
+  }
+  function removeCondition(gi, ci) {
+    // Deletes exactly that row; a group emptied of its last condition is dropped
+    // (the backend rejects empty groups, so an empty group is never representable).
+    setGroups(prev => prev
+      .map((g, i) => (i === gi ? { ...g, conditions: g.conditions.filter((_, j) => j !== ci) } : g))
+      .filter(g => g.conditions.length > 0));
+  }
+
+  // First blocking problem, or null when the config is saveable. Mirrors the
+  // backend's _validate_date_range_config so a save the modal allows is never
+  // rejected for shape at the write boundary.
+  function firstValidationError() {
+    const allConditions = groups.flatMap(g => g.conditions);
+    if (allConditions.length === 0) return "Add at least one condition.";
+    for (const c of allConditions) {
+      if (!c.column) return "Every condition needs a column.";
+      const start = c.start || "";
+      const end = c.end || "";
+      if (!start && !end) return "Set at least one bound (start or end) on every condition.";
+      if (start && end && start > end) return "Start must not be after end.";
+    }
+    return null;
+  }
+  const validationError = firstValidationError();
+  const canSubmit = !validationError;
+
+  function submit() {
+    if (!canSubmit || submitting) return;
+    const config = { groups };
+    setSubmitting(true);
+    setSubmitError(null);
+    Promise.resolve(onSubmit(config))
+      .then(res => {
+        setSubmitting(false);
+        if (res && res.ok === false) { setSubmitError(res.detail || "Could not add date range step."); return; }
+        onClose && onClose();
+      })
+      .catch(e => { setSubmitting(false); setSubmitError(String(e && e.message ? e.message : e)); });
+  }
+
+  const footer = (
+    <>
+      <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+      <Btn variant="primary" onClick={submit} disabled={!canSubmit || submitting}>
+        {isEdit ? "Save date range" : "Add step"}
+      </Btn>
+    </>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEdit ? "Edit date range" : "Add date range"} width={520} footer={footer}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-3)" }}>
+          Keep rows whose date columns fall in the ranges below. Conditions in a group
+          all hold (AND); groups are alternatives (OR). Either bound may be left open.
+        </div>
+        {groups.map((g, gi) => (
+          <div key={gi} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {gi > 0 && (
+              <div style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: ".06em",
+                color: "var(--text-4)", textAlign: "center",
+              }}>
+                OR
+              </div>
+            )}
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 8,
+              border: "1px solid var(--border)", borderRadius: "var(--radius)",
+              padding: 10,
+            }}>
+              {g.conditions.map((c, ci) => (
+                <div key={ci} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    data-testid={"dr-column-" + gi + "-" + ci}
+                    value={c.column || ""}
+                    onChange={e => setCondition(gi, ci, "column", e.target.value)}
+                    style={{ ..._filterFieldStyle, flex: 1, cursor: "pointer" }}
+                  >
+                    <option value="">Select a column…</option>
+                    {columns.map(col => (
+                      <option key={col.column_id || col.column_name} value={col.column_name}>{col.column_name}</option>
+                    ))}
+                  </select>
+                  <input
+                    data-testid={"dr-start-" + gi + "-" + ci}
+                    type="date"
+                    value={c.start || ""}
+                    onChange={e => setCondition(gi, ci, "start", e.target.value)}
+                    style={{ ..._filterFieldStyle, width: 130, flex: "none" }}
+                  />
+                  <span style={{ color: "var(--text-4)", fontSize: 13 }}>→</span>
+                  <input
+                    data-testid={"dr-end-" + gi + "-" + ci}
+                    type="date"
+                    value={c.end || ""}
+                    onChange={e => setCondition(gi, ci, "end", e.target.value)}
+                    style={{ ..._filterFieldStyle, width: 130, flex: "none" }}
+                  />
+                  <button
+                    type="button"
+                    data-testid={"dr-remove-" + gi + "-" + ci}
+                    onClick={() => removeCondition(gi, ci)}
+                    title="Remove condition"
+                    style={{
+                      background: "none", border: "none", color: "var(--text-4)",
+                      fontSize: 16, padding: "0 4px", cursor: "pointer",
+                    }}
+                  >×</button>
+                </div>
+              ))}
+              <div>
+                {/* Plain button (not Btn): one per group, addressed by testid. */}
+                <button
+                  type="button"
+                  data-testid={"dr-add-cond-" + gi}
+                  onClick={() => addCondition(gi)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    color: "var(--accent)", fontSize: 12, fontWeight: 600, padding: 0,
+                  }}
+                >
+                  + Add condition
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+        <div>
+          <Btn variant="ghost" onClick={addGroup}>+ Add OR group</Btn>
+        </div>
+        {validationError && <div style={{ fontSize: 12, color: "var(--bad)" }}>{validationError}</div>}
+        {submitError && <div style={{ fontSize: 12, color: "var(--bad)" }}>{submitError}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Side panel
 // ---------------------------------------------------------------------------
 
@@ -2307,6 +2513,8 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   // Rename built-in modal (open from a rename-card drop or a placed rename edit)
   const [renameModalOpen, setRenameModalOpen] = useState(false);
+  // Date range built-in modal (open from a date_range-card drop or a placed edit)
+  const [dateRangeModalOpen, setDateRangeModalOpen] = useState(false);
   // Edit a placed built-in step (#209): holds the step being edited, or null. When
   // set, the join modal opens seeded from its builtin_config and saves via PATCH.
   const [editingBuiltin, setEditingBuiltin] = useState(null);
@@ -2446,9 +2654,37 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       });
   }
 
+  // Attach (POST) or edit (PATCH) a date_range built-in step. Mirrors
+  // submitRenameStep with builtin_type="date_range"; the backend pins it before
+  // rename at the tail + enforces one-per-source (slices 2-3).
+  function submitDateRangeStep(builtinConfig) {
+    if (editingBuiltin) {
+      return fetch("/sources/" + source.source_id + "/attach-builtin/" + editingBuiltin.step_id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ builtin_config: builtinConfig }),
+      })
+        .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+        .then(res => {
+          if (res.ok) { loadPipeline(); flash && flash("Date range step updated.", "ok"); }
+          return res;
+        });
+    }
+    return fetch("/sources/" + source.source_id + "/attach-builtin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ builtin_type: "date_range", builtin_config: builtinConfig }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok && data.ok !== false, ...data })))
+      .then(res => {
+        if (res.ok) { loadPipeline(); flash && flash("Date range step added.", "ok"); }
+        return res;
+      });
+  }
+
   // Open the right modal seeded from a placed built-in step's config (#209 edit).
   // Routes by builtin_type: join -> JoinModal, filter -> FilterModal, rename ->
-  // RenameModal (others: no-op).
+  // RenameModal, date_range -> DateRangeModal (others: no-op).
   function handleEditBuiltin(step) {
     if (!step) return;
     if (step.builtin_type === "join") {
@@ -2460,6 +2696,9 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
     } else if (step.builtin_type === "rename") {
       setEditingBuiltin(step);
       setRenameModalOpen(true);
+    } else if (step.builtin_type === "date_range") {
+      setEditingBuiltin(step);
+      setDateRangeModalOpen(true);
     }
   }
 
@@ -2475,6 +2714,11 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
 
   function handleCloseRenameModal() {
     setRenameModalOpen(false);
+    setEditingBuiltin(null);
+  }
+
+  function handleCloseDateRangeModal() {
+    setDateRangeModalOpen(false);
     setEditingBuiltin(null);
   }
 
@@ -2521,6 +2765,15 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         setFilterModalOpen(true);
       } else if (builtinType === "rename") {
         setRenameModalOpen(true);
+      } else if (builtinType === "date_range") {
+        // Singleton drop-again-edits: the backend enforces one date_range per
+        // source, so a drop when one is already placed opens THAT step pre-filled
+        // for editing instead of a doomed empty create.
+        const existing = pipeline && Array.isArray(pipeline.steps)
+          ? pipeline.steps.find(st => st.builtin_type === "date_range")
+          : null;
+        if (existing) setEditingBuiltin(existing);
+        setDateRangeModalOpen(true);
       } else {
         const label = builtinType.charAt(0).toUpperCase() + builtinType.slice(1);
         flash && flash(`${label} modal coming soon`, "ok");
@@ -2694,6 +2947,7 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
       </div>
 
       <div
+        data-testid="pipeline-dropzone"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -2765,6 +3019,14 @@ function SidePanel({ source, onClose, onNavigate, flash }) {
         currentSource={(pipeline && pipeline.source) || source}
         onSubmit={submitRenameStep}
         initialConfig={editingBuiltin && editingBuiltin.builtin_type === "rename" ? editingBuiltin.builtin_config : null}
+      />
+
+      <DateRangeModal
+        open={dateRangeModalOpen}
+        onClose={handleCloseDateRangeModal}
+        currentSource={(pipeline && pipeline.source) || source}
+        onSubmit={submitDateRangeStep}
+        initialConfig={editingBuiltin && editingBuiltin.builtin_type === "date_range" ? editingBuiltin.builtin_config : null}
       />
     </div>
   );
@@ -2886,4 +3148,4 @@ window.__ScreenBuilder__ = ScreenBuilder;
 // loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
 // these export statements are valid there too; the app itself consumes the
 // components via the window.__ScreenBuilder__ global above.
-export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
+export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, RenameModal, DateRangeModal, RightPalette, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
