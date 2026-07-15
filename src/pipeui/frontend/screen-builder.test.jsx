@@ -5,7 +5,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor, act } from "@testing-library/react";
-import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
+import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, RenameModal, DateRangeModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
 
 afterEach(() => {
   cleanup();
@@ -1623,5 +1623,152 @@ describe("RenameModal — order preservation (Principle 7, non-alphabetical)", (
     fireEvent.click(screen.getByText("Save rename"));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(Object.keys(onSubmit.mock.calls[0][0].renames)).toEqual(["zebra", "apple"]);
+  });
+});
+
+// ===========================================================================
+// DateRangeModal — grouped date-range conditions (date_range built-in, #119/#125)
+// ===========================================================================
+
+const DATE_SOURCE = {
+  source_id: "S1",
+  source_name: "sales",
+  columns: [
+    { column_id: "d1", column_name: "created_at", column_type: "DATE" },
+    { column_id: "d2", column_name: "updated_at", column_type: "TIMESTAMP" },
+    { column_id: "d3", column_name: "synced_at", column_type: "TIMESTAMPTZ" },
+    { column_id: "c1", column_name: "amount", column_type: "DOUBLE" },
+    { column_id: "c2", column_name: "region", column_type: "VARCHAR" },
+  ],
+};
+
+function renderDateRange(extra = {}) {
+  const onSubmit = extra.onSubmit || vi.fn(() => Promise.resolve({ ok: true, step_id: "dr1" }));
+  const onClose = extra.onClose || vi.fn();
+  const utils = render(
+    React.createElement(DateRangeModal, {
+      open: true,
+      onClose,
+      currentSource: extra.currentSource || DATE_SOURCE,
+      onSubmit,
+      initialConfig: extra.initialConfig || null,
+    })
+  );
+  return { ...utils, onSubmit, onClose };
+}
+
+describe("DateRangeModal — date-only column picker", () => {
+  it("offers only DATE/TIMESTAMP/TIMESTAMPTZ columns", () => {
+    renderDateRange();
+    const col = screen.getByTestId("dr-column-0-0");
+    expect(within(col).getByText("created_at")).toBeTruthy();
+    expect(within(col).getByText("updated_at")).toBeTruthy();
+    expect(within(col).getByText("synced_at")).toBeTruthy();
+    expect(within(col).queryByText("amount")).toBeNull();
+    expect(within(col).queryByText("region")).toBeNull();
+  });
+});
+
+describe("DateRangeModal — add/remove conditions and OR groups", () => {
+  it("renders start/end as native date inputs", () => {
+    renderDateRange();
+    expect(screen.getByTestId("dr-start-0-0").getAttribute("type")).toBe("date");
+    expect(screen.getByTestId("dr-end-0-0").getAttribute("type")).toBe("date");
+  });
+
+  it("'+ Add condition' appends a condition row to the current group", () => {
+    renderDateRange();
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+    fireEvent.click(screen.getByTestId("dr-add-cond-0"));
+    expect(screen.getByTestId("dr-column-0-1")).toBeTruthy();
+    // Appended to group 0, not a new group.
+    expect(screen.queryByTestId("dr-column-1-0")).toBeNull();
+  });
+
+  it("'+ Add OR group' starts a new group", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByText("+ Add OR group"));
+    expect(screen.getByTestId("dr-column-1-0")).toBeTruthy();
+    // The new group has its own single condition, separate from group 0's.
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+  });
+
+  it("each row's remove control deletes exactly that row", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByTestId("dr-add-cond-0"));
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-column-0-1"), { target: { value: "updated_at" } });
+    fireEvent.click(screen.getByTestId("dr-remove-0-0"));
+    // The surviving row (formerly index 1) keeps its own value.
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("updated_at");
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+  });
+});
+
+describe("DateRangeModal — validation + payload", () => {
+  it("blocks save with a visible reason when there are zero conditions", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByTestId("dr-remove-0-0"));
+    expect(screen.queryByTestId("dr-column-0-0")).toBeNull();
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/at least one condition/i)).toBeTruthy();
+  });
+
+  it("blocks save with a visible reason when a condition has both bounds empty", () => {
+    renderDateRange();
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/at least one bound/i)).toBeTruthy();
+  });
+
+  it("blocks save with a visible reason when start is after end", () => {
+    renderDateRange();
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-start-0-0"), { target: { value: "2024-06-30" } });
+    fireEvent.change(screen.getByTestId("dr-end-0-0"), { target: { value: "2024-01-01" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/start.*after.*end/i)).toBeTruthy();
+  });
+
+  it("a valid save submits exactly {groups:[{conditions:[{column,start,end}]}]}", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderDateRange({ onSubmit });
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-start-0-0"), { target: { value: "2024-01-01" } });
+    fireEvent.change(screen.getByTestId("dr-end-0-0"), { target: { value: "2024-06-30" } });
+    expect(screen.getByText("Add step").disabled).toBe(false);
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: "2024-06-30" }] }],
+    });
+  });
+});
+
+describe("DateRangeModal — Principle 7 round-trip", () => {
+  it("open persisted, save untouched, submits an identical config in persisted order", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    // Non-trivial order (updated_at before created_at) + open bounds persisted as
+    // null — an untouched save must re-emit all of it byte-identically.
+    const persisted = {
+      groups: [
+        {
+          conditions: [
+            { column: "updated_at", start: "2024-05-01", end: "2024-05-31" },
+            { column: "created_at", start: null, end: "2024-12-31" },
+          ],
+        },
+        { conditions: [{ column: "synced_at", start: "2023-01-01", end: null }] },
+      ],
+    };
+    renderDateRange({ onSubmit, initialConfig: persisted });
+    // Pre-filled in persisted order.
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("updated_at");
+    expect(screen.getByTestId("dr-column-0-1").value).toBe("created_at");
+    expect(screen.getByTestId("dr-start-0-1").value).toBe("");  // null renders empty
+    expect(screen.getByTestId("dr-column-1-0").value).toBe("synced_at");
+    fireEvent.click(screen.getByText("Save date range"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual(persisted);
   });
 });

@@ -2284,6 +2284,201 @@ function RenameModal({ open, onClose, currentSource, onSubmit, initialConfig }) 
 }
 
 // ---------------------------------------------------------------------------
+// DateRangeModal — configure a built-in date_range step (#119 / #125). Builds
+// the grouped config {groups: [{conditions: [{column, start, end}]}]} — one-level
+// DNF: conditions within a group AND together, groups OR together. The column
+// picker offers only date-typed columns (DATE/TIMESTAMP/TIMESTAMPTZ — mirrors the
+// backend's _DATE_COLUMN_TYPES). Start/end are native <input type="date"> (frozen
+// decision — no CDN picker, no custom calendar). Mirrors the Filter/Rename
+// create/edit contract (open / onClose / onSubmit / initialConfig).
+// ---------------------------------------------------------------------------
+
+const DATE_RANGE_COLUMN_TYPES = ["DATE", "TIMESTAMP", "TIMESTAMPTZ"];
+
+function DateRangeModal({ open, onClose, currentSource, onSubmit, initialConfig }) {
+  const { Modal, Btn } = window.__UI__;
+  const [groups, setGroups] = useState([{ conditions: [{ column: "", start: "", end: "" }] }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const isEdit = !!initialConfig;
+
+  // Reset on open. Edit mode seeds a deep copy of the saved groups in persisted
+  // order, preserving bound values exactly (null stays null, "" stays "") so an
+  // untouched save re-emits an identical config (Principle 7 round-trip).
+  useEffect(() => {
+    if (!open) return;
+    const saved = initialConfig && Array.isArray(initialConfig.groups) ? initialConfig.groups : null;
+    if (saved && saved.length) {
+      setGroups(saved.map(g => ({
+        conditions: (g.conditions || []).map(c => ({ column: c.column, start: c.start, end: c.end })),
+      })));
+    } else {
+      setGroups([{ conditions: [{ column: "", start: "", end: "" }] }]);
+    }
+    setSubmitting(false);
+    setSubmitError(null);
+  }, [open, initialConfig]);
+
+  const columns = ((currentSource && currentSource.columns) || []).filter(
+    c => DATE_RANGE_COLUMN_TYPES.includes(c.column_type)
+  );
+
+  // Functional updates throughout — two edits coalesced into one React batch must
+  // each see the prior update (same reasoning as KeyPairBuilder.setSide).
+  function setCondition(gi, ci, key, val) {
+    setGroups(prev => prev.map((g, i) =>
+      i === gi
+        ? { ...g, conditions: g.conditions.map((c, j) => (j === ci ? { ...c, [key]: val } : c)) }
+        : g
+    ));
+  }
+  function addCondition(gi) {
+    setGroups(prev => prev.map((g, i) =>
+      i === gi ? { ...g, conditions: [...g.conditions, { column: "", start: "", end: "" }] } : g
+    ));
+  }
+  function addGroup() {
+    setGroups(prev => [...prev, { conditions: [{ column: "", start: "", end: "" }] }]);
+  }
+  function removeCondition(gi, ci) {
+    // Deletes exactly that row; a group emptied of its last condition is dropped
+    // (the backend rejects empty groups, so an empty group is never representable).
+    setGroups(prev => prev
+      .map((g, i) => (i === gi ? { ...g, conditions: g.conditions.filter((_, j) => j !== ci) } : g))
+      .filter(g => g.conditions.length > 0));
+  }
+
+  // First blocking problem, or null when the config is saveable. Mirrors the
+  // backend's _validate_date_range_config so a save the modal allows is never
+  // rejected for shape at the write boundary.
+  function firstValidationError() {
+    const allConditions = groups.flatMap(g => g.conditions);
+    if (allConditions.length === 0) return "Add at least one condition.";
+    for (const c of allConditions) {
+      if (!c.column) return "Every condition needs a column.";
+      const start = c.start || "";
+      const end = c.end || "";
+      if (!start && !end) return "Set at least one bound (start or end) on every condition.";
+      if (start && end && start > end) return "Start must not be after end.";
+    }
+    return null;
+  }
+  const validationError = firstValidationError();
+  const canSubmit = !validationError;
+
+  function submit() {
+    if (!canSubmit || submitting) return;
+    const config = { groups };
+    setSubmitting(true);
+    setSubmitError(null);
+    Promise.resolve(onSubmit(config))
+      .then(res => {
+        setSubmitting(false);
+        if (res && res.ok === false) { setSubmitError(res.detail || "Could not add date range step."); return; }
+        onClose && onClose();
+      })
+      .catch(e => { setSubmitting(false); setSubmitError(String(e && e.message ? e.message : e)); });
+  }
+
+  const footer = (
+    <>
+      <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+      <Btn variant="primary" onClick={submit} disabled={!canSubmit || submitting}>
+        {isEdit ? "Save date range" : "Add step"}
+      </Btn>
+    </>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEdit ? "Edit date range" : "Add date range"} width={520} footer={footer}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-3)" }}>
+          Keep rows whose date columns fall in the ranges below. Conditions in a group
+          all hold (AND); groups are alternatives (OR). Either bound may be left open.
+        </div>
+        {groups.map((g, gi) => (
+          <div key={gi} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {gi > 0 && (
+              <div style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: ".06em",
+                color: "var(--text-4)", textAlign: "center",
+              }}>
+                OR
+              </div>
+            )}
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 8,
+              border: "1px solid var(--border)", borderRadius: "var(--radius)",
+              padding: 10,
+            }}>
+              {g.conditions.map((c, ci) => (
+                <div key={ci} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    data-testid={"dr-column-" + gi + "-" + ci}
+                    value={c.column || ""}
+                    onChange={e => setCondition(gi, ci, "column", e.target.value)}
+                    style={{ ..._filterFieldStyle, flex: 1, cursor: "pointer" }}
+                  >
+                    <option value="">Select a column…</option>
+                    {columns.map(col => (
+                      <option key={col.column_id || col.column_name} value={col.column_name}>{col.column_name}</option>
+                    ))}
+                  </select>
+                  <input
+                    data-testid={"dr-start-" + gi + "-" + ci}
+                    type="date"
+                    value={c.start || ""}
+                    onChange={e => setCondition(gi, ci, "start", e.target.value)}
+                    style={{ ..._filterFieldStyle, width: 130, flex: "none" }}
+                  />
+                  <span style={{ color: "var(--text-4)", fontSize: 13 }}>→</span>
+                  <input
+                    data-testid={"dr-end-" + gi + "-" + ci}
+                    type="date"
+                    value={c.end || ""}
+                    onChange={e => setCondition(gi, ci, "end", e.target.value)}
+                    style={{ ..._filterFieldStyle, width: 130, flex: "none" }}
+                  />
+                  <button
+                    type="button"
+                    data-testid={"dr-remove-" + gi + "-" + ci}
+                    onClick={() => removeCondition(gi, ci)}
+                    title="Remove condition"
+                    style={{
+                      background: "none", border: "none", color: "var(--text-4)",
+                      fontSize: 16, padding: "0 4px", cursor: "pointer",
+                    }}
+                  >×</button>
+                </div>
+              ))}
+              <div>
+                {/* Plain button (not Btn): one per group, addressed by testid. */}
+                <button
+                  type="button"
+                  data-testid={"dr-add-cond-" + gi}
+                  onClick={() => addCondition(gi)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    color: "var(--accent)", fontSize: 12, fontWeight: 600, padding: 0,
+                  }}
+                >
+                  + Add condition
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+        <div>
+          <Btn variant="ghost" onClick={addGroup}>+ Add OR group</Btn>
+        </div>
+        {validationError && <div style={{ fontSize: 12, color: "var(--bad)" }}>{validationError}</div>}
+        {submitError && <div style={{ fontSize: 12, color: "var(--bad)" }}>{submitError}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Side panel
 // ---------------------------------------------------------------------------
 
@@ -2886,4 +3081,4 @@ window.__ScreenBuilder__ = ScreenBuilder;
 // loaded as a Babel "module" (<script type="text/babel" data-type="module">), so
 // these export statements are valid there too; the app itself consumes the
 // components via the window.__ScreenBuilder__ global above.
-export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
+export { ScreenBuilder, PendingStepCard, StepCard, ParamRow, FunctionRow, SidePanel, JoinModal, FilterModal, RenameModal, DateRangeModal, RightPalette, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas };
