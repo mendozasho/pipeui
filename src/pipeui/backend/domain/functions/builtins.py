@@ -1,5 +1,5 @@
 """Built-in pipeline steps — app-provided steps registered in ``BUILTIN_EXECUTORS``
-(currently join, pivot, filter, rename; the registry is the source of truth).
+(currently join, pivot, filter, rename, date_range; the registry is the source of truth).
 
 attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
     Creates a source_builtin_map row and returns {"ok": True, "step_id": "..."}.
@@ -150,6 +150,39 @@ def _validate_rename_config(cfg: dict) -> str | None:
     new_names = list(renames.values())
     if len(set(new_names)) != len(new_names):
         return "rename targets must be unique — no two columns may map to the same new name"
+    return None
+
+
+def _validate_date_range_config(cfg: dict) -> str | None:
+    """Attach-time shape check for a date_range built-in (PRD date-range-filter).
+
+    Config: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` — one-level
+    DNF: conditions within a group AND, groups OR. Bounds are inclusive "YYYY-MM-DD"
+    strings; ``None``/``""`` means an open bound, but at least one bound must be set
+    and start must not exceed end. Structural checks only — date-typed column
+    eligibility needs the DB and is enforced at the attach/patch write boundary.
+    """
+    groups = cfg.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return "date_range config must include a non-empty 'groups' list"
+    for group in groups:
+        conditions = group.get("conditions") if isinstance(group, dict) else None
+        if not isinstance(conditions, list) or not conditions:
+            return "every date_range group must include a non-empty 'conditions' list"
+        for cond in conditions:
+            if not isinstance(cond, dict) or not cond.get("column"):
+                return "every date_range condition must include a column"
+            start, end = cond.get("start"), cond.get("end")
+            if start in (None, "") and end in (None, ""):
+                return (
+                    f"condition on {cond['column']!r} must set at least one bound "
+                    "(start and end are both empty)"
+                )
+            if start not in (None, "") and end not in (None, "") and start > end:
+                return (
+                    f"condition on {cond['column']!r} has start {start!r} "
+                    f"after end {end!r}"
+                )
     return None
 
 
@@ -585,6 +618,50 @@ def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict
     return df.rename(columns=renames)
 
 
+def _execute_date_range(
+    conn: duckdb.DuckDBPyConnection,
+    df: pd.DataFrame,
+    cfg: dict,
+) -> pd.DataFrame:
+    """Execute a date_range built-in (PRD date-range-filter) — keep rows matching
+    the grouped range conditions.
+
+    Config shape: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` —
+    one WHERE of OR-ed group predicates, each group an AND of inclusive range
+    predicates over only the bounds a condition sets (validation guarantees at
+    least one). Columns are CAST to DATE so TIMESTAMP/TIMESTAMPTZ compare at DATE
+    granularity (a 23:59 stamp on the end day is inside; TIMESTAMPTZ uses DuckDB's
+    session-default timezone); bounds are bound as parameters and CAST to DATE. A
+    NULL date fails its condition (SQL semantics) but the row may still pass via
+    another OR group.
+    """
+    err = _validate_date_range_config(cfg)
+    if err:
+        raise ValueError(err)
+
+    group_predicates: list[str] = []
+    params: list[str] = []
+    for group in cfg["groups"]:
+        condition_predicates: list[str] = []
+        for cond in group["conditions"]:
+            col_sql = f'CAST("{cond["column"]}" AS DATE)'
+            for bound, op in ((cond.get("start"), ">="), (cond.get("end"), "<=")):
+                if bound not in (None, ""):
+                    condition_predicates.append(f"{col_sql} {op} CAST(? AS DATE)")
+                    params.append(bound)
+        group_predicates.append("(" + " AND ".join(condition_predicates) + ")")
+    where = " OR ".join(group_predicates)
+
+    _view = f"_builtin_date_range_{uuid.uuid4().hex[:8]}"
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_view}" AS SELECT * FROM df')
+    try:
+        result = conn.execute(f'SELECT * FROM "{_view}" WHERE {where}', params).df()
+    finally:
+        conn.execute(f'DROP VIEW IF EXISTS "{_view}"')
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -645,6 +722,15 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
         # last in the pinned tail; rank 1 belongs to date_range (runs before rename
         # because its conditions reference registered column names that rename relabels).
         pinned_tail=2,
+    ),
+    "date_range": BuiltinSpec(
+        validate=_validate_date_range_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_date_range(conn, df, cfg), None),
+        singleton=True,
+        # PRD date-range-filter: the date filter always applies to the final table
+        # (after every positional step) but before rename, whose relabelling would
+        # invalidate the registered column names the conditions reference.
+        pinned_tail=1,
     ),
 }
 

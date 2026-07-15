@@ -1,4 +1,4 @@
-"""Behavioral guarantees for built-in pipeline steps (join, pivot, filter, rename).
+"""Behavioral guarantees for built-in pipeline steps (join, pivot, filter, rename, date_range).
 
 Guarantees:
   B1. attach_builtin creates a source_builtin_map row for a valid join config.
@@ -20,6 +20,11 @@ Guarantees:
   B16. Pinned-tail ordering is spec-metadata-driven (#83/#116): defined once as
        BuiltinSpec.pinned_tail, consumed by all three ordering sites (pipeline read,
        unified pipeline, run execution order); a second pinned type is a registration.
+  B17. date_range built-in (#117): registered spec + catalog row on fresh AND
+       pre-feature DBs (idempotent seed migration); pure validator over grouped
+       range conditions; DuckDB executor — inclusive bounds, one-sided ranges,
+       TIMESTAMP/TIMESTAMPTZ at DATE granularity, NULL fails its condition,
+       AND within group / OR across groups; pinned tail rank 1 (before rename).
 """
 from __future__ import annotations
 
@@ -41,6 +46,8 @@ from pipeui.backend.domain.functions.builtins import (
     patch_builtin,
     _validate_rename_config,
     _execute_rename,
+    _validate_date_range_config,
+    _execute_date_range,
 )
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.runner.run import run_pipeline
@@ -378,7 +385,7 @@ def test_unified_pipeline_unknown_source(db):
 def test_builtin_registry_seeded_with_builtin_rows(db):
     rows = db.execute("SELECT builtin_type FROM builtin_registry ORDER BY builtin_type").fetchall()
     types = [r[0] for r in rows]
-    assert set(types) == {"join", "pivot", "filter", "rename"}
+    assert set(types) == {"join", "pivot", "filter", "rename", "date_range"}
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +397,32 @@ def test_create_schema_idempotent_no_duplicates(db):
     create_schema(db)
     create_schema(db)
     count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
-    assert count == 4  # join, pivot, filter, rename
+    assert count == 5  # join, pivot, filter, rename, date_range
+
+
+# ---------------------------------------------------------------------------
+# B17 (#120) — date_range catalog row migrates onto a pre-feature DB idempotently
+# ---------------------------------------------------------------------------
+
+def test_date_range_seed_migrates_pre_feature_db_idempotently(db):
+    """#117 criterion 1: a DB created before the date_range feature (builtin_registry
+    holds only the original 4 rows) gains the date_range catalog row when
+    create_schema runs again (app startup path — the same INSERT OR IGNORE seed
+    mechanism the rename builtin used), and re-running the migration does not
+    duplicate it (count grows by exactly one)."""
+    # Simulate a pre-feature DB: full schema, but no date_range catalog row.
+    db.execute("DELETE FROM builtin_registry WHERE builtin_type = 'date_range'")
+    pre_count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
+    assert pre_count == 4  # the pre-feature seed set
+
+    create_schema(db)  # the migration: startup re-runs the idempotent seed
+    rows = db.execute("SELECT builtin_type FROM builtin_registry").fetchall()
+    assert ("date_range",) in rows
+    assert len(rows) == pre_count + 1  # grew by exactly one
+
+    create_schema(db)  # idempotent: a second migration pass adds nothing
+    count = db.execute("SELECT COUNT(*) FROM builtin_registry").fetchone()[0]
+    assert count == pre_count + 1
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +440,9 @@ def test_get_builtins_endpoint(db):
     resp = client.get("/builtins")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 4
+    assert len(data) == 5
     types = {row["builtin_type"] for row in data}
-    assert types == {"join", "pivot", "filter", "rename"}
+    assert types == {"join", "pivot", "filter", "rename", "date_range"}
     for row in data:
         assert "builtin_id" in row
         assert "display_name" in row
@@ -719,7 +751,7 @@ def test_builtin_dispatch_is_registry_driven(db):
     import pipeui.backend.domain.functions.builtins as b
 
     # The shipped registry holds exactly the built-in types, each a BuiltinSpec.
-    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter", "rename"}
+    assert set(b.BUILTIN_EXECUTORS) == {"join", "pivot", "filter", "rename", "date_range"}
     assert all(isinstance(s, b.BuiltinSpec) for s in b.BUILTIN_EXECUTORS.values())
 
     source_id, _ = _make_source(db, "ocp")
@@ -824,6 +856,198 @@ def test_rename_pinned_last_in_execution(db):
 
 
 # ---------------------------------------------------------------------------
+# date_range built-in (#117) — pure config validator (#121)
+# ---------------------------------------------------------------------------
+
+def _dr_cfg(*groups):
+    """Build a date_range config from condition lists: _dr_cfg([c1, c2], [c3])."""
+    return {"groups": [{"conditions": list(conds)} for conds in groups]}
+
+
+def test_validate_date_range_config_rejects_invalid_shapes():
+    """#117 criterion 2 (#121) — the pure validator rejects: zero groups, an empty
+    group, a condition missing a column, a condition with both bounds empty, and
+    start > end. Structural only — no DB access."""
+    # zero groups
+    assert _validate_date_range_config({}) is not None
+    assert _validate_date_range_config({"groups": []}) is not None
+    # an empty group (no conditions)
+    assert _validate_date_range_config(_dr_cfg([])) is not None
+    # a condition missing a column
+    assert _validate_date_range_config(
+        _dr_cfg([{"start": "2025-01-01", "end": "2025-03-31"}])
+    ) is not None
+    # both bounds empty — None and "" both count as absent
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": None, "end": None}])
+    ) is not None
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "", "end": ""}])
+    ) is not None
+    # start > end
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-06-01", "end": "2025-01-01"}])
+    ) is not None
+
+
+def test_validate_date_range_config_accepts_one_sided_and_multi_group():
+    """#117 criterion 2 (#121) — one-sided conditions (start-only / end-only) and
+    multi-group configs are valid; the same column may repeat across groups."""
+    # both bounds
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-01-01", "end": "2025-03-31"}])
+    ) is None
+    # start-only (on-or-after) — open bound as None or ""
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "2025-01-01", "end": None}])
+    ) is None
+    # end-only (on-or-before)
+    assert _validate_date_range_config(
+        _dr_cfg([{"column": "d", "start": "", "end": "2025-03-31"}])
+    ) is None
+    # multi-group, multi-condition, same column in two groups
+    assert _validate_date_range_config(_dr_cfg(
+        [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"},
+         {"column": "ship", "start": None, "end": "2025-06-30"}],
+        [{"column": "eff", "start": "2025-01-01", "end": None}],
+    )) is None
+
+
+# ---------------------------------------------------------------------------
+# date_range built-in (#117) — DuckDB executor (#122)
+# ---------------------------------------------------------------------------
+
+def _run_date_range(conn, df, cfg):
+    result, consumed = execute_builtin_step(conn, df, _builtin_step("date_range", cfg))
+    assert consumed is None  # date_range never consumes another source's result
+    return result
+
+
+def test_execute_date_range_inclusive_and_one_sided_bounds(db):
+    """#117 criterion 3 (#122) — keeps exactly the matching rows with inclusive
+    bounds on both ends; start-only = on-or-after, end-only = on-or-before.
+    Realistic data: boundary-day rows on both ends and a NULL date."""
+    df = pd.DataFrame({
+        "id": [1, 2, 3, 4, 5, 6],
+        "d": [
+            datetime.date(2024, 12, 31),  # day before start boundary
+            datetime.date(2025, 1, 1),    # start boundary — inclusive
+            datetime.date(2025, 2, 15),   # inside
+            datetime.date(2025, 3, 31),   # end boundary — inclusive
+            datetime.date(2025, 4, 1),    # day after end boundary
+            None,                          # NULL date — never matches
+        ],
+    })
+
+    # Both bounds: [2025-01-01, 2025-03-31] inclusive on both ends.
+    both = _run_date_range(db, df, _dr_cfg(
+        [{"column": "d", "start": "2025-01-01", "end": "2025-03-31"}]))
+    assert sorted(both["id"]) == [2, 3, 4]
+
+    # Start-only: on-or-after 2025-01-01.
+    start_only = _run_date_range(db, df, _dr_cfg(
+        [{"column": "d", "start": "2025-01-01", "end": None}]))
+    assert sorted(start_only["id"]) == [2, 3, 4, 5]
+
+    # End-only: on-or-before 2025-03-31.
+    end_only = _run_date_range(db, df, _dr_cfg(
+        [{"column": "d", "start": "", "end": "2025-03-31"}]))
+    assert sorted(end_only["id"]) == [1, 2, 3, 4]
+
+
+def test_execute_date_range_timestamp_compares_at_date_granularity(db):
+    """#117 criterion 4 (#122) — TIMESTAMP and TIMESTAMPTZ columns compare at DATE
+    granularity: a row stamped 23:59 on the range's end day is kept (the last day
+    of a reporting period is never silently dropped)."""
+    ts_df = pd.DataFrame({
+        "id": [1, 2, 3],
+        "ts": pd.to_datetime([
+            "2025-03-31 23:59:00",   # 23:59 on the end day — must be kept
+            "2025-01-01 00:00:00",   # midnight on the start day
+            "2025-04-01 00:00:01",   # just past the end day
+        ]),
+    })
+    assert str(db.execute("SELECT typeof(ts) FROM ts_df LIMIT 1").fetchone()[0]) == "TIMESTAMP"
+    kept = _run_date_range(db, ts_df, _dr_cfg(
+        [{"column": "ts", "start": "2025-01-01", "end": "2025-03-31"}]))
+    assert sorted(kept["id"]) == [1, 2]
+
+    # TIMESTAMPTZ casts use DuckDB's session-default timezone (PRD); pin it to UTC
+    # so the boundary assertion is deterministic on any machine.
+    db.execute("SET TimeZone = 'UTC'")
+    tstz_df = pd.DataFrame({
+        "id": [1, 2],
+        "ts": pd.to_datetime([
+            "2025-03-31 23:59:00",
+            "2025-04-01 00:00:01",
+        ]).tz_localize("UTC"),
+    })
+    assert "TIMESTAMP WITH TIME ZONE" in str(
+        db.execute("SELECT typeof(ts) FROM tstz_df LIMIT 1").fetchone()[0]
+    )
+    kept_tz = _run_date_range(db, tstz_df, _dr_cfg(
+        [{"column": "ts", "start": "2025-01-01", "end": "2025-03-31"}]))
+    assert sorted(kept_tz["id"]) == [1]
+
+
+def test_execute_date_range_null_fails_condition_but_row_can_pass_via_or_group(db):
+    """#117 criterion 5 (#122) — a NULL date fails its condition (standard SQL),
+    but the row can still pass via another OR group on a different column."""
+    df = pd.DataFrame({
+        "id": [1, 2, 3],
+        "eff": [None, None, datetime.date(2025, 2, 1)],           # NULL effective dates
+        "renewal": [datetime.date(2025, 8, 1), datetime.date(2024, 5, 1), None],
+    })
+    cfg = _dr_cfg(
+        [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"}],   # group 1
+        [{"column": "renewal", "start": "2025-01-01", "end": "2025-12-31"}],  # OR group 2
+    )
+    kept = _run_date_range(db, df, cfg)
+    # id=1: NULL eff fails group 1, but renewal 2025-08-01 passes group 2 -> kept.
+    # id=2: NULL eff fails group 1 AND renewal 2024 fails group 2 -> dropped.
+    # id=3: eff passes group 1 (NULL renewal fails group 2 but OR needs one) -> kept.
+    assert sorted(kept["id"]) == [1, 3]
+
+
+def test_execute_date_range_and_within_group_or_across_groups(db):
+    """#117 criterion 6 (#122) — conditions within a group AND; groups OR. The
+    matrix includes the same column (eff) in two different groups: the PRD's
+    '(eff in Q1 AND shipped by June 30) OR eff on-or-after July 1' shape."""
+    df = pd.DataFrame({
+        "id": [1, 2, 3, 4, 5],
+        "eff": [
+            datetime.date(2025, 2, 1),   # in Q1
+            datetime.date(2025, 2, 1),   # in Q1
+            datetime.date(2025, 9, 1),   # after July 1
+            datetime.date(2024, 12, 1),  # before Q1
+            None,                        # NULL — fails both groups' eff conditions
+        ],
+        "ship": [
+            datetime.date(2025, 5, 1),   # by June 30
+            datetime.date(2025, 8, 1),   # after June 30
+            datetime.date(2025, 8, 1),
+            datetime.date(2025, 5, 1),   # by June 30 — but eff fails its AND
+            datetime.date(2025, 5, 1),
+        ],
+    })
+    cfg = _dr_cfg(
+        # group 1: eff in Q1 AND shipped by June 30
+        [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"},
+         {"column": "ship", "start": None, "end": "2025-06-30"}],
+        # group 2 (OR): eff on-or-after July 1 — same column as group 1
+        [{"column": "eff", "start": "2025-07-01", "end": None}],
+    )
+    kept = _run_date_range(db, df, cfg)
+    # id=1: group 1 fully holds -> kept.
+    # id=2: ship fails group 1's AND; eff in Q1 fails group 2 -> dropped
+    #       (an OR-within-group bug would keep it).
+    # id=3: group 2 holds -> kept.
+    # id=4: eff fails group 1's AND despite ship passing; fails group 2 -> dropped.
+    # id=5: NULL eff fails both groups -> dropped.
+    assert sorted(kept["id"]) == [1, 3]
+
+
+# ---------------------------------------------------------------------------
 # B16 — pinned-tail ordering is spec-metadata-driven (#83 / #116)
 # ---------------------------------------------------------------------------
 
@@ -891,6 +1115,33 @@ def test_pinned_tail_ordering_comes_from_spec_metadata_only(db):
     finally:
         b.BUILTIN_EXECUTORS.clear()
         b.BUILTIN_EXECUTORS.update(saved)
+
+
+def test_date_range_sorts_in_pinned_tail_before_rename(db):
+    """#117 criterion 7 (#120) — date_range sorts in the pinned tail: after every
+    positional step and before rename, at all three ordering consumers (pipeline
+    read, unified pipeline, run execution order), via slice 1's spec-metadata
+    mechanism. Attach order gives rename the LOWEST position and filter the
+    HIGHEST (rename 0, date_range 1, filter 2); stored positions would order them
+    rename, date_range, filter — the pinned tail must reorder to
+    filter, date_range, rename."""
+    source_id, _ = _make_source(db, "drtail")
+    _make_instance_table(db, source_id, pd.DataFrame({
+        "a": [1, 2],
+        "b": [3, 4],
+        "d": [datetime.date(2025, 1, 15), datetime.date(2025, 6, 1)],
+    }))
+
+    assert attach_builtin(db, source_id, "rename", {"renames": {"a": "A"}})["ok"]
+    assert attach_builtin(db, source_id, "date_range", {
+        "groups": [{"conditions": [{"column": "d", "start": "2025-01-01", "end": None}]}]
+    })["ok"]
+    assert attach_builtin(db, source_id, "filter", {"column": "b", "operator": "is_not_null"})["ok"]
+
+    read_order, unified_order, run_order = _builtin_order_at_all_three_consumers(db, source_id)
+    assert read_order == ["filter", "date_range", "rename"], read_order
+    assert unified_order == ["filter", "date_range", "rename"], unified_order
+    assert run_order == ["filter", "date_range", "rename"], run_order
 
 
 def test_second_pinned_type_sorts_between_positional_and_rename(db):
