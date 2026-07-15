@@ -7,8 +7,9 @@ attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
 detach_builtin(conn, source_id, step_id) -> bool
     Removes the row; returns False when not found.
 
-patch_builtin(conn, source_id, step_id, *, builtin_config=None, position=None) -> bool
-    Updates builtin_config and/or position; returns False when not found.
+patch_builtin(conn, source_id, step_id, *, builtin_config=None, position=None) -> dict | None
+    Updates builtin_config and/or position; returns {"ok": True}, a
+    {"ok": False, "detail": ...} write-boundary rejection, or None when not found.
 
 get_builtin_steps(conn, source_id) -> list[dict]
     Returns all source_builtin_map rows for a source ordered by position,
@@ -186,6 +187,52 @@ def _validate_date_range_config(cfg: dict) -> str | None:
     return None
 
 
+# Column types eligible for date_range conditions (PRD: date-typed columns only;
+# VARCHAR-held dates are fixed via column-type migration, not accepted here).
+_DATE_COLUMN_TYPES = {"DATE", "TIMESTAMP", "TIMESTAMPTZ"}
+
+
+def _date_range_boundary_check(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    cfg: dict,
+) -> str | None:
+    """Write-boundary check for a date_range config (#118 / #123) — what the pure
+    validator cannot see: every condition column must be a DATE/TIMESTAMP/TIMESTAMPTZ
+    column registered on the source per ``column_registry``. Returns a rejection
+    message naming the offending column, or None.
+
+    Runs the pure shape validator first: the patch path never ran it, and the
+    eligibility walk below assumes a structurally valid config. Lives at the
+    attach/patch write boundary (the workflow layer owns the connection) — the same
+    boundary-owns-DB-checks pattern Principle 1 uses for hash collisions.
+    """
+    err = _validate_date_range_config(cfg)
+    if err:
+        return err
+    rows = conn.execute(
+        """
+        SELECT cr.column_name, cr.column_type
+        FROM column_registry cr
+        JOIN source_column_map scm ON scm.column_id = cr.column_id
+        WHERE scm.source_id = ?
+        """,
+        [source_id],
+    ).fetchall()
+    col_types = {name: ctype for name, ctype in rows}
+    for group in cfg["groups"]:
+        for cond in group["conditions"]:
+            col = cond["column"]
+            if col not in col_types:
+                return f"date_range condition column {col!r} is not a registered column of this source"
+            if col_types[col] not in _DATE_COLUMN_TYPES:
+                return (
+                    f"date_range condition column {col!r} has type {col_types[col]}; "
+                    f"only DATE, TIMESTAMP, or TIMESTAMPTZ columns are eligible"
+                )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # attach / detach / patch
 # ---------------------------------------------------------------------------
@@ -221,6 +268,15 @@ def attach_builtin(
         [source_id, builtin_type],
     ).fetchone() is not None:
         return {"ok": False, "detail": f"only one {builtin_type!r} step is allowed per source"}
+
+    # Write-boundary check (#118/#123) — a DB-aware validation the pure validator
+    # cannot do (e.g. date_range's date-typed column eligibility). Registered on the
+    # spec like validate/singleton, so a future boundary-checked type is one
+    # registration — no type-specific branch here (OCP).
+    if spec.boundary_validate is not None:
+        err = spec.boundary_validate(conn, source_id, builtin_config)
+        if err:
+            return {"ok": False, "detail": err}
 
     # Position = MAX(position)+1 across both map tables for this source
     sfm_max = conn.execute(
@@ -264,15 +320,26 @@ def patch_builtin(
     *,
     builtin_config: dict | None = None,
     position: int | None = None,
-) -> bool:
-    """Update builtin_config and/or position.  Returns False when not found."""
+) -> dict | None:
+    """Update builtin_config and/or position.
+
+    Returns ``{"ok": True}`` on success, ``{"ok": False, "detail": "..."}`` when the
+    step's registered write-boundary check rejects the new config (#118/#123 — the
+    same rejection shape ``attach_builtin`` uses), or ``None`` when the step is not
+    found. Types without a ``boundary_validate`` registration patch exactly as before.
+    """
     row = conn.execute(
-        "SELECT step_id FROM source_builtin_map WHERE step_id = ? AND source_id = ?",
+        "SELECT builtin_type FROM source_builtin_map WHERE step_id = ? AND source_id = ?",
         [step_id, source_id],
     ).fetchone()
     if row is None:
-        return False
+        return None
     if builtin_config is not None:
+        spec = BUILTIN_EXECUTORS.get(row[0])
+        if spec is not None and spec.boundary_validate is not None:
+            err = spec.boundary_validate(conn, source_id, builtin_config)
+            if err:
+                return {"ok": False, "detail": err}
         conn.execute(
             "UPDATE source_builtin_map SET builtin_config = ? WHERE step_id = ?",
             [json.dumps(builtin_config), step_id],
@@ -282,7 +349,7 @@ def patch_builtin(
             "UPDATE source_builtin_map SET position = ? WHERE step_id = ?",
             [position, step_id],
         )
-    return True
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +745,11 @@ class BuiltinSpec:
       materialize path; non-join built-ins accept-and-ignore it and return ``consumed_result_id=None``.
     - ``singleton`` — at most one step of this type per source (enforced in attach_builtin);
       rename is singleton + pinned-tail (#40).
+    - ``boundary_validate(conn, source_id, cfg) -> str | None`` — optional DB-aware
+      write-boundary check (#118/#123), run by attach_builtin and patch_builtin after
+      the pure ``validate``; error string or None. For checks the pure validator
+      cannot do (e.g. date_range's date-typed column eligibility per column_registry).
+      ``None`` (the default) means no boundary check — attach/patch behave as before.
     - ``pinned_tail`` — ordered pinned-tail metadata (#83/#116). ``None`` (the default)
       means positional: the step sorts by its stored position among the other
       positional steps. An ``int >= 1`` pins the step to the tail: it sorts after
@@ -693,6 +765,9 @@ class BuiltinSpec:
     execute: Callable[..., "tuple[pd.DataFrame, str | None]"]
     singleton: bool = False
     pinned_tail: Optional[int] = None
+    boundary_validate: Optional[
+        Callable[[duckdb.DuckDBPyConnection, uuid.UUID, dict], "str | None"]
+    ] = None
 
 
 # The dispatch table both attach_builtin (validation) and execute_builtin_step
@@ -731,6 +806,9 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
         # (after every positional step) but before rename, whose relabelling would
         # invalidate the registered column names the conditions reference.
         pinned_tail=1,
+        # Date-typed column eligibility needs column_registry — a write-boundary
+        # check, not a pure-validator one (#118/#123).
+        boundary_validate=_date_range_boundary_check,
     ),
 }
 
