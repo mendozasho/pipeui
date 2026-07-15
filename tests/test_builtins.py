@@ -1315,6 +1315,97 @@ def test_second_date_range_attach_rejected_by_generic_singleton_flag(builtins_cl
     ).fetchone()[0] == 1
 
 
+# ---------------------------------------------------------------------------
+# date_range built-in (#118 / #124) — Principle-7 round-trip + unified payload
+# ---------------------------------------------------------------------------
+
+def _date_range_step_from_pipeline(client, source_id):
+    """GET the unified pipeline and return its date_range step dict."""
+    resp = client.get(f"/sources/{source_id}/pipeline")
+    assert resp.status_code == 200, resp.text
+    matches = [
+        s for s in resp.json()["steps"]
+        if s.get("step_type") == "builtin" and s.get("builtin_type") == "date_range"
+    ]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
+@pytest.mark.integration
+def test_patch_date_range_round_trips_groups_and_conditions_in_persisted_order(builtins_client, db):
+    """#118 criterion 3 (#124) — Principle 7 at the API seam: PATCH a multi-group
+    config, then read it back through the unified pipeline payload — groups and
+    conditions come back in persisted order with persisted bounds (including
+    one-sided None/"" bounds), byte-equal semantics. Then save untouched (PATCH the
+    read-back config) and read back again: still identical — open, save untouched,
+    unchanged."""
+    source_id = _make_typed_source(db, {
+        "eff": "DATE", "ship": "TIMESTAMP", "renewal": "TIMESTAMPTZ",
+    })
+    attached = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": _dr_cfg([{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"}]),
+    })
+    assert attached.status_code == 200, attached.text
+    step_id = attached.json()["step_id"]
+
+    # Deliberately non-alphabetical, non-add-order shape: group order [ship+eff, renewal],
+    # conditions within group 1 ordered [ship, eff], mixed one-sided bounds (None and "").
+    patched_cfg = {
+        "groups": [
+            {"conditions": [
+                {"column": "ship", "start": "2025-07-01", "end": None},
+                {"column": "eff", "start": "2025-01-01", "end": "2025-03-31"},
+            ]},
+            {"conditions": [
+                {"column": "renewal", "start": "", "end": "2025-12-31"},
+            ]},
+        ],
+    }
+    presp = builtins_client.patch(f"/sources/{source_id}/attach-builtin/{step_id}", json={
+        "builtin_config": patched_cfg,
+    })
+    assert presp.status_code == 200, presp.text
+
+    # Edit-load returns the persisted form: exact group order, condition order, bounds.
+    step = _date_range_step_from_pipeline(builtins_client, source_id)
+    assert step["builtin_config"] == patched_cfg
+
+    # Edit-save round-trips: saving the read-back config untouched changes nothing.
+    resave = builtins_client.patch(f"/sources/{source_id}/attach-builtin/{step_id}", json={
+        "builtin_config": step["builtin_config"],
+    })
+    assert resave.status_code == 200, resave.text
+    assert _date_range_step_from_pipeline(builtins_client, source_id)["builtin_config"] == patched_cfg
+
+
+@pytest.mark.integration
+def test_unified_pipeline_payload_lists_date_range_in_pinned_tail_before_rename(builtins_client, db):
+    """#118 criterion 5 (#124) — the unified pipeline payload (GET
+    /sources/{sid}/pipeline over HTTP) lists date_range in the pinned tail: after
+    every positional step and before rename, despite attach order giving rename the
+    lowest stored position (rename 0, date_range 1, filter 2)."""
+    source_id = _make_typed_source(db, {"eff": "DATE", "amount": "INTEGER"})
+
+    for btype, cfg in [
+        ("rename", {"renames": {"amount": "total"}}),
+        ("date_range", _dr_cfg([{"column": "eff", "start": "2025-01-01", "end": None}])),
+        ("filter", {"column": "amount", "operator": "is_not_null"}),
+    ]:
+        resp = builtins_client.post(f"/sources/{source_id}/attach-builtin", json={
+            "builtin_type": btype, "builtin_config": cfg,
+        })
+        assert resp.status_code == 200, (btype, resp.text)
+
+    payload = builtins_client.get(f"/sources/{source_id}/pipeline")
+    assert payload.status_code == 200, payload.text
+    order = [
+        s["builtin_type"] for s in payload.json()["steps"]
+        if s.get("step_type") == "builtin"
+    ]
+    assert order == ["filter", "date_range", "rename"], order
+
+
 def test_second_pinned_type_sorts_between_positional_and_rename(db):
     """#116 criterion 3 — a second pinned type is a REGISTRATION, not a fourth sort
     site: a test double with pinned_tail=1 (rename carries pinned_tail=2) sorts after

@@ -1405,3 +1405,95 @@ def test_get_pipeline_emits_per_function_output_after_patch(client, db):
     # ordered targets round-trip as [{column_id, column_name}, ...] in position order
     two_targets = [t["column_id"] for t in fns[str(fn_two_id)]["output_targets"]]
     assert two_targets == [str(col_ids[1]), str(col_ids[0])]
+
+
+# ---------------------------------------------------------------------------
+# date-range-filter slice 3 (#118 / #124) — end-to-end over HTTP: ingest a real
+# CSV source, attach a date_range, run the pipeline, and the staging read-back
+# plus the transformed export contain only the matching rows.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def e2e_client(db):
+    """TestClient carrying both the builtins router (attach over HTTP) and the
+    pipelines router (run / staging / export) on one app + sandbox."""
+    from pipeui.middleware.builtins import router as builtins_router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.include_router(builtins_router)
+    app.dependency_overrides[get_conn] = lambda: db
+    yield TestClient(app)
+
+
+@pytest.mark.integration
+def test_date_range_end_to_end_run_reduces_staging_and_transformed_export(e2e_client, db, tmp_path):
+    """#118 criterion 4 (#124) — end to end over HTTP: ingest a real CSV source with
+    DATE columns (realistic data: NULL dates and boundary rows), attach a two-group
+    date_range over HTTP ('eff in Q1 2025 OR renewal on-or-after 2025-01-01'), POST
+    the pipeline run, and both GET /staging and GET /export/transformed contain only
+    the matching rows."""
+    import csv as _csv
+
+    from pipeui.backend.domain.sources.create import create_source
+    from pipeui.backend.domain.sources.ingestion import ingest_source
+
+    csv_path = tmp_path / "policies.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["id", "policy", "eff", "renewal"])
+        w.writerows([
+            ["1", "alpha",   "2025-01-01", ""],            # g1: start boundary (inclusive); NULL renewal
+            ["2", "bravo",   "2024-12-31", "2025-08-01"],  # g1 fails; g2 (one-sided) passes
+            ["3", "charlie", "",           "2024-05-01"],  # NULL eff fails g1; renewal too early -> dropped
+            ["4", "delta",   "2025-03-31", "2024-01-01"],  # g1: end boundary (inclusive)
+            ["5", "echo",    "2025-04-01", ""],            # day after g1 end; NULL renewal -> dropped
+        ])
+
+    source_id, _ = create_source(
+        conn=db,
+        file_path=str(csv_path),
+        source_name="date_range_e2e",
+        primary_key="id",
+        ingestion_method="upsert",
+    )
+    ingest_source(conn=db, source_id=source_id, file_path=str(csv_path))
+
+    # Realistic-ingest sanity: DuckDB sniffing registered the date columns as DATE
+    # (otherwise the write boundary would rightly reject the attach below).
+    eff_type = db.execute(
+        "SELECT cr.column_type FROM column_registry cr "
+        "JOIN source_column_map scm ON scm.column_id = cr.column_id "
+        "WHERE scm.source_id = ? AND cr.column_name = 'eff'",
+        [source_id],
+    ).fetchone()[0]
+    assert eff_type == "DATE", eff_type
+
+    attach = e2e_client.post(f"/sources/{source_id}/attach-builtin", json={
+        "builtin_type": "date_range",
+        "builtin_config": {"groups": [
+            {"conditions": [{"column": "eff", "start": "2025-01-01", "end": "2025-03-31"}]},
+            {"conditions": [{"column": "renewal", "start": "2025-01-01", "end": None}]},
+        ]},
+    })
+    assert attach.status_code == 200, attach.text
+    assert attach.json()["ok"] is True
+
+    run = e2e_client.post(f"/pipelines/{source_id}/run?run_type=all")
+    assert run.status_code == 200, run.text
+    builtin_steps = [s for s in run.json()["steps"] if s.get("step_type") == "builtin"]
+    assert len(builtin_steps) == 1
+    assert builtin_steps[0]["status"] == "ok", builtin_steps[0].get("error")
+    assert builtin_steps[0]["builtin_type"] == "date_range"
+
+    # Staging contains only the matching rows: 1 (start boundary), 2 (OR group), 4 (end boundary).
+    staging = e2e_client.get(f"/pipelines/{source_id}/staging")
+    assert staging.status_code == 200, staging.text
+    staging_ids = sorted(r["id"] for r in staging.json()["rows"])
+    assert staging_ids == [1, 2, 4], staging_ids
+
+    # The transformed export reflects the same reduction.
+    export = e2e_client.get(f"/pipelines/{source_id}/export/transformed")
+    assert export.status_code == 200, export.text
+    export_ids = sorted(r["id"] for r in export.json()["rows"])
+    assert export_ids == [1, 2, 4], export_ids
