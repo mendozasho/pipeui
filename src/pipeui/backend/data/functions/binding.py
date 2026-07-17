@@ -41,7 +41,9 @@ BindingKind = Literal["columns", "literal", "table", "source_ref"]
 
 # Scalar-shaped param types (bound to a column they receive per-row values; unbound
 # they resolve to a literal). The one vocabulary the executors and realize key off.
-SCALAR_TYPES = ("str", "int", "float", "bool")
+# `date` (#140) is sql-engine-only — .py scans cannot declare it, so a date literal
+# never crosses the worker's JSON extra_kwargs boundary.
+SCALAR_TYPES = ("str", "int", "float", "bool", "date")
 
 
 class RequiredParamError(Exception):
@@ -69,6 +71,10 @@ def coerce_scalar(value: str, param_type: str):
         return float(value)
     if param_type == "bool":
         return str(value).strip().lower() in ("true", "1", "yes")
+    if param_type == "date":
+        import datetime
+
+        return datetime.date.fromisoformat(str(value).strip())
     return value  # str
 
 
@@ -194,8 +200,11 @@ def bind_contract(contract: "FunctionContract", binding: StepBinding) -> list[Bo
         if pc.type_str == "pd.DataFrame":
             table_params.append(pc.name)
             continue
-        if pb.kind == "source_ref" and pb.source_ref is not None:
-            source_refs[pc.name] = pb.source_ref
+        if pc.type_str == "source_ref":
+            ref = pb.source_ref if pb.source_ref is not None else pb.value
+            if ref is None:
+                raise RequiredParamError(pc.name)
+            source_refs[pc.name] = ref
             continue
         if pb.columns:
             column_backed.append({"param_id": pc.name, "columns": list(pb.columns)})

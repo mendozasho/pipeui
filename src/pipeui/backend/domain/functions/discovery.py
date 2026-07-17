@@ -174,6 +174,21 @@ def _extract_py(file_path: Path) -> list[DiscoveredFunction]:
 # ---------------------------------------------------------------------------
 
 _SQL_COMMENT_RE = re.compile(r"^--\s*(\w+)\s*:\s*(.+)$")
+# #140: `-- param: <name> <type> [= <default>]` declares one template parameter.
+_SQL_PARAM_RE = re.compile(r"^--\s*param\s*:\s*(\w+)\s+(\w+)(?:\s*=\s*(.+))?$")
+
+# `-- param:` type spellings → canonical contract param types. `column` binds a
+# source column (rendered as a validated identifier); scalars bind as `?` values;
+# `table` receives the working frame as a registered view.
+_SQL_PARAM_TYPES: dict[str, str] = {
+    "column": "pd.Series",
+    "int": "int",
+    "float": "float",
+    "bool": "bool",
+    "str": "str",
+    "date": "date",
+    "table": "pd.DataFrame",
+}
 
 # Return-type suffix per function_type for SQL functions
 _SQL_RETURN_SUFFIX: dict[str, str] = {
@@ -186,16 +201,37 @@ _SQL_RETURN_SUFFIX: dict[str, str] = {
 def _parse_sql_header(source: str) -> dict | str:
     """Parse the leading comment block of a .sql file.
 
-    Returns ``{"function_name", "function_doc", "return_type", "signature"}``
-    or a str skip reason. Class/type facts are derived by the contract.
+    Returns ``{"function_name", "function_doc", "return_type", "signature",
+    "params"}`` (``params`` = ordered ``ParamContract`` tuple, empty for the
+    legacy implicit whole-table shape) or a str skip reason.
     """
     meta: dict[str, str] = {}
+    params: list[ParamContract] = []
     for line in source.splitlines():
         line = line.strip()
         if not line:
             continue  # skip blank lines (e.g. leading blank line after dedent)
         if not line.startswith("--"):
             break
+        pm = _SQL_PARAM_RE.match(line)
+        if pm:
+            p_name, raw_type, raw_default = pm.group(1), pm.group(2).lower(), pm.group(3)
+            type_str = _SQL_PARAM_TYPES.get(raw_type)
+            if type_str is None:
+                return (
+                    f"unsupported `-- param:` type `{raw_type}` on `{p_name}` "
+                    f"(expected one of: {', '.join(sorted(_SQL_PARAM_TYPES))})"
+                )
+            if raw_default is not None and type_str in ("pd.Series", "pd.DataFrame"):
+                return f"`-- param: {p_name}` — only scalar params may declare a default"
+            params.append(ParamContract(
+                name=p_name,
+                type_str=type_str,
+                position=len(params),
+                has_default=raw_default is not None,
+                default_value=raw_default.strip() if raw_default is not None else None,
+            ))
+            continue
         m = _SQL_COMMENT_RE.match(line)
         if m:
             meta[m.group(1).lower()] = m.group(2).strip()
@@ -207,11 +243,22 @@ def _parse_sql_header(source: str) -> dict | str:
     fn_type = raw_type if raw_type in ("transform", "validation") else "unknown"
     fn_return_type = _SQL_RETURN_SUFFIX[fn_type]
 
+    if params:
+        rendered = ", ".join(
+            f"{p.name}: {p.type_str}"
+            + (f" = {p.default_value}" if p.has_default else "")
+            for p in params
+        )
+        signature = f"({rendered}) -> {fn_return_type}"
+    else:
+        signature = f"{{source_table}}: pd.DataFrame -> {fn_return_type}"
+
     return {
         "function_name": meta["name"],
         "function_doc": meta.get("description") or None,
         "return_type": fn_return_type,
-        "signature": f"{{source_table}}: pd.DataFrame -> {fn_return_type}",
+        "signature": signature,
+        "params": tuple(params),
     }
 
 
@@ -225,12 +272,12 @@ def _extract_sql(file_path: Path) -> list[DiscoveredFunction]:
     if isinstance(parsed, str):
         return [DiscoveredFunction(file_path.stem, skip_reason=parsed)]
 
-    # A header with no param declarations is the implicit whole-table shape:
+    # A header with no `-- param:` declarations is the implicit whole-table shape:
     # zero params, function_class "pd.dataframe" (derived), body = the SQL text.
     contract = FunctionContract(
         name=parsed["function_name"],
         engine=ENGINE_SQL,
-        params=(),
+        params=parsed["params"],
         return_type=parsed["return_type"],
         signature=parsed["signature"],
         doc=parsed["function_doc"],

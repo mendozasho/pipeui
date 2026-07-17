@@ -90,17 +90,22 @@ class FunctionSpec:
             ),
             return_type=self.function_return_type or "pd.Series",
             signature="",
+            source_path=self.module_path or None,
         )
         binding = StepBinding(params=tuple(
             ParamBinding(
                 param_name=p["param_name"],
                 kind=(
                     "table" if p["param_type"] == "pd.DataFrame"
+                    else "source_ref" if p["param_type"] == "source_ref"
                     else "columns" if p.get("bindings")
                     else "literal"
                 ),
                 columns=tuple(p.get("bindings") or ()),
                 value=p.get("scalar_value"),
+                source_ref=(
+                    p.get("scalar_value") if p["param_type"] == "source_ref" else None
+                ),
             )
             for p in params
         ))

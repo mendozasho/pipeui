@@ -148,11 +148,17 @@ def fetch_steps(
                     param_name=p["param_name"],
                     kind=(
                         "table" if p["param_type"] == "pd.DataFrame"
+                        else "source_ref" if p["param_type"] == "source_ref"
                         else "columns" if p["bindings"]
                         else "literal"
                     ),
                     columns=tuple(p["bindings"]),
                     value=p["scalar_value"],
+                    # #140: a source reference persists its source_id in
+                    # source_scalar_map — the loader lifts it onto the binding.
+                    source_ref=(
+                        p["scalar_value"] if p["param_type"] == "source_ref" else None
+                    ),
                 )
                 for p in params_map.values()
             ))
