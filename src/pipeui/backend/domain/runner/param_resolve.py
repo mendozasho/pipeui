@@ -10,27 +10,12 @@ executors registry. No DuckDB, no worker, no step types — pure value coercion.
 """
 from __future__ import annotations
 
-
-class RequiredParamError(Exception):
-    """A scalar param has no persisted value and no Python default — the function
-    cannot run. Surfaced as a failed RunResult the frontend can pick up."""
-
-    def __init__(self, param_name: str):
-        self.param_name = param_name
-        super().__init__(
-            f"parameter '{param_name}' is required but no value or default was provided"
-        )
-
-
-def _coerce_scalar(value: str, param_type: str):
-    """Coerce a source_scalar_map / default_value VARCHAR to the param's Python type."""
-    if param_type == "int":
-        return int(value)
-    if param_type == "float":
-        return float(value)
-    if param_type == "bool":
-        return str(value).strip().lower() in ("true", "1", "yes")
-    return value  # str
+# Canonical homes moved to data/functions/binding.py (#136); re-exported here so the
+# executor catch-sites keep their identity until Phase 3 deletes this module.
+from pipeui.backend.data.functions.binding import (  # noqa: F401
+    RequiredParamError,
+    coerce_scalar as _coerce_scalar,
+)
 
 
 def resolve_scalar_kwargs(params: list[dict]) -> dict:

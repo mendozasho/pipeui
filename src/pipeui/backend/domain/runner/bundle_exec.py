@@ -33,22 +33,20 @@ from typing import Any
 import pandas as pd
 
 from pipeui.backend.data.base.fails import FailedFunctionEntry
-from pipeui.backend.data.runner.bundles import ArgumentBundle, pair_bundles
+# MixedShapeError / composite_key moved to their canonical home in
+# data/functions/binding.py (#136); imported back here so existing catch-sites and
+# callers keep working until Phase 3 collapses this module into realize().
+from pipeui.backend.data.functions.binding import (  # noqa: F401
+    SCALAR_TYPES as _SCALAR_TYPES,
+    MixedShapeError,
+    composite_key,
+)
+from pipeui.backend.data.runner.bundles import ArgumentBundle, pair_bundles  # noqa: F401
 from pipeui.backend.domain.runner.worker import call_function
-
-# Scalar-shaped param types: bound to a column, they receive a per-row value (the scalar
-# run), unlike a pd.Series param which receives the whole column.
-_SCALAR_TYPES = ("str", "int", "float", "bool")
 
 # The keyword the packed DataFrame is delivered under. Prefixed/suffixed to avoid
 # colliding with a real user param name (same latent risk build_scalar_wrapper carries).
 _FRAME_KWARG = "__pipeui_frame__"
-
-
-class MixedShapeError(Exception):
-    """A function mixes ``pd.Series`` and scalar-shaped column-backed params. The two
-    dispatch models (once-per-bundle vs once-per-row) are incompatible in a single call,
-    so the run is rejected before any worker is spawned."""
 
 
 @dataclass(frozen=True)
@@ -72,21 +70,6 @@ def collect_column_backed_params(params: list[dict]) -> list[dict]:
         p for p in params
         if p.get("bindings") and p["param_type"] in ("pd.Series", *_SCALAR_TYPES)
     ]
-
-
-def composite_key(bundle: ArgumentBundle, ordered_params: list[dict]) -> str:
-    """Stable, unique-per-bundle key seed for a multi-param bundle.
-
-    Uses the bundle's *varying* columns when any param varies (mirrors the single-column
-    semantics — the varying column is the label; broadcast/static params don't perturb
-    it). When every param is static (the single N=1 bundle), joins every param's bound
-    column so the one bundle still gets a descriptive, stable key. The separator is the
-    unit separator (``\\x1f``) so no real column name can contain it; ``normalize_label``
-    collapses it for display.
-    """
-    if bundle.varying_columns:
-        return "\x1f".join(str(c) for c in bundle.varying_columns)
-    return "\x1f".join(str(bundle.columns[p["param_id"]]) for p in ordered_params)
 
 
 def build_series_frame_wrapper(fn_name: str) -> str:

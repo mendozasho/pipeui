@@ -173,6 +173,18 @@ class FunctionContract:
             return "row"
         return "value"
 
+    def bind(self, binding: "Any") -> "list[Any]":
+        """Resolve a ``StepBinding`` into ordered ``BoundCall``s (#136).
+
+        Semantics live in ``binding.bind_contract`` (literals → homogeneity check →
+        ``pair_bundles`` outer axis); this method is the contract-side entry point.
+        Local import: ``binding.py`` imports this module for its types, so the edge
+        must point one way at import time.
+        """
+        from pipeui.backend.data.functions.binding import bind_contract
+
+        return bind_contract(self, binding)
+
     # -- serialization -----------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:

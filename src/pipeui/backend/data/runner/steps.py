@@ -29,6 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from pipeui.backend.data.functions.binding import StepBinding
+from pipeui.backend.data.functions.contract import FunctionContract
+
 FUNCTION = "function"
 BUILTIN = "builtin"
 SET = "set"
@@ -57,6 +60,11 @@ class FunctionSpec:
     append_name: str | None
     output_targets: tuple[str, ...]
     step_type: str = FUNCTION
+    # #136 shadow layer: the universal interface + this source's persisted binding,
+    # assembled by the loader from the same rows ``params`` carries. Additive — the
+    # executors migrate onto contract.bind() in Phase 3.
+    contract: FunctionContract | None = None
+    binding: StepBinding | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,8 @@ def _function_spec(member: Mapping[str, Any]) -> FunctionSpec:
         append_name=member.get("append_name"),
         output_targets=tuple(member.get("output_targets", ())),
         step_type=member.get("step_type", FUNCTION),
+        contract=member.get("contract"),
+        binding=member.get("binding"),
     )
 
 

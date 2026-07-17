@@ -15,10 +15,7 @@ from pipeui.backend.data.functions.classification import (
     derive_function_type,
 )
 from pipeui.backend.data.functions.contract import FunctionContract
-from pipeui.backend.domain.functions.discovery import (
-    discover_functions_in_file,
-    _inspect_function,
-)
+from pipeui.backend.domain.functions.discovery import _inspect_function
 from pipeui.backend.domain.functions.registration import (
     register_function_entry,
     scan_functions,
