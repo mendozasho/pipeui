@@ -81,7 +81,7 @@ def render_sql(
     *,
     body: str,
     views: Mapping[str, str],
-    columns_available: set[str],
+    columns_available: "set[str] | Mapping[str, set[str]]",
 ) -> tuple[str, list[Any]]:
     """Render a SQL template into ``(sql, ordered ? params)``.
 
@@ -90,9 +90,19 @@ def render_sql(
     vocabulary — never quoted-and-hoped), a view param with no registered view, or
     a scalar param with no resolved literal. Scalar values are appended to the
     param list in template (left→right) order, once per occurrence.
+
+    ``columns_available`` is one shared vocabulary set, or — for multi-frame
+    templates like join, where each side's columns validate against a different
+    frame — a per-param-name mapping (#146). A column param missing from the
+    mapping is rejected.
     """
     by_name = {p.name: p for p in contract.params}
     params_out: list[Any] = []
+
+    def _vocab(param_name: str) -> set[str]:
+        if isinstance(columns_available, Mapping):
+            return columns_available.get(param_name, set())
+        return columns_available
 
     def _substitute(m: re.Match) -> str:
         name = m.group(1)
@@ -113,7 +123,7 @@ def render_sql(
         # Column-bound (identifier) beats literal for value_or_column params.
         col = call.column_kwargs.get(name)
         if col is not None:
-            if col not in columns_available:
+            if col not in _vocab(name):
                 raise ValueError(
                     f"bound column '{col}' for param '{name}' is not a column of "
                     "the input — refresh the binding"

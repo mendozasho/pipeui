@@ -38,7 +38,6 @@ import duckdb
 import pandas as pd
 
 from pipeui.backend.data.base.ids import new_id
-from pipeui.backend.domain.runner.resolve import RAW, TRANSFORMED, resolve_frame
 from pipeui.backend.data.runner.steps import BuiltinStepContext
 # get_builtin_steps lives in step_loader (L1, pure read); re-exported here so
 # ``from pipeui.backend.domain.functions.builtins import get_builtin_steps`` keeps working.
@@ -495,120 +494,6 @@ def execute_builtin_step(
     return spec.execute(conn, df, cfg, run_transforms)
 
 
-def _execute_join(
-    conn: duckdb.DuckDBPyConnection,
-    left_df: pd.DataFrame,
-    cfg: dict,
-    *,
-    run_transforms: Optional[Callable[[duckdb.DuckDBPyConnection, uuid.UUID], None]] = None,
-) -> tuple[pd.DataFrame, str | None]:
-    """Execute a join built-in step.
-
-    Config shape:
-      { "right_source_id": "...", "join_type": "inner|left|right|full",
-        "on": [{"left_col": "...", "right_col": "..."}],
-        "use_transformed": bool, "keep_columns": "all" }
-
-    The right-hand source is resolved through ``resolve_frame`` per the
-    ``use_transformed`` flag — raw -> the source's instance table, transformed ->
-    the source's resolved transformed output (latest staging, materialized on demand
-    if never run). This is the single seam that decides where the join's right input
-    comes from, so the toggle is honored instead of always reading raw (PRD
-    Implementation Decisions -> Join honors the toggle).
-
-    Returns ``(result_df, consumed_result_id)``: when the join consumed a
-    transformed source, ``consumed_result_id`` is that resolved transformed-output's
-    ``result_id`` so the join records the result it consumed (lineage — PRD User
-    Story 7); a raw join consumes the source's own data, not a produced result, so
-    it is ``None``.
-    """
-    right_source_id = uuid.UUID(cfg["right_source_id"])
-    join_type = cfg.get("join_type", "inner").upper()
-    on_clauses = cfg["on"]
-    mode = TRANSFORMED if cfg.get("use_transformed") else RAW
-
-    # Resolve the right frame through the seam; register both sides as temp views so
-    # the join shape is uniform regardless of where the right frame came from. The
-    # injected ``run_transforms`` runner lets a transformed join materialize a
-    # never-run right source (DIP — resolve never imports the orchestrator).
-    right_df, ref = resolve_frame(conn, right_source_id, mode, run_transforms=run_transforms)
-    consumed_result_id = ref.result_id if mode == TRANSFORMED else None
-
-    _left_view = f"_builtin_join_left_{uuid.uuid4().hex[:8]}"
-    _right_view = f"_builtin_join_right_{uuid.uuid4().hex[:8]}"
-    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_left_view}" AS SELECT * FROM left_df')
-    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_right_view}" AS SELECT * FROM right_df')
-
-    on_sql = " AND ".join(
-        f'"{_left_view}"."{c["left_col"]}" = "{_right_view}"."{c["right_col"]}"'
-        for c in on_clauses
-    )
-
-    keep_columns = cfg.get("keep_columns", "all")
-    if keep_columns == "all":
-        select_clause = f'"{_left_view}".*, "{_right_view}".*'
-    else:
-        select_clause = "*"
-
-    sql = (
-        f'SELECT {select_clause} '
-        f'FROM "{_left_view}" '
-        f'{join_type} JOIN "{_right_view}" ON {on_sql}'
-    )
-    try:
-        result = conn.execute(sql).df()
-    finally:
-        conn.execute(f'DROP VIEW IF EXISTS "{_left_view}"')
-        conn.execute(f'DROP VIEW IF EXISTS "{_right_view}"')
-
-    return result, consumed_result_id
-
-
-def _execute_pivot(
-    conn: duckdb.DuckDBPyConnection,
-    df: pd.DataFrame,
-    cfg: dict,
-) -> pd.DataFrame:
-    """Execute a pivot built-in step using DuckDB PIVOT syntax.
-
-    Config shape:
-      { "index_columns": [...], "pivot_column": "...",
-        "value_columns": [{"col_id": "...", "col_name": "...", "aggregations": ["sum", "avg"]}] }
-    """
-    pivot_col = cfg["pivot_column"]
-    index_cols = cfg.get("index_columns", [])
-    value_columns = cfg["value_columns"]
-
-    _pivot_view = f"_builtin_pivot_{uuid.uuid4().hex[:8]}"
-    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_pivot_view}" AS SELECT * FROM df')
-
-    # Build PIVOT query
-    # DuckDB PIVOT: PIVOT tbl ON pivot_col USING agg(val_col) GROUP BY index_cols
-    # We build one pivot per (col_name, aggregation) combination.
-    # For multiple value_columns/aggregations we use a single PIVOT with multiple USING clauses.
-    using_parts = []
-    for vc in value_columns:
-        col_name = vc.get("col_name") or vc.get("col_id", "value")
-        aggs = vc.get("aggregations", ["sum"])
-        for agg in aggs:
-            using_parts.append(f'{agg}("{col_name}")')
-
-    using_clause = ", ".join(using_parts)
-    group_clause = (
-        f' GROUP BY {", ".join(chr(34) + c + chr(34) for c in index_cols)}'
-        if index_cols
-        else ""
-    )
-
-    sql = f'PIVOT "{_pivot_view}" ON "{pivot_col}" USING {using_clause}{group_clause}'
-    try:
-        result = conn.execute(sql).df()
-    finally:
-        conn.execute(f'DROP VIEW IF EXISTS "{_pivot_view}"')
-
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -648,6 +533,28 @@ class BuiltinSpec:
     boundary_validate: Optional[
         Callable[[duckdb.DuckDBPyConnection, uuid.UUID, dict], "str | None"]
     ] = None
+
+
+def _run_lowered_join(conn, df, cfg, run_transforms):
+    """Validate (this module owns the validators) then delegate to the lowered
+    join contract execution (#146). Returns (df, consumed_result_id)."""
+    err = _validate_join_config(cfg)
+    if err:
+        raise ValueError(err)
+    from pipeui.backend.domain.functions.builtin_lowering import execute_join_lowered
+
+    return execute_join_lowered(conn, df, cfg, run_transforms=run_transforms)
+
+
+def _run_lowered_pivot(conn, df, cfg):
+    """Validate (this module owns the validators) then delegate to the lowered
+    pivot contract execution (#146)."""
+    err = _validate_pivot_config(cfg)
+    if err:
+        raise ValueError(err)
+    from pipeui.backend.domain.functions.builtin_lowering import execute_pivot_lowered
+
+    return execute_pivot_lowered(conn, df, cfg)
 
 
 def _run_lowered_filter(conn, df, cfg):
@@ -691,13 +598,19 @@ def _run_lowered_date_range(conn, df, cfg):
 BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
     "join": BuiltinSpec(
         validate=_validate_join_config,
-        execute=lambda conn, df, cfg, run_transforms: _execute_join(
-            conn, df, cfg, run_transforms=run_transforms
+        # #146: lowered onto factory join contracts (builtin_lowering); the shim
+        # owns right-frame resolution (use_transformed), lineage, and per-side
+        # column vocabularies.
+        execute=lambda conn, df, cfg, run_transforms: _run_lowered_join(
+            conn, df, cfg, run_transforms
         ),
     ),
     "pivot": BuiltinSpec(
         validate=_validate_pivot_config,
-        execute=lambda conn, df, cfg, run_transforms: (_execute_pivot(conn, df, cfg), None),
+        # #146: lowered onto the factory pivot contract (builtin_lowering).
+        execute=lambda conn, df, cfg, run_transforms: (
+            _run_lowered_pivot(conn, df, cfg), None,
+        ),
     ),
     "filter": BuiltinSpec(
         validate=_validate_filter_config,

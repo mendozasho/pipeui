@@ -314,3 +314,180 @@ def execute_rename_lowered(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     for old, new in _rename_schedule(cols, renames):
         current = _apply_rename(current, old, new)
     return current
+
+
+# ---------------------------------------------------------------------------
+# join — factory-parameterized contracts + shim-owned execution (#146)
+# ---------------------------------------------------------------------------
+
+# Structural SQL vocabularies — these become template text, so they are closed
+# sets enforced HERE at lowering time (the retired executor interpolated
+# join_type from config verbatim; the whitelist is a hardening gain).
+_JOIN_TYPES = {"inner": "INNER", "left": "LEFT", "right": "RIGHT", "full": "FULL"}
+_PIVOT_AGGREGATIONS = {"sum", "avg", "min", "max", "count"}
+
+
+def join_contract(join_type: str, n_keys: int, keep_all: bool) -> FunctionContract:
+    """Build the join contract for one (join_type, key count, keep) shape.
+
+    Like filter's per-operator contracts, the structural parts of the SQL select
+    the contract instead of binding values. Each key pair is its own pair of
+    single-column params (``left_on_i`` / ``right_on_i``), so binding never
+    multi-select-expands — a composite key is N params in ONE call, not N calls.
+    """
+    sql_join = _JOIN_TYPES[join_type]
+    params: list[ParamContract] = [
+        ParamContract(name="left", type_str="pd.DataFrame", position=0),
+        ParamContract(name="right", type_str="source_ref", position=1),
+    ]
+    on_parts: list[str] = []
+    for i in range(n_keys):
+        params.append(ParamContract(name=f"left_on_{i}", type_str="pd.Series", position=2 + 2 * i))
+        params.append(ParamContract(name=f"right_on_{i}", type_str="pd.Series", position=3 + 2 * i))
+        on_parts.append(f"{{left}}.{{left_on_{i}}} = {{right}}.{{right_on_{i}}}")
+    select = "{left}.*, {right}.*" if keep_all else "*"
+    body = f"SELECT {select} FROM {{left}} {sql_join} JOIN {{right}} ON {' AND '.join(on_parts)}"
+    rendered = ", ".join(f"{p.name}: {p.type_str}" for p in params)
+    return FunctionContract(
+        name=f"join_{join_type}_{n_keys}key", engine=ENGINE_SQL, params=tuple(params),
+        return_type="pd.DataFrame", signature=f"({rendered}) -> pd.DataFrame",
+        body=body,
+    )
+
+
+def execute_join_lowered(conn, df, cfg, run_transforms=None):
+    """Run a join built-in through its factory contract; shim-owned execution.
+
+    The shim owns what the generic engine path cannot: resolving the right frame
+    per ``use_transformed`` (RAW instance table vs resolved transformed output,
+    materializing a never-run right source via the injected ``run_transforms``),
+    the consumed-result lineage, and the per-side column vocabularies (left keys
+    validate against the working frame, right keys against the resolved right
+    frame — reject-never-quote on both sides).
+
+    Returns ``(result_df, consumed_result_id)`` exactly like the retired
+    ``_execute_join``. The caller has already run the pure config validator.
+    """
+    import uuid as _uuid
+
+    from pipeui.backend.domain.runner.resolve import RAW, TRANSFORMED, resolve_frame
+    from pipeui.backend.domain.runner.sql_engine import render_sql
+
+    join_type = cfg.get("join_type", "inner")
+    if join_type not in _JOIN_TYPES:
+        raise ValueError(f"join_type must be one of {sorted(_JOIN_TYPES)!r}; got {join_type!r}")
+    on_clauses = cfg["on"]
+    keep_all = cfg.get("keep_columns", "all") == "all"
+
+    contract = join_contract(join_type, len(on_clauses), keep_all)
+    bindings: list[ParamBinding] = [
+        ParamBinding(param_name="left", kind="table"),
+        ParamBinding(param_name="right", kind="source_ref", source_ref=cfg["right_source_id"]),
+    ]
+    for i, clause in enumerate(on_clauses):
+        bindings.append(ParamBinding(
+            param_name=f"left_on_{i}", kind="columns", columns=(clause["left_col"],),
+        ))
+        bindings.append(ParamBinding(
+            param_name=f"right_on_{i}", kind="columns", columns=(clause["right_col"],),
+        ))
+    call = contract.bind(StepBinding(params=tuple(bindings)))[0]
+
+    mode = TRANSFORMED if cfg.get("use_transformed") else RAW
+    right_df, ref = resolve_frame(
+        conn, _uuid.UUID(cfg["right_source_id"]), mode, run_transforms=run_transforms,
+    )
+    consumed_result_id = ref.result_id if mode == TRANSFORMED else None
+
+    left_view = f"__pipeui_join_left_{_uuid.uuid4().hex[:8]}"
+    right_view = f"__pipeui_join_right_{_uuid.uuid4().hex[:8]}"
+    conn.register(left_view, df)
+    conn.register(right_view, right_df)
+    vocab = {}
+    for i in range(len(on_clauses)):
+        vocab[f"left_on_{i}"] = set(df.columns)
+        vocab[f"right_on_{i}"] = set(right_df.columns)
+    try:
+        sql, bound = render_sql(
+            contract, call, body=contract.body,
+            views={"left": left_view, "right": right_view},
+            columns_available=vocab,
+        )
+        result = conn.execute(sql, bound).df()
+    finally:
+        for view in (left_view, right_view):
+            try:
+                conn.unregister(view)
+            except Exception:
+                pass
+    return result, consumed_result_id
+
+
+# ---------------------------------------------------------------------------
+# pivot — factory-parameterized contract through the generic engine path (#146)
+# ---------------------------------------------------------------------------
+
+def pivot_contract(using_aggs: list[str], n_index: int) -> FunctionContract:
+    """Build the pivot contract for one (aggregation list, index count) shape.
+
+    ``using_aggs`` are whitelisted aggregation names (structural SQL — they
+    select the contract); each USING part and each GROUP BY column is its own
+    single-column param.
+    """
+    params: list[ParamContract] = [
+        ParamContract(name="table", type_str="pd.DataFrame", position=0),
+        ParamContract(name="pivot_column", type_str="pd.Series", position=1),
+    ]
+    using_parts: list[str] = []
+    for i, agg in enumerate(using_aggs):
+        params.append(ParamContract(name=f"value_{i}", type_str="pd.Series", position=2 + i))
+        using_parts.append(f"{agg}({{value_{i}}})")
+    for j in range(n_index):
+        params.append(ParamContract(
+            name=f"index_{j}", type_str="pd.Series", position=2 + len(using_aggs) + j,
+        ))
+    group = (
+        " GROUP BY " + ", ".join(f"{{index_{j}}}" for j in range(n_index))
+        if n_index else ""
+    )
+    body = f"PIVOT {{table}} ON {{pivot_column}} USING {', '.join(using_parts)}{group}"
+    rendered = ", ".join(f"{p.name}: {p.type_str}" for p in params)
+    return FunctionContract(
+        name=f"pivot_{'_'.join(using_aggs)}_{n_index}idx", engine=ENGINE_SQL,
+        params=tuple(params), return_type="pd.DataFrame",
+        signature=f"({rendered}) -> pd.DataFrame", body=body,
+    )
+
+
+def execute_pivot_lowered(conn, df, cfg):
+    """Run a pivot built-in through its factory contract via the generic engine.
+
+    Config shape unchanged. Each (value column, aggregation) combination becomes
+    one USING param (aggregations default to ["sum"], the retired executor's
+    fallback); aggregation names are whitelisted at lowering time (they are
+    template text — the retired executor interpolated them verbatim). The caller
+    has already run the pure config validator.
+    """
+    using_aggs: list[str] = []
+    using_cols: list[str] = []
+    for vc in cfg["value_columns"]:
+        col_name = vc.get("col_name") or vc.get("col_id", "value")
+        for agg in vc.get("aggregations", ["sum"]):
+            if agg not in _PIVOT_AGGREGATIONS:
+                raise ValueError(
+                    f"unknown aggregations [{agg!r}]; valid: {sorted(_PIVOT_AGGREGATIONS)!r}"
+                )
+            using_aggs.append(agg)
+            using_cols.append(col_name)
+    index_cols = cfg.get("index_columns", [])
+
+    contract = pivot_contract(using_aggs, len(index_cols))
+    bindings: list[ParamBinding] = [
+        ParamBinding(param_name="table", kind="table"),
+        ParamBinding(param_name="pivot_column", kind="columns", columns=(cfg["pivot_column"],)),
+    ]
+    for i, col in enumerate(using_cols):
+        bindings.append(ParamBinding(param_name=f"value_{i}", kind="columns", columns=(col,)))
+    for j, col in enumerate(index_cols):
+        bindings.append(ParamBinding(param_name=f"index_{j}", kind="columns", columns=(col,)))
+    return _run_contract(conn, contract, StepBinding(params=tuple(bindings)), df)
