@@ -64,7 +64,7 @@ def seed_validation_fn_and_attach(db, source_id, column_id, fn_name, module_path
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )
@@ -116,7 +116,7 @@ def test_no_attachments_returns_empty_sources(client, db, tmp_path):
     fn_ch = uuid.uuid4()
     module_path = write_fn(tmp_path, "always_true", "data", "return data > 0")
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", "always_true", None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )
@@ -188,7 +188,7 @@ def test_worker_crash_on_one_source_does_not_block_others(client, db, tmp_path):
     bad_fn_id = uuid.uuid4()
     bad_fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [bad_fn_id, bad_fn_ch, "pd.series", "always_pass", None, "pd.Series[bool]",
          "data: pd.Series", "validation", bad_path, True],
     )

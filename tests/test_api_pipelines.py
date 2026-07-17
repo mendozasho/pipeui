@@ -60,7 +60,7 @@ def _seed_pipeline(conn, source_id, column_ids):
     fn_a_id = uuid.uuid4()
     fn_a_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_a_id, fn_a_ch, "column_backed", "fn_alpha", "Alpha doc", "pd.Series",
          "col_param: str", "transform", "/tmp/fn_alpha.py", True],
     )
@@ -75,7 +75,7 @@ def _seed_pipeline(conn, source_id, column_ids):
     fn_b_id = uuid.uuid4()
     fn_b_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_b_id, fn_b_ch, "pd.dataframe", "fn_beta", "Beta doc", "pd.DataFrame",
          "df: pd.DataFrame", "transform", "/tmp/fn_beta.py", True],
     )
@@ -210,7 +210,7 @@ def _make_function(conn, fn_name: str, params: list[tuple[str, str]]) -> tuple[u
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "transform", fn_name, f"Doc {fn_name}", "pd.Series",
          ", ".join(f"{n}: {t}" for n, t in params), "transform", f"/tmp/{fn_name}.py", True],
     )
@@ -542,7 +542,7 @@ def _seed_auto_set(conn, source_id, column_ids):
     """
     fn_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "column_backed", "fn_auto", "Auto doc", "pd.Series",
          "x: str", "transform", "/tmp/fn_auto.py", True],
     )
@@ -653,7 +653,7 @@ def test_delete_does_not_remove_user_named_set(client, db):
     # Create a user-named set: set_name != function_name
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "column_backed", "fn_named", "doc", "pd.Series",
          "x: str", "transform", "/tmp/fn_named.py", True],
     )
@@ -1173,7 +1173,7 @@ def _seed_multi_function_set(conn, source_id, column_ids):
     """
     fn_one_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_one_id, uuid.uuid4(), "column_backed", "fn_one", "One doc", "pd.Series",
          "a: str", "transform", "/tmp/fn_one.py", True],
     )
@@ -1185,7 +1185,7 @@ def _seed_multi_function_set(conn, source_id, column_ids):
 
     fn_two_id = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_two_id, uuid.uuid4(), "column_backed", "fn_two", "Two doc", "pd.Series",
          "b: str", "transform", "/tmp/fn_two.py", True],
     )

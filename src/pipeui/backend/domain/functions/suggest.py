@@ -21,7 +21,7 @@ from typing import Optional
 
 import duckdb
 
-from pipeui.backend.domain.functions.classification import binding_kind
+from pipeui.backend.data.functions.classification import binding_kind
 
 
 def _params_for_set(

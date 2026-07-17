@@ -80,7 +80,7 @@ def seed_transform_step(db, source_id, column_id, fn_name, module_path, position
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series",
          "data: pd.Series", "transform", module_path, True],
     )
@@ -105,7 +105,7 @@ def seed_validation_step(db, source_id, column_id, fn_name, module_path, positio
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )
@@ -551,7 +551,7 @@ def register_and_ingest_multicol(db, tmp_path, name="multi", cols=("a", "b", "c"
 def seed_multicol_validation_step(db, source_id, column_ids, fn_name, module_path, position=0):
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )

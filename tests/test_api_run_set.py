@@ -65,7 +65,7 @@ def seed_validation_step_for_set(db, source_id, column_id, fn_name, module_path,
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )

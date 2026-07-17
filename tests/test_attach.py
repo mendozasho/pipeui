@@ -51,7 +51,7 @@ def _make_function(conn, fn_name: str, params: list[tuple[str, str]]) -> tuple[u
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     conn.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "transform", fn_name, f"Doc for {fn_name}", "pd.Series",
          ", ".join(f"{n}: {t}" for n, t in params), "transform", f"/tmp/{fn_name}.py", True],
     )

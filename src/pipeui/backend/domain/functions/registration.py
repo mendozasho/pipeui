@@ -24,10 +24,7 @@ from pathlib import Path
 import duckdb
 
 from pipeui.backend.data.base.ids import content_hash_id, new_id
-from pipeui.backend.domain.functions.discovery import (
-    discover_functions_in_file,
-    discover_sql_functions_in_file,
-)
+from pipeui.backend.domain.functions.discovery import extract_contracts
 
 
 def register_function_entry(
@@ -76,6 +73,10 @@ def register_function_entry(
     # #258: defaults captured at inspection (empty/absent for the SQL pd.DataFrame path)
     param_has_default: list[bool] = data.get("param_has_default") or [False] * len(param_names)
     param_default_values: list[str | None] = data.get("param_default_values") or [None] * len(param_names)
+    # #134: signature-order positions; absent (legacy caller) → list order
+    param_positions: list[int] = data.get("param_positions") or list(range(len(param_names)))
+    engine: str = data.get("engine") or "python"
+    function_body: str | None = data.get("function_body")
 
     conn.execute("BEGIN")
     try:
@@ -85,8 +86,8 @@ def register_function_entry(
                 INSERT INTO function_registry
                     (function_id, content_hash_id, function_class, function_name,
                      function_doc, function_return_type, function_signature,
-                     function_type, module_path, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                     function_type, module_path, is_active, engine, function_body)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
                 """,
                 [
                     function_id,
@@ -98,6 +99,8 @@ def register_function_entry(
                     data["function_signature"],
                     data["function_type"],
                     str(file_path),
+                    engine,
+                    function_body,
                 ],
             )
         else:
@@ -109,7 +112,9 @@ def register_function_entry(
                     function_signature = ?,
                     function_type = ?,
                     module_path = ?,
-                    is_active = TRUE
+                    is_active = TRUE,
+                    engine = ?,
+                    function_body = ?
                 WHERE function_id = ?
                 """,
                 [
@@ -117,6 +122,8 @@ def register_function_entry(
                     data["function_signature"],
                     data["function_type"],
                     str(file_path),
+                    engine,
+                    function_body,
                     function_id,
                 ],
             )
@@ -124,8 +131,8 @@ def register_function_entry(
             conn.execute("DELETE FROM parameter WHERE function_id = ?", [function_id])
 
         # Write parameter rows (one transaction with function_registry row — §10)
-        for param_name, param_type, p_has_default, p_default in zip(
-            param_names, param_types, param_has_default, param_default_values
+        for param_name, param_type, p_has_default, p_default, p_position in zip(
+            param_names, param_types, param_has_default, param_default_values, param_positions
         ):
             # §2 exception: the parameter surrogate is DERIVED from
             # (function_id, param_name), not random. A rescan re-registers the
@@ -141,11 +148,11 @@ def register_function_entry(
                 """
                 INSERT INTO parameter
                     (param_id, content_hash_id, param_name, param_type, function_id,
-                     has_default, default_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                     has_default, default_value, position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [param_id, param_chid, param_name, param_type, function_id,
-                 p_has_default, p_default],
+                 p_has_default, p_default, p_position],
             )
 
         conn.execute("COMMIT")
@@ -170,7 +177,8 @@ def scan_functions(
 
     Returns a session-only scan log: list of
       {"file": str, "function_name": str, "status": str}
-    where status is "added", "re-registered", "skipped: <reason>", or "file_missing".
+    where status is "added", "re-registered", "skipped: <reason>",
+    "flagged: <finding>" (guardrail screen, accepted), or "file_missing".
     """
     log: list[dict] = []
 
@@ -195,34 +203,41 @@ def scan_functions(
             candidate_files.append((sql_file, "sql"))
         candidate_files.sort(key=lambda x: x[0].name)
 
-        for src_file, kind in candidate_files:
+        for src_file, _kind in candidate_files:
             seen_files.add(str(src_file))
-            if kind == "py":
-                discovered = discover_functions_in_file(src_file)
-            else:
-                discovered = discover_sql_functions_in_file(src_file)
 
-            for item in discovered:
-                fn_name = item["function_name"]
-                if "skip_reason" in item:
+            for item in extract_contracts(src_file):
+                # Guardrail flags (accepted-but-surfaced) get their own log lines.
+                for flag in item.flags:
                     log.append({
                         "file": str(src_file),
-                        "function_name": fn_name,
-                        "status": f"skipped: {item['skip_reason']}",
+                        "function_name": item.function_name,
+                        "status": f"flagged: {flag.detail} (line {flag.lineno})",
+                    })
+
+                if item.skip_reason is not None:
+                    log.append({
+                        "file": str(src_file),
+                        "function_name": item.function_name,
+                        "status": f"skipped: {item.skip_reason}",
                     })
                     continue
+                if item.contract is None:
+                    continue  # flag-only <module> entry
 
                 try:
-                    status = register_function_entry(conn, src_file, fn_name, item["data"])
+                    status = register_function_entry(
+                        conn, src_file, item.function_name, item.contract.to_registry_dict()
+                    )
                     log.append({
                         "file": str(src_file),
-                        "function_name": fn_name,
+                        "function_name": item.function_name,
                         "status": status,
                     })
                 except Exception as exc:
                     log.append({
                         "file": str(src_file),
-                        "function_name": fn_name,
+                        "function_name": item.function_name,
                         "status": f"skipped: registration error: {exc}",
                     })
 
