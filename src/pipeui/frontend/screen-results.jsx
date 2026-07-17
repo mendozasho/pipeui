@@ -23,10 +23,6 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function exportFilename(sourceName, cardType, ext) {
-  return `${sanitiseFilename(sourceName)}_${todayStr()}_${cardType}.${ext}`;
-}
-
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 // Wraps fetch so callers get a real Error carrying the HTTP status and the
 // FastAPI {detail} body instead of silently parsing an error payload (#110).
@@ -43,54 +39,6 @@ async function fetchJson(url, opts) {
   }
   return r.json();
 }
-
-// ── Export format module ──────────────────────────────────────────────────────
-// Client-side exporters are used only for small in-memory row sets (validation
-// summaries). Transform tables download server-side via exportTransform (#110).
-// Each exporter returns an error string when nothing was exported, null on success.
-function exportCsv(rows, filenameStem) {
-  if (!rows || rows.length === 0) return "Nothing to export.";
-  const cols = Object.keys(rows[0]);
-  const lines = [cols.join(",")];
-  for (const row of rows) {
-    lines.push(cols.map(c => {
-      const v = row[c];
-      if (v === null || v === undefined) return "";
-      const s = String(v);
-      if (s.includes(",") || s.includes("\n") || s.includes('"')) {
-        return '"' + s.replace(/"/g, '""') + '"';
-      }
-      return s;
-    }).join(","));
-  }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filenameStem + ".csv";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  return null;
-}
-
-function exportXlsx(rows, filenameStem) {
-  if (!rows || rows.length === 0) return "Nothing to export.";
-  if (typeof XLSX === "undefined") {
-    return "SheetJS (XLSX) not loaded — cannot export Excel file.";
-  }
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Results");
-  XLSX.writeFile(wb, filenameStem + ".xlsx");
-  return null;
-}
-
-const EXPORTERS = {
-  csv: exportCsv,
-  xlsx: exportXlsx,
-};
 
 // ── Server-side transform download (#110) ─────────────────────────────────────
 // Transform tables can reach GB scale — they must never round-trip through JSON.
@@ -133,6 +81,55 @@ async function exportTransform(card, format, flash) {
     return;
   }
   triggerDownload(`/pipelines/${card.source_id}/export/transformed/file?format=${format}`);
+}
+
+// ── Server-side validation report download (#152) ─────────────────────────────
+// The validation results report (one row per function × source) is server-owned:
+// the backend defines the columns and writes the file. Producing it requires a
+// fresh run, so there is no cheap preflight — the file is fetched as a blob,
+// which keeps HTTP errors as flash messages instead of navigating the SPA to a
+// raw JSON error page. Report files are tiny (one row per function run), so a
+// blob round-trip is fine — the #110 streaming rule is for data tables.
+function validationReportPath(card) {
+  if (card.trigger === "function") {
+    if (card.set_id) return `/pipelines/sets/${card.set_id}/export/results/file`;
+    if (card.function_id) return `/validations/${card.function_id}/export/results/file`;
+    return null;
+  }
+  return card.source_id ? `/pipelines/${card.source_id}/export/results/file` : null;
+}
+
+async function exportValidationReport(card, format, flash) {
+  const path = validationReportPath(card);
+  if (!path) {
+    flash("This run has no export route — it is not tied to a source, function, or set.", "error");
+    return;
+  }
+  let r;
+  try {
+    r = await fetch(`${path}?format=${format}`);
+  } catch {
+    flash("Network error — is the server running?", "error");
+    return;
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    flash(`Export failed: ${(body && body.detail) || `HTTP ${r.status}`}`, "error");
+    return;
+  }
+  const dispo = r.headers.get("Content-Disposition") || "";
+  const match = dispo.match(/filename="?([^";]+)"?/);
+  const fallbackLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
+  const filename = match ? match[1] : `${fallbackLabel}_${todayStr()}_validation.${format}`;
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ── Card-type derivation (#193) ───────────────────────────────────────────────
@@ -615,51 +612,6 @@ function SourcesExpand({ sources }) {
   );
 }
 
-// ── Collect export rows for a card ────────────────────────────────────────────
-// For function-triggered cards: one row per source with pass/fail counts.
-function collectFunctionRunExportRows(card) {
-  return (card.sources || []).map(src => {
-    const passed = src.rows_passed ?? 0;
-    const failed = src.rows_failed ?? 0;
-    const total = passed + failed;
-    return {
-      source_name: src.source_name || src.source_id || "",
-      rows_passed: passed,
-      rows_failed: failed,
-      pass_rate: total > 0 ? (passed / total * 100).toFixed(1) + "%" : null,
-    };
-  });
-}
-
-// One row per validation RESULT (function run) — the "final export" lists EVERY
-// validation that ran, including passes AND crashes (#253). A crashed/failed run
-// carries null counts plus its error so it still appears as a failure; a run that
-// executed carries its pass/fail counts. The raw failing DATA records remain
-// viewable in the card's expand-detail; this export is the per-function summary.
-function collectValidationResultRows(card) {
-  if (card.trigger === "function") {
-    // Function-triggered: one row per source the function ran against.
-    return collectFunctionRunExportRows(card);
-  }
-  return (card.steps || []).map(step => {
-    const passed = step.rows_passed;
-    const failed = step.rows_failed;
-    const ran = passed !== null && passed !== undefined;
-    const total = (passed ?? 0) + (failed ?? 0);
-    return {
-      function_name: step.function_name || step.set_name || "",
-      label: step.label ?? "",
-      // status reflects whether the function EXECUTED (ok) or crashed (failed),
-      // not row-level pass/fail — a run with failing data rows is still "ok".
-      status: step.status || (ran ? "ok" : "failed"),
-      rows_passed: ran ? passed : null,
-      rows_failed: ran ? failed : null,
-      pass_rate: ran && total > 0 ? (passed / total * 100).toFixed(1) + "%" : null,
-      error: step.error ?? null,
-    };
-  });
-}
-
 // ── Minimal results drawer body (slice 5 / #244) ──────────────────────────────
 // Renders the RunResult metadata inside the EXISTING ui.jsx Drawer component
 // (reuse, not a new drawer — the rich drawer is the design-gated slice 8). One
@@ -707,37 +659,30 @@ function ResultCard({ card, selected, onToggleSelect, flash }) {
   // Card type is driven by the RunResult function_type (#193): a mixed set renders
   // the correct variant per result, not a single set-wide tag.
   const resolvedCardType = cardTypeForResult(card);
-  const filenameStem = exportFilename(card.source_name, resolvedCardType, "");
 
   function handleExport(format) {
     setShowExportPicker(false);
+    // Both card types download a server-written file: transforms via #110,
+    // validation reports via #152 (server owns the report columns).
     if (resolvedCardType === "validation") {
-      const label = sanitiseFilename(card.function_name || card.set_name || card.source_name);
-      const exportRows = collectValidationResultRows(card);
-      const err = EXPORTERS[format](exportRows, `${label}_${todayStr()}_validation`);
-      if (err && flash) flash(err, "error");
+      exportValidationReport(card, format, flash || (() => {}));
     } else {
-      // Transform: server-side file download — never fetch the rows (#110).
       exportTransform(card, format, flash || (() => {}));
     }
   }
 
-  // Compute filename stems cleanly
-  const stem = `${sanitiseFilename(card.source_name)}_${todayStr()}_${resolvedCardType}`;
-  const isFunctionTriggered = card.trigger === "function";
-  // Function-triggered cards always have source summary rows to export.
-  // Source-triggered validation cards export once any validation ran (#253): the
-  // export lists every result, so it is enabled whenever the card has steps.
-  const hasExportRows = isFunctionTriggered
-    ? (card.sources || []).length > 0
-    : resolvedCardType === "validation"
-      ? collectValidationResultRows(card).length > 0
-      : !!card.source_id;
-  const exportDisabled = !hasExportRows;
+  // Export is available whenever a server route exists for the card: validation
+  // reports need a source/function/set id, transform downloads need a source id.
+  const hasExportRoute = resolvedCardType === "validation"
+    ? !!validationReportPath(card)
+    : !!card.source_id;
+  const exportDisabled = !hasExportRoute;
   const exportLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
+  // Filename preview only — the server names the actual file with the same
+  // {label}_{date}_{kind} convention (results_files.py / pipelines.py).
   const exportStem = resolvedCardType === "validation"
     ? `${exportLabel}_${todayStr()}_validation`
-    : stem;
+    : `${sanitiseFilename(card.source_name)}_${todayStr()}_${resolvedCardType}`;
 
   return (
     <div style={{
@@ -901,16 +846,12 @@ function ExportSelectedBar({ selectedIds, cards, onClear, flash }) {
     const selectedCards = cards.filter(c => selectedIds.has(c.run_id));
     for (const card of selectedCards) {
       // Card type derived per RunResult (#193) — matches the single-card path.
+      // Every card downloads a server-written file (#110 transforms, #152
+      // validation reports). Chrome may prompt once to allow multiple
+      // downloads when several cards are selected — acceptable.
       if (cardTypeForResult(card) === "validation") {
-        const bulkLabel = sanitiseFilename(card.function_name || card.set_name || card.source_name);
-        // Same per-result summary as the single-card export (#253): every validation
-        // listed, passes and crashes alike.
-        const rows = collectValidationResultRows(card);
-        const err = EXPORTERS[format](rows, `${bulkLabel}_${todayStr()}_validation`);
-        if (err && flash) flash(`${bulkLabel}: ${err}`, "error");
+        exportValidationReport(card, format, flash || (() => {}));
       } else {
-        // Server-side file download per card (#110). Chrome may prompt once to
-        // allow multiple downloads when several cards are selected — acceptable.
         exportTransform(card, format, flash || (() => {}));
       }
     }
@@ -1082,6 +1023,6 @@ window.__ScreenResults__ = ScreenResults;
 // app consumes the screen via the window.__ScreenResults__ global above.
 export {
   ScreenResults, ResultCard, SummaryLine, TypeTag, cardTypeForResult,
-  collectValidationResultRows, fetchJson, exportCsv, exportXlsx,
-  exportTransform, ExportSelectedBar, XLSX_EXPORT_MAX_ROWS,
+  fetchJson, exportTransform, validationReportPath, exportValidationReport,
+  ExportSelectedBar, XLSX_EXPORT_MAX_ROWS,
 };

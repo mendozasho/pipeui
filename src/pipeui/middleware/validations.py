@@ -15,6 +15,7 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from pipeui.middleware.deps import get_conn
+from pipeui.middleware.results_files import results_file_response
 from pipeui.backend.domain.runner.export import build_results_report
 from pipeui.backend.domain.runner.run import run_validation_across_sources
 
@@ -60,8 +61,9 @@ def export_results_report(
     """Export the transposed results report for a validation function (Functions-page entry point).
 
     Runs the function across every source it is attached to (each attached source ran)
-    and returns {"columns": [...], "rows": [...]} — one row per RunResult, keyed by its
-    normalized label, with pass/fail + metadata columns, INCLUDING runs that fully passed.
+    and returns {"columns": [...], "rows": [...]} — one row per function run
+    (function × source), with pass/fail + metadata columns, INCLUDING runs that
+    fully passed.
 
     404 when function_id is unknown.
     """
@@ -75,3 +77,30 @@ def export_results_report(
         raise HTTPException(status_code=404, detail=f"Function {function_id!r} not found")
 
     return build_results_report(result)
+
+
+@router.get("/{function_id}/export/results/file")
+def download_results_file(
+    function_id: str,
+    format: str = Query(default="csv"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Download the cross-source results report as a file (#152).
+
+    ?format=csv|xlsx — re-runs the validation function across every attached
+    source (same contract as the JSON /export/results route: the export reflects
+    current data) and serves the per-function report as an attachment.
+
+    404 when function_id is unknown. 422 on invalid function_id or unknown format.
+    """
+    try:
+        fid = uuid.UUID(function_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid function_id: {function_id!r}")
+
+    result = run_validation_across_sources(conn, fid)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Function {function_id!r} not found")
+
+    report = build_results_report(result)
+    return results_file_response(report, format, result.get("function_name") or "validation")

@@ -266,8 +266,13 @@ def run_validation_across_sources(
     Returns { function_id, function_name, sources: [...] } on completion.
 
     Each source entry has:
-      source_id, source_name, status, rows_passed, rows_failed,
-      pass_rate, failing_rows, error
+      source_id, source_name, function_name, function_type, status,
+      rows_passed, rows_failed, pass_rate, failing_rows, error,
+      result_id, label
+
+    Each entry is one (function, source) run — the results report renders it
+    as a function × source row, so the function identity must survive the
+    per-source aggregation.
 
     A worker crash on one source marks that entry status="failed" without
     blocking the remaining sources.
@@ -401,6 +406,8 @@ def run_validation_across_sources(
         )
         entry.setdefault("result_id", rr.result_id)
         entry.setdefault("label", rr.label)
+        entry.setdefault("function_name", rr.function_name)
+        entry.setdefault("function_type", rr.function_type)
 
     return {
         "function_id": fn_id_str,

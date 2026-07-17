@@ -9,8 +9,9 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import {
-  ScreenResults, ResultCard, cardTypeForResult, collectValidationResultRows,
-  fetchJson, exportCsv, exportTransform, XLSX_EXPORT_MAX_ROWS,
+  ScreenResults, ResultCard, cardTypeForResult,
+  fetchJson, exportTransform, validationReportPath, exportValidationReport,
+  XLSX_EXPORT_MAX_ROWS,
 } from "./screen-results.jsx";
 
 afterEach(() => {
@@ -103,56 +104,30 @@ describe("Results screen renders a card per RunResult", () => {
   });
 });
 
-// ── #253: validation export lists EVERY result, passes and crashes alike ──────
-// Regression: the export previously emitted only concatenated failing_rows, so a
-// source whose validations mostly passed/crashed produced a CSV of "headers + one
-// row". collectValidationResultRows must return one summary row per validation run.
-describe("validation export lists every validation result (#253)", () => {
-  // Mirrors the live `customers` run: 2 runs that executed (one with a failing
-  // data row), 2 that crashed (no counts, only an error).
-  const customersCard = validationCard({
-    source_name: "customers",
-    steps: [
-      { function_name: "is_not_empty", label: "customer_id", status: "ok",
-        rows_passed: 10, rows_failed: 0, failing_rows: [] },
-      { function_name: "is_not_empty", label: "name", status: "ok",
-        rows_passed: 9, rows_failed: 1,
-        failing_rows: [{ customer_id: "c7", name: null }] },
-      { function_name: "within_range", label: "customer_id", status: "failed",
-        rows_passed: null, rows_failed: null, failing_rows: [],
-        error: "Invalid comparison between dtype=str and float" },
-      { function_name: "is_positive", label: "is_positive", status: "failed",
-        rows_passed: null, rows_failed: null, failing_rows: [],
-        error: "got multiple values for keyword argument 'value'" },
-    ],
+// ── #152: validation report is server-owned — the frontend only routes ────────
+// The per-function summary rows (#253: every run listed, passes and crashes
+// alike) are now built by the backend (build_results_report + file writers,
+// covered by pytest). The frontend guarantee is the routing: each card kind
+// downloads from its own server endpoint.
+describe("validationReportPath routes by card identity (#152)", () => {
+  it("a source-triggered card routes to the pipelines results-file endpoint", () => {
+    expect(validationReportPath(validationCard()))
+      .toBe("/pipelines/s1/export/results/file");
   });
 
-  it("returns one row per validation run, not just failing data rows", () => {
-    const rows = collectValidationResultRows(customersCard);
-    expect(rows.length).toBe(4); // not 1 (the lone failing data row)
-    expect(rows.map(r => r.function_name)).toEqual([
-      "is_not_empty", "is_not_empty", "within_range", "is_positive",
-    ]);
+  it("a function-triggered card routes to the validations results-file endpoint", () => {
+    expect(validationReportPath({ trigger: "function", function_id: "f1" }))
+      .toBe("/validations/f1/export/results/file");
   });
 
-  it("a run that executed carries ok status, counts, and a pass rate", () => {
-    const rows = collectValidationResultRows(customersCard);
-    const nameRow = rows.find(r => r.label === "name");
-    expect(nameRow.status).toBe("ok"); // ran fine despite a failing data row
-    expect(nameRow.rows_passed).toBe(9);
-    expect(nameRow.rows_failed).toBe(1);
-    expect(nameRow.pass_rate).toBe("90.0%");
-    expect(nameRow.error).toBe(null);
+  it("a set-triggered card routes to the set results-file endpoint", () => {
+    expect(validationReportPath({ trigger: "function", set_id: "set1", function_id: null }))
+      .toBe("/pipelines/sets/set1/export/results/file");
   });
 
-  it("a crashed run is still listed as a failure with its error and null counts", () => {
-    const rows = collectValidationResultRows(customersCard);
-    const crashed = rows.find(r => r.function_name === "is_positive");
-    expect(crashed.status).toBe("failed");
-    expect(crashed.rows_passed).toBe(null);
-    expect(crashed.rows_failed).toBe(null);
-    expect(crashed.pass_rate).toBe(null);
-    expect(crashed.error).toMatch(/multiple values for keyword argument 'value'/);
+  it("a card with no routing id has no export route", () => {
+    expect(validationReportPath({ trigger: "function" })).toBe(null);
+    expect(validationReportPath({ trigger: "source", source_id: null })).toBe(null);
   });
 });
 
@@ -225,21 +200,95 @@ function jsonResponse(body, ok = true, status = 200) {
   return Promise.resolve({ ok, status, json: () => Promise.resolve(body) });
 }
 
-describe("client-side exporters signal 'nothing to export' (#110)", () => {
-  it("exportCsv returns an error string for empty or missing rows", () => {
-    expect(exportCsv([], "stem")).toBe("Nothing to export.");
-    expect(exportCsv(null, "stem")).toBe("Nothing to export.");
-    expect(exportCsv(undefined, "stem")).toBe("Nothing to export.");
+// A file-download response mock: exportValidationReport reads the ok flag,
+// Content-Disposition header, and the blob body.
+function fileResponse({ filename = "sales_2026-07-17_validation.csv" } = {}) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    headers: {
+      get: (k) => k.toLowerCase() === "content-disposition"
+        ? `attachment; filename="${filename}"`
+        : null,
+    },
+    blob: () => Promise.resolve(new Blob(["function_name\n"])),
+    json: () => Promise.resolve({}),
   });
+}
 
-  it("exportCsv returns null on a successful export", () => {
+describe("validation export downloads the server-written report file (#152)", () => {
+  function stubDownloadEnv() {
     vi.stubGlobal("URL", {
       createObjectURL: vi.fn(() => "blob:x"),
       revokeObjectURL: vi.fn(),
     });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    expect(exportCsv([{ a: 1 }], "stem")).toBe(null);
-    expect(click).toHaveBeenCalledTimes(1);
+    const downloads = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      downloads.push(this.getAttribute("download"));
+    });
+    return downloads;
+  }
+
+  it("fetches the file endpoint and saves it under the server's filename", async () => {
+    const fetchSpy = vi.fn(() => fileResponse({ filename: "sales_2026-07-17_validation.csv" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const downloads = stubDownloadEnv();
+    const flash = vi.fn();
+
+    await exportValidationReport(validationCard(), "csv", flash);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe("/pipelines/s1/export/results/file?format=csv");
+    expect(downloads).toEqual(["sales_2026-07-17_validation.csv"]);
+    expect(flash).not.toHaveBeenCalled();
+  });
+
+  it("a set-triggered card downloads from the set endpoint", async () => {
+    const fetchSpy = vi.fn(() => fileResponse({ filename: "nightly_2026-07-17_validation.csv" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const downloads = stubDownloadEnv();
+
+    await exportValidationReport(
+      { trigger: "function", set_id: "set1", set_name: "nightly" }, "csv", vi.fn());
+
+    expect(fetchSpy.mock.calls[0][0]).toBe("/pipelines/sets/set1/export/results/file?format=csv");
+    expect(downloads).toEqual(["nightly_2026-07-17_validation.csv"]);
+  });
+
+  it("flashes the backend detail on an HTTP error — no download", async () => {
+    vi.stubGlobal("fetch", vi.fn(() =>
+      jsonResponse({ detail: "Function 'f1' not found" }, false, 404)));
+    const downloads = stubDownloadEnv();
+    const flash = vi.fn();
+
+    await exportValidationReport(
+      { trigger: "function", function_id: "f1", function_name: "chk" }, "csv", flash);
+
+    expect(flash).toHaveBeenCalledWith(
+      expect.stringMatching(/Function 'f1' not found/), "error");
+    expect(downloads).toEqual([]);
+  });
+
+  it("guards a card with no routing id — flashes, zero fetches", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const flash = vi.fn();
+
+    await exportValidationReport({ trigger: "function" }, "csv", flash);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(flash).toHaveBeenCalledWith(
+      expect.stringMatching(/no export route/), "error");
+  });
+
+  it("a validation card with no routing id renders the disabled export state", () => {
+    render(React.createElement(ResultCard, {
+      card: validationCard({ source_id: null }),
+      selected: false,
+      onToggleSelect: () => {},
+    }));
+    expect(screen.getByText("No data to export")).toBeTruthy();
+    expect(screen.getByText("Export").closest("button").disabled).toBe(true);
   });
 });
 
