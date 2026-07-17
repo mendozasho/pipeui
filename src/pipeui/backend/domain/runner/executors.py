@@ -14,14 +14,13 @@ This module owns the execution mechanics (``_execute_transform_step``,
 here (one-way, no back-import); external tests import these symbols directly from
 ``executors`` by path.
 
-Three single-responsibility slices the registry depends **down** on were split out
-(#45): ``param_resolve`` (scalar-kwarg resolution), ``sql_exec`` (SQL-function
-execution), and ``interpret`` (validation-result normalization). This module keeps
-the ``StepExecutor`` registry, the executor classes, the run carriers, and the
-per-function execution mechanics that drive them.
-
-Behavior-preserving refactor (CONTEXT.md → Runner module responsibilities): the
-moved code is byte-for-byte the inline logic; only its home changed.
+Binding and execution are split across three seams the executors depend **down** on:
+``contract.bind(binding)`` (data/functions — literals, shape homogeneity, bundle
+pairing), ``realize`` (one BoundCall → one worker call), and ``interpret``
+(validation-result normalization); ``sql_exec`` runs ``.sql`` functions. This module
+keeps the ``StepExecutor`` registry, the executor classes, the run carriers, and the
+per-function write-back mechanics that drive them (Phase 3 of the FunctionContract
+redesign — the former per-arm binding logic collapsed onto bind()+realize()).
 """
 from __future__ import annotations
 
@@ -43,8 +42,14 @@ from pipeui.backend.data.base.results import (
     normalize_label,
 )
 from pipeui.backend.data.base.fails import FailedFunctionEntry
+from pipeui.backend.data.functions.binding import (
+    MixedShapeError,
+    RequiredParamError,
+    StepBinding,
+)
+from pipeui.backend.data.functions.contract import FunctionContract
 from pipeui.backend.domain.functions.builtins import execute_builtin_step
-from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
+from pipeui.backend.data.runner.bundles import BundleLengthError
 from pipeui.backend.data.runner.staging import write_staging_table
 from pipeui.backend.data.runner.steps import (
     BUILTIN,
@@ -55,18 +60,9 @@ from pipeui.backend.data.runner.steps import (
     FunctionStepContext,
     StepContext,
 )
-from pipeui.backend.domain.runner.bundle_exec import (
-    MixedShapeError,
-    collect_column_backed_params,
-    run_multi_param_bundles,
-)
 from pipeui.backend.domain.runner.interpret import interpret_validation_result
-from pipeui.backend.domain.runner.param_resolve import (
-    RequiredParamError,
-    resolve_scalar_kwargs,
-)
+from pipeui.backend.domain.runner.realize import realize
 from pipeui.backend.domain.runner.sql_exec import execute_sql_function
-from pipeui.backend.domain.runner.worker import call_function
 
 
 # ---------------------------------------------------------------------------
@@ -76,23 +72,6 @@ from pipeui.backend.domain.runner.worker import call_function
 def _fail_msg(result: "FailedFunctionEntry", fallback: str) -> str:
     """Render a FailedFunctionEntry's reasons as a single error string for a RunResult."""
     return "; ".join(reason for _, reason in result.failures) if result.failures else fallback
-
-
-def build_scalar_wrapper(fn_name: str, kwarg_name: str) -> str:
-    """Codegen the element-wise ``__wrapper__`` that dispatches a scalar-shaped function
-    across a column (the scalar run — once per record, #258).
-
-    The wrapper applies ``fn_name`` to each value, binding it to ``kwarg_name`` and
-    forwarding the broadcast scalar ``**__extra`` kwargs. Pandas NULL is float NaN in
-    object/string columns; it is converted to ``None`` so user functions receive a
-    proper null sentinel. Shared by the transform and validation scalar paths so the
-    two cannot drift.
-    """
-    return (
-        "import pandas as _pd\n"
-        "def __wrapper__(series, **__extra):\n"
-        f"    return series.apply(lambda v: {fn_name}(**{{'{kwarg_name}': None if _pd.isna(v) else v}}, **__extra))\n"
-    )
 
 
 def _unique_column_name(name: str, existing: set[str]) -> str:
@@ -131,183 +110,20 @@ def step_has(step: "FunctionStepContext", function_type: str) -> bool:
 # Transform step execution
 # ---------------------------------------------------------------------------
 
-def _resolve_transform_binding(params: list[dict]) -> "tuple[dict | None, str]":
-    """Resolve the column-bound param of a transform + its keyword name.
+def _unbound_series_param(contract: FunctionContract, binding: StepBinding) -> str | None:
+    """Return the name of the first ``pd.Series`` param with no column binding.
 
-    Returns ``(bound_param, kwarg_name)``. The first ``pd.Series`` param wins (and is
-    expected to be bound); failing that, the first scalar-shaped param that carries a
-    binding. ``bound_param`` is None when no column-bound param exists (the whole-table
-    path). ``kwarg_name`` defaults to the first param's name, else ``"data"``.
-
-    Raises ``RequiredParamError``-style errors? No — an *unbound* ``pd.Series`` param is
-    a step-fatal condition surfaced by the caller, so it is reported via the dedicated
-    ``_TransformBindingError`` rather than returned.
+    Checked across ALL params (not just the first) so a later unbound Series
+    alongside bound ones is not silently dropped. An unbound Series is fatal for
+    the transform step and a per-function failure for validations.
     """
-    kwarg_name = params[0]["param_name"] if params else "data"
-    for p in params:
-        if p["param_type"] == "pd.Series":
-            if not p["bindings"]:
-                raise _TransformBindingError(
-                    f"param '{p['param_name']}' is unbound — attach a column binding first"
-                )
-            return p, p["param_name"]
-        if p["param_type"] in ("str", "int", "float", "bool") and p["bindings"]:
-            return p, p["param_name"]
-    return None, kwarg_name
-
-
-class _TransformBindingError(Exception):
-    """An unbound ``pd.Series`` transform param — the step cannot run. Carried as a
-    string the dispatcher turns into the step's error (frame returned unchanged)."""
-
-
-def _run_dataframe_transform(current, fn, fn_source, params, extra_kwargs):
-    """pd.DataFrame transform arm: run the function over the whole table in ONE call,
-    regardless of output_mode (no bundle expansion). Returns ``(new_current, error)``."""
-    kwarg_name = "df"
-    for p in params:
-        if p["param_type"] == "pd.DataFrame":
-            kwarg_name = p["param_name"]
-            break
-    result = call_function(fn_source, fn.function_name, kwarg_name, current, extra_kwargs=extra_kwargs)
-    if isinstance(result, FailedFunctionEntry):
-        return current, _fail_msg(result, "worker failed")
-    if isinstance(result, pd.DataFrame):
-        current = result
-    return current, None
-
-
-def _run_unbound_transform(current, fn, fn_source, extra_kwargs, *, kwarg_name, append_name):
-    """No-bound-column arm: pass the full working table once (scalar param defaults).
-
-    A DataFrame return replaces the frame; any other return is appended as a new
-    column named by ``append_name`` or the function's auto-label. Returns
-    ``(new_current, error)``."""
-    result = call_function(fn_source, fn.function_name, kwarg_name, current, extra_kwargs=extra_kwargs)
-    if isinstance(result, FailedFunctionEntry):
-        return current, _fail_msg(result, "worker failed")
-    if isinstance(result, pd.DataFrame):
-        current = result
-    else:
-        current = current.copy()
-        series = _normalize_to_series(result, len(current))
-        new_col = _unique_column_name(
-            append_name or normalize_label(fn.function_name), set(current.columns)
-        )
-        current[new_col] = series.values
-    return current, None
-
-
-def _run_bundled_transform(
-    current, fn, fn_source, bound_param, extra_kwargs, *, kwarg_name, output_mode,
-    append_name, output_targets, emit,
-):
-    """Column-bound arm: expand the bound param into argument bundles (§12 / ADR-0001)
-    and run the function once per bundle's column. ``output_mode`` decides write-back:
-
-      - **append** → each bundle adds a NEW column, named by ``append_name`` or a
-        cleaned auto-label of the function + varying column (collision-suffixed).
-      - **replace** → bundle i overwrites the i-th output-target column (position
-        order); with no explicit target it overwrites the input varying column.
-
-    Each bundle emits one RunResult via ``emit``. Returns ``(new_current, error)``;
-    on the first worker/binding error the partially-mutated frame is returned with the
-    error and the caller drops back to the pre-step frame.
-    """
-    bundles = pair_bundles([
-        {"param_id": bound_param["param_id"], "columns": list(bound_param["bindings"])}
-    ])
-    is_scalar_shape = bound_param["param_type"] in ("str", "int", "float", "bool")
-
-    # Bundles read their INPUT columns from the table as it was at the start of
-    # this function's run — not from the progressively-mutated `current`. A
-    # replace target can overlap another bundle's input column, so reading from
-    # `current` would feed an already-overwritten value into a later bundle.
-    fn_input = current.copy()
-
-    for i, bundle in enumerate(bundles):
-        bound_col = bundle.columns[bound_param["param_id"]]
-        if bound_col not in fn_input.columns:
-            return (
-                current,
-                f"bound column '{bound_col}' not found in source data — detach and re-attach the function to refresh the binding",
-            )
-
-        column_series = fn_input[bound_col]
-        if is_scalar_shape:
-            # #258: forward the broadcast scalar kwargs through the element-wise wrapper.
-            wrapper = build_scalar_wrapper(fn.function_name, kwarg_name)
-            result = call_function(wrapper + "\n" + fn_source, "__wrapper__", "series", column_series, extra_kwargs=extra_kwargs)
-        else:
-            result = call_function(fn_source, fn.function_name, kwarg_name, column_series, extra_kwargs=extra_kwargs)
-
-        if isinstance(result, FailedFunctionEntry):
-            return current, _fail_msg(result, "worker failed")
-
-        current = current.copy()
-        series = _normalize_to_series(result, len(current))
-
-        if output_mode == "replace":
-            # bundle i -> target i (output_targets in position order); with no
-            # explicit target, default to overwriting the input varying column.
-            target_col = output_targets[i] if i < len(output_targets) else bound_col
-            current[target_col] = series.values
-        else:
-            # append: a new column per bundle, never clobbering an existing one.
-            # #264: default auto-label = function name + the column it ran on
-            # (e.g. uppercase_email), so N appends are self-describing and distinct;
-            # a user-provided append name overrides it. Collision suffix is a last
-            # resort only (same fn+col twice).
-            base_name = append_name or normalize_label(f"{fn.function_name}_{bound_col}")
-            new_col = _unique_column_name(base_name, set(current.columns))
-            current[new_col] = series.values
-
-        emit(fn_name=fn.function_name, bound_col=bound_col, status="ok", error=None)
-
-    return current, None
-
-
-def _apply_multi_param_transform_outcomes(
-    current, fn, outcomes, *, output_mode, append_name, output_targets, emit,
-):
-    """Write back one Series per multi-param bundle (append or replace) and emit.
-
-    Mirrors ``_run_bundled_transform``'s write-back, keyed by the bundle's composite
-    label (``outcome.key``) rather than a single bound column:
-
-      - **append** → each bundle adds a NEW column, named by ``append_name`` or a cleaned
-        ``function_name`` + composite label (collision-suffixed).
-      - **replace** → bundle i overwrites ``output_targets[i]`` (position order). Callers
-        guarantee ``output_targets`` is non-empty for multi-param replace; too few targets
-        for the bundle count is a config error that aborts the step.
-
-    On the first bundle whose worker returned a ``FailedFunctionEntry`` (crash, missing
-    column) the partially-mutated frame is returned with the error so the caller drops
-    back to the pre-step frame. Returns ``(new_current, error)``.
-    """
-    for i, outcome in enumerate(outcomes):
-        if isinstance(outcome.result, FailedFunctionEntry):
-            return current, _fail_msg(outcome.result, "worker failed")
-
-        current = current.copy()
-        series = _normalize_to_series(outcome.result, len(current))
-
-        if output_mode == "replace":
-            if i >= len(output_targets):
-                return current, (
-                    "replace mode with multiple column-backed params needs one output "
-                    f"target per bundle — got {len(output_targets)} target(s) for "
-                    f"{len(outcomes)} bundle(s)"
-                )
-            current[output_targets[i]] = series.values
-        else:
-            base_name = append_name or normalize_label(f"{fn.function_name}_{outcome.key}")
-            new_col = _unique_column_name(base_name, set(current.columns))
-            current[new_col] = series.values
-
-        emit(fn_name=fn.function_name, bound_col=outcome.key, status="ok", error=None)
-
-    return current, None
+    for pc in contract.params:
+        if pc.type_str != "pd.Series":
+            continue
+        pb = binding.get(pc.name)
+        if pb is None or not pb.columns:
+            return pc.name
+    return None
 
 
 def _execute_transform_step(
@@ -320,11 +136,17 @@ def _execute_transform_step(
 
     Returns (new_working_table, error_message_or_None, run_results).
 
-    A thin dispatcher: per function it routes to the matching arm by function class —
-    SQL (``sql_exec``), ``pd.DataFrame`` (``_run_dataframe_transform``), no-bound-column
-    (``_run_unbound_transform``), or column-bound bundles (``_run_bundled_transform``).
-    A `pd.DataFrame` transform runs once over the whole table regardless of output_mode.
-    On error the original working table is returned unchanged.
+    Per function: ``contract.bind(binding)`` resolves the persisted binding into
+    ordered ``BoundCall``s (literals -> homogeneity -> pair_bundles), and ``realize``
+    executes each against the pre-step frame; this dispatcher owns only write-back:
+
+      - ``table`` -> a DataFrame return replaces the frame (one call, no expansion).
+      - ``value`` -> a DataFrame return replaces; any other return appends a column.
+      - ``column`` / ``row`` -> one Series per BoundCall; **append** adds a new
+        column per bundle (``append_name`` or fn+bundle-key auto-label), **replace**
+        overwrites ``output_targets[i]`` (single-param default: the input column).
+
+    On a worker/binding error the original working table is returned unchanged.
     conn and source_id are required for SQL function execution.
     """
     current = working
@@ -374,87 +196,95 @@ def _execute_transform_step(
         except OSError as exc:
             return working, f"cannot read module: {exc}", run_results
 
-        # #258: resolve scalar params once; broadcast into every call/bundle. A
-        # required param with no value/default fails this function cleanly (the step
-        # continues so other functions still run).
-        params = list(fn.params)
+        contract, binding = fn.contract_binding()
+
+        # bind(): literals (a required param with no value/default fails this function
+        # cleanly, the step continues) -> shape homogeneity -> bundle pairing (a config
+        # error fails the function cleanly too).
         try:
-            extra_kwargs = resolve_scalar_kwargs(params)
+            calls = contract.bind(binding)
         except RequiredParamError as exc:
             _emit(fn_name=fn_name, bound_col=None, status="failed", error=str(exc))
             continue
-
-        # pd.DataFrame transform: whole table in ONE run, regardless of output_mode.
-        if fn.function_class == "pd.dataframe":
-            current, error = _run_dataframe_transform(current, fn, fn_source, params, extra_kwargs)
-            if error:
-                return working, error, run_results
-            _emit(fn_name=fn_name, bound_col=None, status="ok", error=None)
+        except (BundleLengthError, MixedShapeError) as exc:
+            _emit(fn_name=fn_name, bound_col=None, status="failed", error=str(exc))
             continue
 
-        # Any pd.Series param left unbound is a hard fail — checked across ALL params, so
-        # a later unbound Series alongside bound ones is not silently dropped.
-        unbound_series_param = next(
-            (p for p in params if p["param_type"] == "pd.Series" and not p["bindings"]),
-            None,
-        )
-        if unbound_series_param is not None:
+        # Any pd.Series param left unbound is a hard fail for the step.
+        unbound = _unbound_series_param(contract, binding)
+        if unbound is not None:
             return working, (
-                f"param '{unbound_series_param['param_name']}' is unbound — attach a column binding first"
+                f"param '{unbound}' is unbound — attach a column binding first"
             ), run_results
 
-        # Multiple column-backed params: feed them ALL through pair_bundles and deliver
-        # every param's bundle column. One Series per bundle → append/replace write-back.
-        column_backed = collect_column_backed_params(params)
-        if len(column_backed) >= 2:
-            if output_mode == "replace" and not output_targets:
-                # No single input column exists to overwrite by default — require targets.
-                _emit(
-                    fn_name=fn_name, bound_col=None, status="failed",
-                    error="replace mode with multiple column-backed params requires "
-                          "explicit output targets — set an output target per bundle",
-                )
-                continue
-            try:
-                outcomes = run_multi_param_bundles(
-                    fn_source=fn_source, fn_name=fn_name,
-                    column_backed_params=column_backed, source_frame=current.copy(),
-                    extra_kwargs=extra_kwargs,
-                )
-            except (BundleLengthError, MixedShapeError) as exc:
-                _emit(fn_name=fn_name, bound_col=None, status="failed", error=str(exc))
-                continue
-            current, error = _apply_multi_param_transform_outcomes(
-                current, fn, outcomes, output_mode=output_mode,
-                append_name=append_name, output_targets=output_targets, emit=_emit,
-            )
-            if error:
-                return working, error, run_results
-            continue
+        mode = calls[0].mode
+        multi = len(calls[0].column_kwargs) >= 2
 
-        # Column-bound transform: resolve the bound param + its ordered columns.
-        try:
-            bound_param, kwarg_name = _resolve_transform_binding(params)
-        except _TransformBindingError as exc:
-            return working, str(exc), run_results
-
-        if bound_param is None:
-            current, error = _run_unbound_transform(
-                current, fn, fn_source, extra_kwargs,
-                kwarg_name=kwarg_name, append_name=append_name,
-            )
-            if error:
-                return working, error, run_results
+        if mode in ("table", "value"):
+            result = realize(contract, calls[0], fn_source=fn_source, frame=current)
+            if isinstance(result, FailedFunctionEntry):
+                return working, _fail_msg(result, "worker failed"), run_results
+            if isinstance(result, pd.DataFrame):
+                current = result
+            elif mode == "value":
+                current = current.copy()
+                series = _normalize_to_series(result, len(current))
+                new_col = _unique_column_name(
+                    append_name or normalize_label(fn_name), set(current.columns)
+                )
+                current[new_col] = series.values
             _emit(fn_name=fn_name, bound_col=None, status="ok", error=None)
             continue
 
-        current, error = _run_bundled_transform(
-            current, fn, fn_source, bound_param, extra_kwargs,
-            kwarg_name=kwarg_name, output_mode=output_mode,
-            append_name=append_name, output_targets=output_targets, emit=_emit,
-        )
-        if error:
-            return working, error, run_results
+        # column / row: one realize per BoundCall. No single input column exists to
+        # overwrite by default when several params are column-backed — require targets.
+        if multi and output_mode == "replace" and not output_targets:
+            _emit(
+                fn_name=fn_name, bound_col=None, status="failed",
+                error="replace mode with multiple column-backed params requires "
+                      "explicit output targets — set an output target per bundle",
+            )
+            continue
+
+        # Bundles read their INPUT columns from the table as it was at the start of
+        # this function's run — not from the progressively-mutated `current`. A
+        # replace target can overlap another bundle's input column, so reading from
+        # `current` would feed an already-overwritten value into a later bundle.
+        fn_input = current.copy()
+
+        for i, call in enumerate(calls):
+            result = realize(contract, call, fn_source=fn_source, frame=fn_input)
+            if isinstance(result, FailedFunctionEntry):
+                return working, _fail_msg(result, "worker failed"), run_results
+
+            current = current.copy()
+            series = _normalize_to_series(result, len(current))
+
+            if output_mode == "replace":
+                # bundle i -> target i (output_targets in position order); a single
+                # column-backed param defaults to overwriting its input column.
+                if i < len(output_targets):
+                    target_col = output_targets[i]
+                elif not multi:
+                    target_col = call.bundle_key
+                else:
+                    return working, (
+                        "replace mode with multiple column-backed params needs one "
+                        f"output target per bundle — got {len(output_targets)} "
+                        f"target(s) for {len(calls)} bundle(s)"
+                    ), run_results
+                current[target_col] = series.values
+            else:
+                # append: a new column per bundle, never clobbering an existing one.
+                # #264: default auto-label = function name + the bundle's key (its
+                # varying column(s)), so N appends are self-describing and distinct;
+                # a user-provided append name overrides it. Collision suffix is a
+                # last resort only (same fn+col twice).
+                base_name = append_name or normalize_label(f"{fn_name}_{call.bundle_key}")
+                new_col = _unique_column_name(base_name, set(current.columns))
+                current[new_col] = series.values
+
+            _emit(fn_name=fn_name, bound_col=call.bundle_key, status="ok", error=None)
 
     return current, None, run_results
 
@@ -591,11 +421,17 @@ def _execute_validation_step(
 ) -> list[StepResultEntry]:
     """Execute all validation functions in a step against the original table.
 
-    Each validation function produces one ValidationRunResult (the N=1 argument
-    bundle). The returned dicts preserve the legacy wire keys (function_id,
-    function_name, set_name, set_id, status, rows_passed, rows_failed, pass_rate,
-    failing_rows, error) and additively carry the RunResult identity (result_id)
-    and normalized label via ValidationRunResult.to_dict().
+    Per function: ``contract.bind(binding)`` resolves the persisted binding into
+    ordered ``BoundCall``s and ``realize`` executes each against the original frame;
+    ``interpret_validation_result`` normalizes every worker result (boolean vector,
+    bare bool, or FailedFunctionEntry) into one ValidationRunResult per bundle.
+    A binding/config error (required param, unequal varying counts, mixed shapes,
+    unbound Series) fails the function cleanly; the step continues so others run.
+
+    The returned entries preserve the legacy wire keys (function_id, function_name,
+    set_name, set_id, status, rows_passed, rows_failed, pass_rate, failing_rows,
+    error) and additively carry the RunResult identity (result_id) and normalized
+    label via ValidationRunResult.to_dict().
     conn and source_id are required for SQL function execution.
     """
     results = []
@@ -625,7 +461,6 @@ def _execute_validation_step(
 
         fn_id = fn.function_id
         fn_name = fn.function_name
-        fn_class = fn.function_class
         module_path = fn.module_path
 
         # SQL functions: execute directly on DuckDB connection (no column expansion).
@@ -654,12 +489,10 @@ def _execute_validation_step(
             ))
             continue
 
-        params = list(fn.params)
+        contract, binding = fn.contract_binding()
 
-        # #258: resolve scalar params once and broadcast them into every call/bundle.
-        # A required param with no value and no default fails the function cleanly.
         try:
-            extra_kwargs = resolve_scalar_kwargs(params)
+            calls = contract.bind(binding)
         except RequiredParamError as exc:
             results.append(_emit(
                 fn_id=fn_id, fn_name=fn_name, bound_col=None,
@@ -667,81 +500,6 @@ def _execute_validation_step(
                 failing_rows=[], error=str(exc),
             ))
             continue
-
-        # pd.DataFrame functions: the full table is passed once (no column expansion).
-        if fn_class == "pd.dataframe":
-            kwarg_name = "df"
-            for p in params:
-                if p["param_type"] == "pd.DataFrame":
-                    kwarg_name = p["param_name"]
-                    break
-            df_result = call_function(fn_source, fn_name, kwarg_name, original, extra_kwargs=extra_kwargs)
-            results.append(interpret_validation_result(
-                df_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
-            ))
-            continue
-
-        # Column-bound function: resolve the column-eligible params and their bindings.
-        # An eligible param bound to N columns expands into N argument bundles
-        # (multi_select_eligible), and a function may bind MULTIPLE column-backed params
-        # — every eligible param's bundle column is delivered (§12 / ADR-0001). The
-        # function runs once per bundle. A scalar-shaped param (str/int/float/bool) runs
-        # per record (the scalar run) for each bundle column.
-
-        # Any pd.Series param left unbound is a hard fail — checked across ALL params,
-        # not just the first, so a later unbound Series is not silently dropped.
-        unbound_series_param = next(
-            (p for p in params if p["param_type"] == "pd.Series" and not p["bindings"]),
-            None,
-        )
-        if unbound_series_param is not None:
-            results.append(_emit(
-                fn_id=fn_id, fn_name=fn_name, bound_col=None,
-                status="failed", rows_passed=None, rows_failed=None,
-                failing_rows=[],
-                error=f"param '{unbound_series_param['param_name']}' is unbound — attach a column binding first",
-            ))
-            continue
-
-        column_backed = collect_column_backed_params(params)
-
-        if not column_backed:
-            # No bound column param — pass the full original table once.
-            kwarg_name = params[0]["param_name"] if params else "data"
-            scalar_result = call_function(fn_source, fn_name, kwarg_name, original, extra_kwargs=extra_kwargs)
-            results.append(interpret_validation_result(
-                scalar_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
-            ))
-            continue
-
-        if len(column_backed) == 1:
-            # Single column-backed param: N columns -> N single-column bundles, in
-            # user-placed (position) order. The unchanged single-param path.
-            bound_param = column_backed[0]
-            kwarg_name = bound_param["param_name"]
-            bundles = pair_bundles([
-                {"param_id": bound_param["param_id"], "columns": list(bound_param["bindings"])}
-            ])
-            is_scalar_shape = bound_param["param_type"] in ("str", "int", "float", "bool")
-
-            for bundle in bundles:
-                bound_col = bundle.columns[bound_param["param_id"]]
-                results.append(_run_validation_bundle(
-                    fn_source=fn_source, fn_name=fn_name, fn_id=fn_id,
-                    kwarg_name=kwarg_name, bound_col=bound_col, is_scalar_shape=is_scalar_shape,
-                    original=original, emit=_emit, extra_kwargs=extra_kwargs,
-                ))
-            continue
-
-        # Multiple column-backed params: feed them ALL through pair_bundles and deliver
-        # every param's bundle column. A config error (unequal varying counts, mixed
-        # shapes) fails the function cleanly; the step continues so others still run.
-        try:
-            outcomes = run_multi_param_bundles(
-                fn_source=fn_source, fn_name=fn_name,
-                column_backed_params=column_backed, source_frame=original,
-                extra_kwargs=extra_kwargs,
-            )
         except (BundleLengthError, MixedShapeError) as exc:
             results.append(_emit(
                 fn_id=fn_id, fn_name=fn_name, bound_col=None,
@@ -750,44 +508,38 @@ def _execute_validation_step(
             ))
             continue
 
-        for outcome in outcomes:
+        # Any pd.Series param left unbound fails this function (the step continues).
+        unbound = _unbound_series_param(contract, binding)
+        if unbound is not None:
+            results.append(_emit(
+                fn_id=fn_id, fn_name=fn_name, bound_col=None,
+                status="failed", rows_passed=None, rows_failed=None,
+                failing_rows=[],
+                error=f"param '{unbound}' is unbound — attach a column binding first",
+            ))
+            continue
+
+        mode = calls[0].mode
+        if mode in ("table", "value"):
+            # Whole-table call: the full original frame, once (no column expansion).
+            result = realize(contract, calls[0], fn_source=fn_source, frame=original)
             results.append(interpret_validation_result(
-                outcome.result, original, fn_id=fn_id, fn_name=fn_name,
-                bound_col=outcome.key, emit=_emit,
+                result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
+            ))
+            continue
+
+        # column / row: an eligible param bound to N columns expands into N argument
+        # bundles (multi_select_eligible), and a function may bind MULTIPLE
+        # column-backed params — every param's bundle column is delivered
+        # (§12 / ADR-0001). The function runs once per BoundCall.
+        for call in calls:
+            result = realize(contract, call, fn_source=fn_source, frame=original)
+            results.append(interpret_validation_result(
+                result, original, fn_id=fn_id, fn_name=fn_name,
+                bound_col=call.bundle_key, emit=_emit,
             ))
 
     return results
-
-
-def _run_validation_bundle(
-    *, fn_source, fn_name, fn_id, kwarg_name, bound_col, is_scalar_shape, original, emit,
-    extra_kwargs=None,
-):
-    """Run a validation function for one argument bundle (one bound column) and emit.
-
-    A scalar-shaped param dispatches element-wise via the .apply() wrapper (the scalar
-    run — once per record); a pd.Series param receives the column as a Series. A bound
-    column missing from the loaded table hard-fails with a refresh-the-binding diagnostic.
-    """
-    if bound_col not in original.columns:
-        return emit(
-            fn_id=fn_id, fn_name=fn_name, bound_col=bound_col,
-            status="failed", rows_passed=None, rows_failed=None, failing_rows=[],
-            error=f"bound column '{bound_col}' not found in source data — detach and re-attach the function to refresh the binding",
-        )
-
-    column_series = original[bound_col]
-    if is_scalar_shape:
-        # Element-wise dispatch (scalar run): the shared wrapper forwards the broadcast
-        # scalar kwargs and null-sentinels NaN so scalar params reach the user function.
-        wrapper = build_scalar_wrapper(fn_name, kwarg_name)
-        result = call_function(wrapper + "\n" + fn_source, "__wrapper__", "series", column_series, extra_kwargs=extra_kwargs)
-    else:
-        result = call_function(fn_source, fn_name, kwarg_name, column_series, extra_kwargs=extra_kwargs)
-
-    return interpret_validation_result(
-        result, original, fn_id=fn_id, fn_name=fn_name, bound_col=bound_col, emit=emit,
-    )
 
 
 # ---------------------------------------------------------------------------

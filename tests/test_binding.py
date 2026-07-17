@@ -1,11 +1,11 @@
-"""Tests for StepBinding / BoundCall / FunctionContract.bind() — the #136 shadow layer.
+"""Tests for StepBinding / BoundCall / FunctionContract.bind() — #136 / Phase 3.
 
 Guarantees covered (CLAUDE.md rule 10):
-  - bind-parity: for every executor-arm shape, bind()'s BoundCalls carry the same
-    bundle keys, per-bundle columns, and broadcast scalars that the current
-    ``collect_column_backed_params`` + ``pair_bundles`` + ``composite_key`` +
-    ``resolve_scalar_kwargs`` path computes — including the failure modes
-    (BundleLengthError / MixedShapeError / RequiredParamError).
+  - bind() semantics: for every executor shape, BoundCalls carry the bundle keys
+    and per-bundle columns that ``pair_bundles`` + ``composite_key`` produce, and
+    the documented literal precedence (persisted value → Python default →
+    RequiredParamError, with type coercion) — including the failure modes
+    (BundleLengthError / MixedShapeError).
   - iter_row_args is the bound-args semantic spec: N rows → N argument sets,
     column-backed params take their row's value (pandas NULL → None, exactly like
     the scalar-run wrapper), literals broadcast into every set, empty frame → no
@@ -13,7 +13,10 @@ Guarantees covered (CLAUDE.md rule 10):
   - Multi-select composes above: c columns tied to a param → c BoundCalls, each
     spanning the table's rows.
   - Loader hydration: fetch_steps assembles FunctionSpec.contract / .binding from
-    the persisted rows, params in loader order, bindings in alias_map.position order.
+    the persisted rows, params in SIGNATURE (parameter.position) order — the Phase-3
+    ordering flip — with bindings in alias_map.position order.
+  - Label stability: bundle keys for multi-param functions follow signature order
+    (the documented Phase-3 behavior change vs the old alphabetical ordering).
 """
 from __future__ import annotations
 
@@ -32,32 +35,15 @@ from pipeui.backend.data.functions.binding import (
     composite_key,
 )
 from pipeui.backend.data.functions.contract import ENGINE_PYTHON, FunctionContract, ParamContract
+from pipeui.backend.data.functions.binding import coerce_scalar
 from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
 from pipeui.backend.data.runner.step_loader import fetch_steps
-from pipeui.backend.domain.runner.bundle_exec import collect_column_backed_params
-from pipeui.backend.domain.runner.param_resolve import resolve_scalar_kwargs
 from tests.conftest import make_registered_source
 
 
 # ---------------------------------------------------------------------------
 # Helpers — one param description, two consumers (legacy dicts vs contract+binding)
 # ---------------------------------------------------------------------------
-
-def _legacy_params(specs: list[dict]) -> list[dict]:
-    """Loader-shaped param dicts, as the executor arms consume them."""
-    return [
-        {
-            "param_id": s["name"],
-            "param_name": s["name"],
-            "param_type": s["type"],
-            "bindings": list(s.get("columns", ())),
-            "has_default": s.get("default") is not None,
-            "default_value": s.get("default"),
-            "scalar_value": s.get("value"),
-        }
-        for s in specs
-    ]
-
 
 def _contract_and_binding(specs: list[dict], *, return_type="pd.Series") -> tuple[FunctionContract, StepBinding]:
     contract = FunctionContract(
@@ -90,15 +76,26 @@ def _contract_and_binding(specs: list[dict], *, return_type="pd.Series") -> tupl
     return contract, binding
 
 
-def _legacy_bundle_view(specs: list[dict]) -> tuple[list[str], list[dict[str, str]], dict]:
-    """What the executor arms compute today: bundle keys, per-bundle column maps
-    (param_name → column), and the broadcast scalar kwargs."""
-    params = _legacy_params(specs)
-    cb = collect_column_backed_params(params)
-    bundles = pair_bundles([{"param_id": p["param_id"], "columns": p["bindings"]} for p in cb])
+def _expected_bundle_view(specs: list[dict]) -> tuple[list[str], list[dict[str, str]], dict]:
+    """The expected outcome, computed from the documented rules independently of
+    bind(): bundle keys and per-bundle column maps straight from ``pair_bundles`` +
+    ``composite_key`` (the load-bearing pairing seams), and broadcast scalars from
+    the documented literal precedence (persisted value → Python default → required)."""
+    cb = [
+        {"param_id": s["name"], "param_name": s["name"], "columns": list(s["columns"])}
+        for s in specs
+        if s.get("columns") and s["type"] in ("pd.Series", "str", "int", "float", "bool")
+    ]
+    bundles = pair_bundles([{"param_id": p["param_id"], "columns": p["columns"]} for p in cb])
     keys = [composite_key(b, cb) for b in bundles]
     columns = [{p["param_name"]: b.columns[p["param_id"]] for p in cb} for b in bundles]
-    scalars = resolve_scalar_kwargs(params)
+    scalars: dict = {}
+    for s in specs:
+        if s.get("columns") or s["type"] not in ("int", "float", "str", "bool"):
+            continue
+        raw = s.get("value") if s.get("value") is not None else s.get("default")
+        assert raw is not None, f"spec {s['name']} would raise RequiredParamError"
+        scalars[s["name"]] = coerce_scalar(raw, s["type"])
     return keys, columns, scalars
 
 
@@ -136,7 +133,7 @@ class TestBindParity:
          {"name": "data", "type": "pd.Series", "columns": ["a"]}],
     ])
     def test_bound_calls_match_executor_arms(self, specs):
-        keys, columns, scalars = _legacy_bundle_view(specs)
+        keys, columns, scalars = _expected_bundle_view(specs)
         contract, binding = _contract_and_binding(specs)
         calls = contract.bind(binding)
         assert [c.bundle_key for c in calls] == keys
@@ -150,8 +147,6 @@ class TestBindParity:
             {"name": "x", "type": "pd.Series", "columns": ["a", "b"]},
             {"name": "y", "type": "pd.Series", "columns": ["c", "d", "e"]},
         ]
-        with pytest.raises(BundleLengthError):
-            _legacy_bundle_view(specs)
         contract, binding = _contract_and_binding(specs)
         with pytest.raises(BundleLengthError):
             contract.bind(binding)
@@ -167,13 +162,11 @@ class TestBindParity:
             contract.bind(binding)
 
     @pytest.mark.unit
-    def test_missing_required_scalar_raises_like_param_resolve(self):
+    def test_missing_required_scalar_raises(self):
         specs = [
             {"name": "data", "type": "pd.Series", "columns": ["a"]},
             {"name": "threshold", "type": "float"},  # no value, no default
         ]
-        with pytest.raises(RequiredParamError):
-            resolve_scalar_kwargs(_legacy_params(specs))
         contract, binding = _contract_and_binding(specs)
         with pytest.raises(RequiredParamError):
             contract.bind(binding)
@@ -190,12 +183,11 @@ class TestBindParity:
         contract, binding = _contract_and_binding(specs)
         lit = dict(contract.bind(binding)[0].literal_kwargs)
         assert lit == {"n": 42, "rate": 0.25, "on": True, "off": False}
-        assert lit == resolve_scalar_kwargs(_legacy_params(specs))
 
     @pytest.mark.unit
     def test_bound_scalar_param_is_not_a_literal(self):
         # A column-bound scalar param rides the bundle, never literal_kwargs —
-        # mirrors resolve_scalar_kwargs skipping params with bindings.
+        # the documented rule: a bound param is never resolved as a literal.
         specs = [{"name": "v", "type": "str", "columns": ["a"], "value": "ignored"}]
         contract, binding = _contract_and_binding(specs)
         call = contract.bind(binding)[0]
@@ -367,8 +359,8 @@ class TestLoaderHydration:
 
         binding = spec.binding
         assert isinstance(binding, StepBinding)
-        # binding params in loader order (alphabetical until Phase 3)
-        assert [p.param_name for p in binding.params] == ["alpha", "mid", "zeta"]
+        # Phase 3: binding params in signature (position) order, not alphabetical
+        assert [p.param_name for p in binding.params] == ["zeta", "alpha", "mid"]
         zeta = binding.get("zeta")
         assert zeta.kind == "columns" and zeta.columns == ("col_0", "col_1")
         alpha = binding.get("alpha")
@@ -394,3 +386,40 @@ class TestLoaderHydration:
         spec = fetch_steps(db, source_id)[0].functions[0]
         calls = spec.contract.bind(spec.binding)
         assert dict(calls[0].literal_kwargs) == {"mid": 0.5}
+
+
+class TestLabelStability:
+    """Phase-3 ordering flip: bundle keys follow SIGNATURE order.
+
+    A multi-param function whose signature order differs from alphabetical order
+    now pairs (and labels) bundles by signature order. Alphabetically-ordered
+    signatures are unchanged — their keys are identical under both orderings.
+    """
+
+    @pytest.mark.integration
+    def test_bundle_keys_follow_signature_order(self, db):
+        source_id, col_ids = make_registered_source(db, n_columns=4)
+        # signature: zeta (varies: col_0, col_1), alpha (varies: col_2, col_3) —
+        # alphabetical ordering would put alpha's columns first in the key.
+        _seed_fn(db, source_id, "pairwise", [
+            ("zeta", "pd.Series", [col_ids[0], col_ids[1]], None),
+            ("alpha", "pd.Series", [col_ids[2], col_ids[3]], None),
+        ])
+        spec = fetch_steps(db, source_id)[0].functions[0]
+        calls = spec.contract.bind(spec.binding)
+        assert [c.bundle_key for c in calls] == [
+            "col_0\x1fcol_2",   # zeta's column leads — signature order
+            "col_1\x1fcol_3",
+        ]
+
+    @pytest.mark.integration
+    def test_alphabetical_signature_keys_unchanged(self, db):
+        source_id, col_ids = make_registered_source(db, n_columns=2)
+        _seed_fn(db, source_id, "ordered", [
+            ("aa", "pd.Series", [col_ids[0]], None),
+            ("bb", "pd.Series", [col_ids[1]], None),
+        ])
+        spec = fetch_steps(db, source_id)[0].functions[0]
+        calls = spec.contract.bind(spec.binding)
+        # one static bundle; key joins both params' columns in (identical) order
+        assert [c.bundle_key for c in calls] == ["col_0\x1fcol_1"]

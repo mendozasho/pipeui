@@ -43,7 +43,8 @@ from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.backend.domain.sources.create import create_source
 from pipeui.backend.domain.sources.ingestion import ingest_source
 from pipeui.backend.domain.runner.run import run_pipeline
-from pipeui.backend.domain.runner.bundle_exec import run_multi_param_bundles
+from pipeui.backend.data.runner.steps import FunctionSpec
+from pipeui.backend.domain.runner.realize import realize
 from pipeui.backend.data.runner.staging import staging_prefix
 from pipeui.backend.data.runner.step_loader import fetch_steps
 from pipeui.backend.domain.functions.attach import AttachBinding, attach_function
@@ -2374,25 +2375,31 @@ def test_multi_param_mixed_series_and_scalar_rejected(db, tmp_path):
 
 
 @pytest.mark.integration
-def test_run_multi_param_bundles_scalar_empty_frame_returns_series(tmp_path):
+def test_realize_row_mode_empty_frame_returns_series(tmp_path):
     """The scalar wrapper guards the empty frame: ``DataFrame.apply(axis=1)`` on 0 rows
     returns a DataFrame (which would break downstream normalization) — the guard returns
-    an empty Series instead. Unit test on the helper so the guard is locked directly."""
+    an empty Series instead. Unit test on the realize seam so the guard is locked directly."""
     fn_path = tmp_path / "ascending_empty.py"
     fn_path.write_text("def ascending_empty(a, b, c):\n    return a < b < c\n")
-    params = [
-        {"param_id": "p_a", "param_name": "a", "param_type": "int", "bindings": ["a"]},
-        {"param_id": "p_b", "param_name": "b", "param_type": "int", "bindings": ["b"]},
-        {"param_id": "p_c", "param_name": "c", "param_type": "int", "bindings": ["c"]},
+    specs = [
+        FunctionSpec(
+            function_id="f", function_name="ascending_empty", function_type="validation",
+            function_class="scalar", function_return_type="boolean",
+            module_path=str(fn_path),
+            params=tuple(
+                {"param_id": f"p_{n}", "param_name": n, "param_type": "int", "bindings": [n]}
+                for n in ("a", "b", "c")
+            ),
+            output_mode=None, append_name=None, output_targets=(),
+        )
     ]
+    contract, binding = specs[0].contract_binding()
+    calls = contract.bind(binding)
+    assert len(calls) == 1 and calls[0].mode == "row"
     empty = pd.DataFrame({"a": [], "b": [], "c": []})
-    outcomes = run_multi_param_bundles(
-        fn_source=fn_path.read_text(), fn_name="ascending_empty",
-        column_backed_params=params, source_frame=empty, extra_kwargs={},
-    )
-    assert len(outcomes) == 1
-    assert isinstance(outcomes[0].result, pd.Series)
-    assert len(outcomes[0].result) == 0
+    result = realize(contract, calls[0], fn_source=fn_path.read_text(), frame=empty)
+    assert isinstance(result, pd.Series)
+    assert len(result) == 0
 
 
 @pytest.mark.integration

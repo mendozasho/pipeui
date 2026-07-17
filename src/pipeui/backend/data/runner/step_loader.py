@@ -93,7 +93,7 @@ def fetch_steps(
                 LEFT JOIN source_scalar_map ssm ON ssm.param_id = p.param_id
                     AND ssm.source_id = ?
                 WHERE p.function_id = ?
-                ORDER BY p.param_name, am.position
+                ORDER BY p.position, p.param_name, am.position
                 """,
                 [source_id, source_id, fn_id],
             ).fetchall()
