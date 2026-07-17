@@ -608,54 +608,6 @@ def _execute_pivot(
     return result
 
 
-def _execute_filter(
-    conn: duckdb.DuckDBPyConnection,
-    df: pd.DataFrame,
-    cfg: dict,
-) -> pd.DataFrame:
-    """Execute a filter built-in step — keep rows where the column matches the predicate.
-
-    Config shape (CONTEXT.md):
-      { "column": "...", "operator": "eq|neq|gt|gte|lt|lte|contains|not_contains|is_null|is_not_null",
-        "value": "<string>" }
-
-    The value is stored as a string and bound as a parameter; DuckDB casts it to the
-    column's type for comparison. contains/not_contains compare against the column cast
-    to VARCHAR. is_null / is_not_null take no value.
-    """
-    err = _validate_filter_config(cfg)
-    if err:
-        raise ValueError(err)
-
-    column = cfg["column"]
-    operator = cfg["operator"]
-    value = cfg.get("value")
-    col_sql = f'"{column}"'
-
-    _filter_view = f"_builtin_filter_{uuid.uuid4().hex[:8]}"
-    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_filter_view}" AS SELECT * FROM df')
-
-    if operator in _FILTER_COMPARISONS:
-        where, params = f"{col_sql} {_FILTER_COMPARISONS[operator]} ?", [value]
-    elif operator == "contains":
-        where, params = f"CAST({col_sql} AS VARCHAR) LIKE ?", [f"%{value}%"]
-    elif operator == "not_contains":
-        where, params = f"CAST({col_sql} AS VARCHAR) NOT LIKE ?", [f"%{value}%"]
-    elif operator == "is_null":
-        where, params = f"{col_sql} IS NULL", []
-    else:  # is_not_null (validated above)
-        where, params = f"{col_sql} IS NOT NULL", []
-
-    try:
-        result = conn.execute(
-            f'SELECT * FROM "{_filter_view}" WHERE {where}', params
-        ).df()
-    finally:
-        conn.execute(f'DROP VIEW IF EXISTS "{_filter_view}"')
-
-    return result
-
-
 def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Execute a rename built-in (#40) — rename the selected columns in the working df.
 
@@ -683,50 +635,6 @@ def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict
         raise ValueError(f"rename: target name(s) already exist in the working data: {collisions}")
 
     return df.rename(columns=renames)
-
-
-def _execute_date_range(
-    conn: duckdb.DuckDBPyConnection,
-    df: pd.DataFrame,
-    cfg: dict,
-) -> pd.DataFrame:
-    """Execute a date_range built-in (PRD date-range-filter) — keep rows matching
-    the grouped range conditions.
-
-    Config shape: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` —
-    one WHERE of OR-ed group predicates, each group an AND of inclusive range
-    predicates over only the bounds a condition sets (validation guarantees at
-    least one). Columns are CAST to DATE so TIMESTAMP/TIMESTAMPTZ compare at DATE
-    granularity (a 23:59 stamp on the end day is inside; TIMESTAMPTZ uses DuckDB's
-    session-default timezone); bounds are bound as parameters and CAST to DATE. A
-    NULL date fails its condition (SQL semantics) but the row may still pass via
-    another OR group.
-    """
-    err = _validate_date_range_config(cfg)
-    if err:
-        raise ValueError(err)
-
-    group_predicates: list[str] = []
-    params: list[str] = []
-    for group in cfg["groups"]:
-        condition_predicates: list[str] = []
-        for cond in group["conditions"]:
-            col_sql = f'CAST("{cond["column"]}" AS DATE)'
-            for bound, op in ((cond.get("start"), ">="), (cond.get("end"), "<=")):
-                if bound not in (None, ""):
-                    condition_predicates.append(f"{col_sql} {op} CAST(? AS DATE)")
-                    params.append(bound)
-        group_predicates.append("(" + " AND ".join(condition_predicates) + ")")
-    where = " OR ".join(group_predicates)
-
-    _view = f"_builtin_date_range_{uuid.uuid4().hex[:8]}"
-    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_view}" AS SELECT * FROM df')
-    try:
-        result = conn.execute(f'SELECT * FROM "{_view}" WHERE {where}', params).df()
-    finally:
-        conn.execute(f'DROP VIEW IF EXISTS "{_view}"')
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +678,28 @@ class BuiltinSpec:
     ] = None
 
 
+def _run_lowered_filter(conn, df, cfg):
+    """Validate (this module owns the validators) then delegate to the lowered
+    contract executor (#142)."""
+    err = _validate_filter_config(cfg)
+    if err:
+        raise ValueError(err)
+    from pipeui.backend.domain.functions.builtin_lowering import execute_filter_lowered
+
+    return execute_filter_lowered(conn, df, cfg)
+
+
+def _run_lowered_date_range(conn, df, cfg):
+    """Validate (this module owns the validators) then delegate to the lowered
+    predicate-contract + DNF executor (#142)."""
+    err = _validate_date_range_config(cfg)
+    if err:
+        raise ValueError(err)
+    from pipeui.backend.domain.functions.builtin_lowering import execute_date_range_lowered
+
+    return execute_date_range_lowered(conn, df, cfg)
+
+
 # The dispatch table both attach_builtin (validation) and execute_builtin_step
 # (execution) look up by builtin_type. Adapter lambdas normalize the executors'
 # differing shapes (join takes run_transforms + returns a consumed_result_id; pivot/
@@ -787,7 +717,10 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
     ),
     "filter": BuiltinSpec(
         validate=_validate_filter_config,
-        execute=lambda conn, df, cfg, run_transforms: (_execute_filter(conn, df, cfg), None),
+        # #142: lowered onto per-operator FunctionContracts (builtin_lowering).
+        execute=lambda conn, df, cfg, run_transforms: (
+            _run_lowered_filter(conn, df, cfg), None,
+        ),
     ),
     "rename": BuiltinSpec(
         validate=_validate_rename_config,
@@ -800,7 +733,11 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
     ),
     "date_range": BuiltinSpec(
         validate=_validate_date_range_config,
-        execute=lambda conn, df, cfg, run_transforms: (_execute_date_range(conn, df, cfg), None),
+        # #142: lowered onto predicate FunctionContracts + DNF orchestration
+        # (builtin_lowering + runner/dnf).
+        execute=lambda conn, df, cfg, run_transforms: (
+            _run_lowered_date_range(conn, df, cfg), None,
+        ),
         singleton=True,
         # PRD date-range-filter: the date filter always applies to the final table
         # (after every positional step) but before rename, whose relabelling would

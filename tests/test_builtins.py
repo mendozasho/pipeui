@@ -47,7 +47,6 @@ from pipeui.backend.domain.functions.builtins import (
     _validate_rename_config,
     _execute_rename,
     _validate_date_range_config,
-    _execute_date_range,
 )
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.runner.run import run_pipeline

@@ -138,7 +138,7 @@ def execute_sql_contract(
     call: "BoundCall",
     *,
     frame: pd.DataFrame,
-    source_id: uuid.UUID,
+    source_id: uuid.UUID | None = None,
 ) -> "pd.DataFrame | FailedFunctionEntry":
     """Execute one ``BoundCall`` of a SQL contract; DataFrame or FailedFunctionEntry.
 
@@ -153,6 +153,12 @@ def execute_sql_contract(
         return body
 
     if not contract.params:
+        # Legacy implicit shape: needs the source's instance table. Param-declared
+        # contracts never touch source_id (their frames arrive as views).
+        if source_id is None:
+            entry = FailedFunctionEntry()
+            entry.add(contract.name, "implicit SQL contracts require a source_id")
+            return entry
         sql = body.replace("{source_table}", _quote_ident(instance_table_name(source_id)))
         try:
             return conn.execute(sql).df()
