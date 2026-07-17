@@ -43,6 +43,7 @@ from pipeui.backend.data.base.tables import instance_table_name
 from pipeui.backend.domain.sources.create import create_source
 from pipeui.backend.domain.sources.ingestion import ingest_source
 from pipeui.backend.domain.runner.run import run_pipeline
+from pipeui.backend.domain.runner.bundle_exec import run_multi_param_bundles
 from pipeui.backend.data.runner.staging import staging_prefix
 from pipeui.backend.data.runner.step_loader import fetch_steps
 from pipeui.backend.domain.functions.attach import AttachBinding, attach_function
@@ -2187,3 +2188,261 @@ def test_adapter_builds_function_members_via_from_function_factory(db, tmp_path,
     assert val["status"] == "ok"
     assert val["rows_passed"] == 3
     assert val["rows_failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-column binding — a function with MULTIPLE column-backed params.
+# The executor feeds EVERY eligible param through pair_bundles (varying/static/
+# broadcast, §12 / ADR-0001), not just the first. Fixes the drop-the-2nd-param bug.
+# ---------------------------------------------------------------------------
+
+def _seed_multiparam_step(
+    db, source_id, param_specs, fn_name, module_path, *,
+    function_type, function_class, function_return_type,
+    output_mode="append", output_targets=None, position=0,
+):
+    """Seed a function with MULTIPLE parameters, each with its own alias_map rows.
+
+    ``param_specs`` is a list of ``(param_name, param_type, [col_id, ...])`` — a param
+    with an empty col list is left unbound. Writes one function_registry row, one
+    parameter row per spec, and add-order alias_map rows per (param, col). For a replace
+    transform, ``output_targets`` writes ordered output_target_map rows. Returns sfm_id.
+    """
+    fn_id = uuid.uuid4()
+    signature = "(" + ", ".join(f"{n}: {t}" for n, t, _ in param_specs) + ")"
+    db.execute(
+        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [fn_id, uuid.uuid4(), function_class, fn_name, None, function_return_type,
+         signature, function_type, module_path, True],
+    )
+    set_id = uuid.uuid4()
+    db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)", [set_id, uuid.uuid4(), fn_name, None])
+    db.execute("INSERT INTO function_set_map VALUES (?, ?, ?, ?)", [uuid.uuid4(), set_id, fn_id, 0])
+    sfm_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO source_function_map (source_function_map_id, source_id, set_id, position, output_mode) VALUES (?, ?, ?, ?, ?)",
+        [sfm_id, source_id, set_id, position, output_mode],
+    )
+    for param_name, param_type, col_ids in param_specs:
+        param_id = uuid.uuid4()
+        db.execute(
+            "INSERT INTO parameter (param_id, content_hash_id, param_name, param_type, function_id) VALUES (?, ?, ?, ?, ?)",
+            [param_id, uuid.uuid4(), param_name, param_type, fn_id],
+        )
+        for pos, col_id in enumerate(col_ids):
+            am_id = content_hash_id("alias_map", str(param_id), str(col_id), str(source_id))
+            db.execute(
+                "INSERT INTO alias_map (alias_map_id, column_id, parameter_id, source_id, position) VALUES (?, ?, ?, ?, ?)",
+                [am_id, col_id, param_id, source_id, pos],
+            )
+    if output_targets:
+        for pos, col_id in enumerate(output_targets):
+            otm_id = content_hash_id("output_target_map", str(sfm_id), str(col_id), str(pos))
+            db.execute(
+                "INSERT INTO output_target_map (output_target_map_id, source_function_map_id, function_id, column_id, position) VALUES (?, ?, ?, ?, ?)",
+                [otm_id, sfm_id, fn_id, col_id, pos],
+            )
+    return sfm_id
+
+
+def _seed_multiparam_validation_step(
+    db, source_id, param_specs, fn_name, module_path,
+    function_class="pd.series", function_return_type="pd.Series[bool]", position=0,
+):
+    """Convenience wrapper: seed a multi-param *validation* function."""
+    return _seed_multiparam_step(
+        db, source_id, param_specs, fn_name, module_path,
+        function_type="validation", function_class=function_class,
+        function_return_type=function_return_type, position=position,
+    )
+
+
+@pytest.mark.integration
+def test_multi_series_params_all_received_in_one_call(db, tmp_path):
+    """Two pd.Series column-backed params (1 col each) → a single N=1 bundle; BOTH Series
+    reach the function in one call. Before the fix the 2nd param was dropped and the
+    worker crashed with a missing-kwarg TypeError."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b"))
+    col_a, col_b = [_val_col(db, source_id, c) for c in ("a", "b")]
+
+    fn_path = tmp_path / "combine.py"
+    fn_path.write_text("def combine(a, b):\n    return b >= a\n")
+    _seed_multiparam_validation_step(
+        db, source_id,
+        [("a", "pd.Series", [col_a]), ("b", "pd.Series", [col_b])],
+        "combine", str(fn_path),
+    )
+
+    steps = run_pipeline(db, source_id, "validations")["steps"]
+    assert len(steps) == 1
+    assert steps[0]["status"] == "ok", steps[0].get("error")
+    # b=[11,21,31] >= a=[10,20,30] → all 3 pass; proves both Series arrived.
+    assert steps[0]["rows_passed"] == 3
+    assert steps[0]["rows_passed"] + steps[0]["rows_failed"] == 3
+
+
+@pytest.mark.integration
+def test_multi_scalar_params_one_col_each_run_per_row(db, tmp_path):
+    """Three scalar-shaped params, 1 col each → single N=1 bundle, per-row (scalar run);
+    all three per-row values reach the function."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b", "c"))
+    col_ids = [_val_col(db, source_id, c) for c in ("a", "b", "c")]
+
+    fn_path = tmp_path / "ascending.py"
+    fn_path.write_text("def ascending(a, b, c):\n    return a < b < c\n")
+    _seed_multiparam_validation_step(
+        db, source_id,
+        [("a", "int", [col_ids[0]]), ("b", "int", [col_ids[1]]), ("c", "int", [col_ids[2]])],
+        "ascending", str(fn_path),
+        function_class="scalar", function_return_type="bool",
+    )
+
+    steps = run_pipeline(db, source_id, "validations")["steps"]
+    assert len(steps) == 1  # all static → one bundle
+    assert steps[0]["status"] == "ok", steps[0].get("error")
+    # each row is strictly ascending (10<11<12, 20<21<22, 30<31<32) → 3 pass.
+    assert steps[0]["rows_passed"] == 3
+
+
+@pytest.mark.integration
+def test_multi_param_varying_plus_static_broadcasts(db, tmp_path):
+    """Two varying params (N=2 cols each) + one static param (1 col) → 2 bundles, the
+    static param broadcast into both; each bundle labeled by its varying columns."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b", "c", "d", "e"))
+    cid = {c: _val_col(db, source_id, c) for c in ("a", "b", "c", "d", "e")}
+
+    fn_path = tmp_path / "sum_pos.py"
+    fn_path.write_text("def sum_pos(x, y, s):\n    return (x + y + s) > 0\n")
+    _seed_multiparam_validation_step(
+        db, source_id,
+        [("x", "pd.Series", [cid["a"], cid["b"]]),
+         ("y", "pd.Series", [cid["c"], cid["d"]]),
+         ("s", "pd.Series", [cid["e"]])],
+        "sum_pos", str(fn_path),
+    )
+
+    steps = run_pipeline(db, source_id, "validations")["steps"]
+    assert len(steps) == 2  # N=2 varying → 2 bundles; s broadcast into both
+    assert all(s["status"] == "ok" for s in steps), [s.get("error") for s in steps]
+    assert {s["label"] for s in steps} == {"a_c", "b_d"}
+    for s in steps:
+        assert s["rows_passed"] == 3  # all sums positive
+
+
+@pytest.mark.integration
+def test_multi_param_unequal_varying_fails_cleanly(db, tmp_path):
+    """Two varying params disagreeing on column count (2 vs 3) → BundleLengthError,
+    surfaced as one failed RunResult (the step continues in the real pipeline)."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b", "c", "d", "e"))
+    cid = {c: _val_col(db, source_id, c) for c in ("a", "b", "c", "d", "e")}
+
+    fn_path = tmp_path / "twoparam.py"
+    fn_path.write_text("def twoparam(x, z):\n    return (x + z) > 0\n")
+    _seed_multiparam_validation_step(
+        db, source_id,
+        [("x", "pd.Series", [cid["a"], cid["b"]]),
+         ("z", "pd.Series", [cid["c"], cid["d"], cid["e"]])],
+        "twoparam", str(fn_path),
+    )
+
+    steps = run_pipeline(db, source_id, "validations")["steps"]
+    assert len(steps) == 1
+    assert steps[0]["status"] == "failed"
+    assert "same number of columns" in (steps[0].get("error") or "")
+
+
+@pytest.mark.integration
+def test_multi_param_mixed_series_and_scalar_rejected(db, tmp_path):
+    """A function mixing a pd.Series param with a scalar-shaped column-backed param is
+    rejected (MixedShapeError) before any worker runs — the two dispatch models
+    (once-per-bundle vs once-per-row) can't be satisfied at once."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b"))
+    col_a, col_b = [_val_col(db, source_id, c) for c in ("a", "b")]
+
+    fn_path = tmp_path / "mixed.py"
+    fn_path.write_text("def mixed(x, t):\n    return x > t\n")
+    _seed_multiparam_validation_step(
+        db, source_id,
+        [("x", "pd.Series", [col_a]), ("t", "int", [col_b])],
+        "mixed", str(fn_path),
+    )
+
+    steps = run_pipeline(db, source_id, "validations")["steps"]
+    assert len(steps) == 1
+    assert steps[0]["status"] == "failed"
+    assert "mix pd.Series and scalar" in (steps[0].get("error") or "")
+
+
+@pytest.mark.integration
+def test_run_multi_param_bundles_scalar_empty_frame_returns_series(tmp_path):
+    """The scalar wrapper guards the empty frame: ``DataFrame.apply(axis=1)`` on 0 rows
+    returns a DataFrame (which would break downstream normalization) — the guard returns
+    an empty Series instead. Unit test on the helper so the guard is locked directly."""
+    fn_path = tmp_path / "ascending_empty.py"
+    fn_path.write_text("def ascending_empty(a, b, c):\n    return a < b < c\n")
+    params = [
+        {"param_id": "p_a", "param_name": "a", "param_type": "int", "bindings": ["a"]},
+        {"param_id": "p_b", "param_name": "b", "param_type": "int", "bindings": ["b"]},
+        {"param_id": "p_c", "param_name": "c", "param_type": "int", "bindings": ["c"]},
+    ]
+    empty = pd.DataFrame({"a": [], "b": [], "c": []})
+    outcomes = run_multi_param_bundles(
+        fn_source=fn_path.read_text(), fn_name="ascending_empty",
+        column_backed_params=params, source_frame=empty, extra_kwargs={},
+    )
+    assert len(outcomes) == 1
+    assert isinstance(outcomes[0].result, pd.Series)
+    assert len(outcomes[0].result) == 0
+
+
+@pytest.mark.integration
+def test_transform_multi_series_params_append(db, tmp_path):
+    """A transform with two pd.Series column-backed params (1 col each) → one N=1 bundle
+    → one appended column combining both; originals preserved."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b"))
+    col_a, col_b = [_val_col(db, source_id, c) for c in ("a", "b")]
+
+    fn_path = tmp_path / "addab.py"
+    fn_path.write_text("def addab(x, y):\n    return x + y\n")
+    _seed_multiparam_step(
+        db, source_id,
+        [("x", "pd.Series", [col_a]), ("y", "pd.Series", [col_b])],
+        "addab", str(fn_path),
+        function_type="transform", function_class="pd.series",
+        function_return_type="pd.Series", output_mode="append",
+    )
+
+    steps = run_pipeline(db, source_id, "transforms")["steps"]
+    assert len(steps) == 1
+    assert all(s["status"] == "ok" for s in steps), [s.get("error") for s in steps]
+
+    staging = _list_staging_tables(db, source_id)[0]
+    df = db.execute(f'SELECT * FROM "{staging}"').df()
+    assert "a" in df.columns and "b" in df.columns          # originals preserved
+    new_cols = [c for c in df.columns if c not in ("id", "a", "b")]
+    assert len(new_cols) == 1
+    # a=[10,20,30] + b=[11,21,31] = [21,41,61]; proves both Series reached the function.
+    assert sorted(df[new_cols[0]].tolist()) == [21, 41, 61]
+
+
+@pytest.mark.integration
+def test_transform_multi_param_replace_without_targets_fails(db, tmp_path):
+    """Replace mode with multiple column-backed params and NO explicit output targets is
+    a config error (no single input column to overwrite) → failed RunResult."""
+    source_id, _ = _register_multicol_source_and_ingest(db, tmp_path, cols=("a", "b"))
+    col_a, col_b = [_val_col(db, source_id, c) for c in ("a", "b")]
+
+    fn_path = tmp_path / "addab2.py"
+    fn_path.write_text("def addab2(x, y):\n    return x + y\n")
+    _seed_multiparam_step(
+        db, source_id,
+        [("x", "pd.Series", [col_a]), ("y", "pd.Series", [col_b])],
+        "addab2", str(fn_path),
+        function_type="transform", function_class="pd.series",
+        function_return_type="pd.Series", output_mode="replace",  # no output_targets
+    )
+
+    steps = run_pipeline(db, source_id, "transforms")["steps"]
+    assert len(steps) == 1
+    assert steps[0]["status"] == "failed"
+    assert "output target" in (steps[0].get("error") or "")
