@@ -17,7 +17,7 @@ here (one-way, no back-import); external tests import these symbols directly fro
 Binding and execution are split across three seams the executors depend **down** on:
 ``contract.bind(binding)`` (data/functions — literals, shape homogeneity, bundle
 pairing), ``realize`` (one BoundCall → one worker call), and ``interpret``
-(validation-result normalization); ``sql_exec`` runs ``.sql`` functions. This module
+(validation-result normalization); ``sql_engine`` runs ``.sql`` contracts. This module
 keeps the ``StepExecutor`` registry, the executor classes, the run carriers, and the
 per-function write-back mechanics that drive them (Phase 3 of the FunctionContract
 redesign — the former per-arm binding logic collapsed onto bind()+realize()).
@@ -62,7 +62,7 @@ from pipeui.backend.data.runner.steps import (
 )
 from pipeui.backend.domain.runner.interpret import interpret_validation_result
 from pipeui.backend.domain.runner.realize import realize
-from pipeui.backend.domain.runner.sql_exec import execute_sql_function
+from pipeui.backend.domain.runner.sql_engine import execute_sql_contract
 
 
 # ---------------------------------------------------------------------------
@@ -180,23 +180,37 @@ def _execute_transform_step(
         append_name = fn.append_name
         output_targets = list(fn.output_targets) or []
 
-        # SQL functions: execute directly on DuckDB connection (whole-table, one run).
-        if module_path and module_path.endswith(".sql"):
+        contract, binding = fn.contract_binding()
+
+        # SQL functions: execute on the DuckDB connection (no worker). Routed by the
+        # contract's engine; the module-path suffix covers registry rows written
+        # before the engine column existed (#140).
+        if contract.engine == "sql" or (module_path and module_path.endswith(".sql")):
             if conn is None or source_id is None:
                 return working, "SQL function execution requires conn and source_id", run_results
-            result = execute_sql_function(conn, module_path, source_id)
-            if isinstance(result, FailedFunctionEntry):
-                return working, _fail_msg(result, "SQL execution failed"), run_results
-            current = result
-            _emit(fn_name=fn_name, bound_col=None, status="ok", error=None)
+            try:
+                calls = contract.bind(binding)
+            except (RequiredParamError, BundleLengthError, MixedShapeError) as exc:
+                _emit(fn_name=fn_name, bound_col=None, status="failed", error=str(exc))
+                continue
+            for call in calls:
+                result = execute_sql_contract(
+                    conn, contract, call, frame=current, source_id=source_id
+                )
+                if isinstance(result, FailedFunctionEntry):
+                    return working, _fail_msg(result, "SQL execution failed"), run_results
+                current = result
+                _emit(
+                    fn_name=fn_name,
+                    bound_col=call.bundle_key if call.column_kwargs else None,
+                    status="ok", error=None,
+                )
             continue
 
         try:
             fn_source = Path(module_path).read_text(encoding="utf-8")
         except OSError as exc:
             return working, f"cannot read module: {exc}", run_results
-
-        contract, binding = fn.contract_binding()
 
         # bind(): literals (a required param with no value/default fails this function
         # cleanly, the step continues) -> shape homogeneity -> bundle pairing (a config
@@ -463,8 +477,12 @@ def _execute_validation_step(
         fn_name = fn.function_name
         module_path = fn.module_path
 
-        # SQL functions: execute directly on DuckDB connection (no column expansion).
-        if module_path and module_path.endswith(".sql"):
+        contract, binding = fn.contract_binding()
+
+        # SQL functions: execute on the DuckDB connection (no worker). Routed by the
+        # contract's engine; the module-path suffix covers registry rows written
+        # before the engine column existed (#140).
+        if contract.engine == "sql" or (module_path and module_path.endswith(".sql")):
             if conn is None or source_id is None:
                 results.append(_emit(
                     fn_id=fn_id, fn_name=fn_name, bound_col=None,
@@ -473,10 +491,24 @@ def _execute_validation_step(
                     error="SQL function execution requires conn and source_id",
                 ))
                 continue
-            sql_result = execute_sql_function(conn, module_path, source_id)
-            results.append(interpret_validation_result(
-                sql_result, original, fn_id=fn_id, fn_name=fn_name, bound_col=None, emit=_emit,
-            ))
+            try:
+                calls = contract.bind(binding)
+            except (RequiredParamError, BundleLengthError, MixedShapeError) as exc:
+                results.append(_emit(
+                    fn_id=fn_id, fn_name=fn_name, bound_col=None,
+                    status="failed", rows_passed=None, rows_failed=None,
+                    failing_rows=[], error=str(exc),
+                ))
+                continue
+            for call in calls:
+                sql_result = execute_sql_contract(
+                    conn, contract, call, frame=original, source_id=source_id
+                )
+                results.append(interpret_validation_result(
+                    sql_result, original, fn_id=fn_id, fn_name=fn_name,
+                    bound_col=call.bundle_key if call.column_kwargs else None,
+                    emit=_emit,
+                ))
             continue
 
         try:
@@ -488,8 +520,6 @@ def _execute_validation_step(
                 failing_rows=[], error=f"cannot read module: {exc}",
             ))
             continue
-
-        contract, binding = fn.contract_binding()
 
         try:
             calls = contract.bind(binding)

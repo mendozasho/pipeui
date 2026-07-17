@@ -7,12 +7,29 @@ from pathlib import Path
 
 import pytest
 
+from pipeui.backend.data.base.tables import instance_table_name
+from pipeui.backend.data.functions.binding import StepBinding
 from pipeui.backend.domain.functions.discovery import extract_contracts
 from pipeui.backend.domain.functions.registration import scan_functions
 from pipeui.backend.domain.functions.function_read import list_functions
-from pipeui.backend.domain.runner.sql_exec import execute_sql_function
-from pipeui.backend.data.base.tables import instance_table_name
+from pipeui.backend.domain.runner.sql_engine import execute_sql_contract
 from tests.conftest import make_registered_source
+
+
+def pd_empty():
+    import pandas as pd
+
+    return pd.DataFrame()
+
+
+def _implicit_call(sql_file):
+    """Extract the implicit (param-less) contract from a .sql file and bind it —
+    the legacy execute path: one table-mode BoundCall against the instance table."""
+    contract = extract_contracts(sql_file)[0].contract
+    assert contract is not None
+    calls = contract.bind(StepBinding())
+    assert len(calls) == 1
+    return contract, calls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +273,8 @@ class TestSqlFunctionExecution:
             SELECT * FROM {source_table} WHERE val IS NOT NULL
         """)
 
-        result = execute_sql_function(db, str(sql_file), source_id)
+        contract, call = _implicit_call(sql_file)
+        result = execute_sql_contract(db, contract, call, frame=pd_empty(), source_id=source_id)
         import pandas as pd
         assert isinstance(result, pd.DataFrame), f"Expected DataFrame, got {type(result)}: {result}"
         assert len(result) == 2
@@ -274,7 +292,8 @@ class TestSqlFunctionExecution:
             SELECT * FROM this_table_does_not_exist_xyz
         """)
 
-        result = execute_sql_function(db, str(sql_file), source_id)
+        contract, call = _implicit_call(sql_file)
+        result = execute_sql_contract(db, contract, call, frame=pd_empty(), source_id=source_id)
         assert isinstance(result, FailedFunctionEntry), f"Expected FailedFunctionEntry, got {result}"
         assert result.has_failures()
 
@@ -293,7 +312,8 @@ class TestSqlFunctionExecution:
         """)
 
         import pandas as pd
-        result = execute_sql_function(db, str(sql_file), source_id)
+        contract, call = _implicit_call(sql_file)
+        result = execute_sql_contract(db, contract, call, frame=pd_empty(), source_id=source_id)
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 2
         assert list(result["id"]) == [1, 2]

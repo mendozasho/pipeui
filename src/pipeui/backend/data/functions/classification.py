@@ -42,14 +42,19 @@ class TypeDescriptor:
 
 # Ordered low → high granularity. The one table all classification reads from.
 # A new supported type is a single row here (OCP, #51).
+# `date` and `source_ref` (sql engine, #140) are declarable only via `-- param:`
+# headers — no Python annotation canonicalizes to them, so .py scans cannot
+# produce (and the worker never receives) either type.
 _TYPE_DESCRIPTORS: tuple[TypeDescriptor, ...] = (
     TypeDescriptor("int",             0, "scalar",       "scalar",          False),
     TypeDescriptor("float",           0, "scalar",       "scalar",          False),
     TypeDescriptor("bool",            0, "scalar",       "boolean",         True),
+    TypeDescriptor("date",            0, "scalar",       "scalar",          False),
     TypeDescriptor("str",             1, "scalar",       "scalar",          False),
     TypeDescriptor("pd.Series[bool]", 2, "pd.Series",    "pd.Series[bool]", True),
     TypeDescriptor("pd.Series",       2, "pd.Series",    "pd.Series",       False),
     TypeDescriptor("pd.DataFrame",    3, "pd.dataframe", "pd.DataFrame",    False),
+    TypeDescriptor("source_ref",      3, "source_ref",   "pd.DataFrame",    False),
 )
 
 def _derive_lookups(
@@ -118,9 +123,10 @@ def derive_function_class(param_types: list[str]) -> str:
 # four-site edit (OCP/DRY). The three modules that gated binding by their own type
 # sets (suggest, attach) read THIS instead.
 _CLASS_TO_BINDING_KIND: dict[str, str] = {
-    "scalar": "value_or_column",   # int/float/bool/str — a literal value OR a bound column
+    "scalar": "value_or_column",   # int/float/bool/str/date — a literal value OR a bound column
     "pd.Series": "column_only",    # always one-or-more bound columns, never a literal
     "pd.dataframe": "table",       # always the full table, never bound
+    "source_ref": "source_only",   # a reference to another source (sql engine, #140)
 }
 
 
