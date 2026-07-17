@@ -309,3 +309,94 @@ class TestRenameLowered:
         with pytest.raises(ValueError, match="not found"):
             execute_rename_lowered(df, {"renames": {"ghost": "x", "a": "y"}})
         assert list(df.columns) == ["a", "b"]  # untouched
+
+
+# ---------------------------------------------------------------------------
+# join + pivot — factory contracts + shim-owned execution (#146)
+# ---------------------------------------------------------------------------
+
+from pipeui.backend.domain.functions.builtin_lowering import (  # noqa: E402
+    execute_pivot_lowered,
+    join_contract,
+    pivot_contract,
+)
+
+
+class TestJoinContractFactory:
+    @pytest.mark.unit
+    def test_composite_key_is_n_params_in_one_call(self):
+        # Each key pair is its own single-column param — binding never
+        # multi-select-expands, so a composite key is ONE call.
+        c = join_contract("inner", 2, keep_all=True)
+        assert [p.name for p in c.params] == [
+            "left", "right", "left_on_0", "right_on_0", "left_on_1", "right_on_1",
+        ]
+        assert c.engine == "sql"
+        assert "INNER JOIN" in c.body
+        assert "{left}.{left_on_0} = {right}.{right_on_0}" in c.body
+        assert "AND {left}.{left_on_1} = {right}.{right_on_1}" in c.body
+
+    @pytest.mark.unit
+    def test_join_type_selects_the_contract(self):
+        assert "LEFT JOIN" in join_contract("left", 1, True).body
+        assert "FULL JOIN" in join_contract("full", 1, True).body
+        with pytest.raises(KeyError):
+            join_contract("cross", 1, True)  # not in the whitelist
+
+    @pytest.mark.unit
+    def test_keep_columns_shapes_select(self):
+        assert join_contract("inner", 1, True).body.startswith("SELECT {left}.*, {right}.*")
+        assert join_contract("inner", 1, False).body.startswith("SELECT * FROM")
+
+
+class TestPivotContractFactory:
+    @pytest.mark.unit
+    def test_using_and_index_params(self):
+        c = pivot_contract(["sum", "avg"], 1)
+        assert [p.name for p in c.params] == [
+            "table", "pivot_column", "value_0", "value_1", "index_0",
+        ]
+        assert "USING sum({value_0}), avg({value_1})" in c.body
+        assert "GROUP BY {index_0}" in c.body
+
+    @pytest.mark.unit
+    def test_no_index_columns_no_group_by(self):
+        assert "GROUP BY" not in pivot_contract(["sum"], 0).body
+
+
+class TestPivotLowered:
+    @pytest.mark.integration
+    def test_pivot_through_contract(self, db):
+        df = pd.DataFrame({
+            "region": ["east", "west", "east", "west"],
+            "quarter": ["q1", "q1", "q2", "q2"],
+            "amount": [10.0, 20.0, 30.0, None],  # messy: NULL value
+        })
+        out = execute_pivot_lowered(db, df, {
+            "pivot_column": "quarter",
+            "index_columns": ["region"],
+            "value_columns": [{"col_name": "amount", "aggregations": ["sum"]}],
+        })
+        assert "region" in out.columns
+        east = out[out["region"] == "east"].iloc[0]
+        assert east["q1"] == 10.0 and east["q2"] == 30.0
+        west = out[out["region"] == "west"].iloc[0]
+        assert west["q1"] == 20.0 and pd.isna(west["q2"])  # NULL aggregates to NULL
+
+    @pytest.mark.integration
+    def test_hostile_aggregation_rejected_as_template_text(self, db):
+        df = pd.DataFrame({"p": ["a"], "v": [1.0]})
+        with pytest.raises(ValueError, match="unknown aggregations"):
+            execute_pivot_lowered(db, df, {
+                "pivot_column": "p",
+                "value_columns": [{"col_name": "v", "aggregations": ["sum(1); DROP TABLE x; --"]}],
+            })
+
+    @pytest.mark.integration
+    def test_missing_pivot_column_rejected(self, db):
+        df = pd.DataFrame({"p": ["a"], "v": [1.0]})
+        with pytest.raises(ValueError, match="not a column of the input"):
+            execute_pivot_lowered(db, df, {
+                "pivot_column": "ghost",
+                "value_columns": [{"col_name": "v", "aggregations": ["sum"]}],
+            })
