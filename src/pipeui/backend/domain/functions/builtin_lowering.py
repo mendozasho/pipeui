@@ -11,6 +11,12 @@ executed through the same engine path as user functions:
     condition so no contract ever carries a nullable scalar. The one-level DNF
     (conditions AND within a group, groups OR across) is orchestration ABOVE the
     contract (``runner/dnf.py``); each condition is exactly one BoundCall.
+  - **rename** → ONE python-engine contract, ``rename_column(df, old_name,
+    new_name)``, executed in the isolated worker via ``realize`` (its inline
+    source rides on ``contract.body``). The batch semantics — simultaneous
+    application of the whole mapping, so swaps/chains work — are orchestration:
+    the shim runs the legacy global checks, then schedules per-pair calls,
+    routing through reserved temp names when a target is also a pending source.
 
 Lowering shims translate the persisted ``builtin_config`` JSON into
 ``StepBinding``s at run time, so ``source_builtin_map``, the attach/patch
@@ -32,8 +38,14 @@ import pandas as pd
 
 from pipeui.backend.data.base.fails import FailedFunctionEntry
 from pipeui.backend.data.functions.binding import ParamBinding, StepBinding
-from pipeui.backend.data.functions.contract import ENGINE_SQL, FunctionContract, ParamContract
+from pipeui.backend.data.functions.contract import (
+    ENGINE_PYTHON,
+    ENGINE_SQL,
+    FunctionContract,
+    ParamContract,
+)
 from pipeui.backend.domain.runner.dnf import combine_dnf, normalize_mask
+from pipeui.backend.domain.runner.realize import realize
 from pipeui.backend.domain.runner.sql_engine import execute_sql_contract
 
 
@@ -210,3 +222,95 @@ def execute_date_range_lowered(
 
     keep = combine_dnf(group_masks, n_rows)
     return df[keep.values].reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# rename — one python-engine contract + simultaneous-apply orchestration
+# ---------------------------------------------------------------------------
+
+_RENAME_SOURCE = '''def rename_column(df, old_name, new_name):
+    return df.rename(columns={old_name: new_name})
+'''
+
+RENAME_COLUMN = FunctionContract(
+    name="rename_column",
+    engine=ENGINE_PYTHON,
+    params=(
+        ParamContract(name="df", type_str="pd.DataFrame", position=0),
+        ParamContract(name="old_name", type_str="str", position=1),
+        ParamContract(name="new_name", type_str="str", position=2),
+    ),
+    return_type="pd.DataFrame",
+    signature="(df: pd.DataFrame, old_name: str, new_name: str) -> pd.DataFrame",
+    body=_RENAME_SOURCE,
+)
+
+
+def _apply_rename(df: pd.DataFrame, old: str, new: str) -> pd.DataFrame:
+    """One contract call: rename a single column through the isolated worker."""
+    binding = StepBinding(params=(
+        ParamBinding(param_name="df", kind="table"),
+        ParamBinding(param_name="old_name", kind="literal", value=old),
+        ParamBinding(param_name="new_name", kind="literal", value=new),
+    ))
+    call = RENAME_COLUMN.bind(binding)[0]
+    result = realize(RENAME_COLUMN, call, fn_source=RENAME_COLUMN.body, frame=df)
+    if isinstance(result, FailedFunctionEntry):
+        reasons = "; ".join(r for _, r in result.failures) or "worker failed"
+        raise ValueError(reasons)
+    return result
+
+
+def _rename_schedule(cols: list[str], renames: dict[str, str]) -> list[tuple[str, str]]:
+    """Order the per-pair calls so sequential application equals SIMULTANEOUS
+    application of the whole mapping (the legacy ``df.rename`` semantics).
+
+    When no target is also a pending source, the pairs apply directly. A swap or
+    chain (a→b, b→a / a→b, b→c) routes through reserved temp names: pass 1 moves
+    every source to a collision-free temp, pass 2 moves temps to their targets.
+    """
+    pairs = list(renames.items())
+    sources = set(renames.keys())
+    needs_two_pass = any(new in sources and new != old for old, new in pairs)
+    if not needs_two_pass:
+        return pairs
+
+    taken = set(cols) | set(renames.values())
+    schedule: list[tuple[str, str]] = []
+    temps: list[tuple[str, str]] = []
+    for i, (old, new) in enumerate(pairs):
+        tmp = f"__pipeui_ren_{i}"
+        while tmp in taken:
+            tmp += "_x"
+        taken.add(tmp)
+        schedule.append((old, tmp))
+        temps.append((tmp, new))
+    return schedule + temps
+
+
+def execute_rename_lowered(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Run a rename built-in as per-pair ``rename_column`` contract calls.
+
+    The retired ``_execute_rename``'s batch checks run FIRST (identical
+    messages, frame untouched on error): every source column must exist in the
+    working frame; no target may collide with a *surviving* column (one not
+    itself renamed away — so swaps are legal). The scheduled calls then
+    reproduce simultaneous application. The caller (``builtins.py``'s
+    BuiltinSpec) has already run the pure config validator.
+    """
+    renames: dict[str, str] = cfg["renames"]
+    cols = list(df.columns)
+
+    missing = [old for old in renames if old not in cols]
+    if missing:
+        raise ValueError(f"rename: column(s) not found in the working data: {missing}")
+
+    surviving = set(cols) - set(renames.keys())
+    collisions = sorted({new for new in renames.values() if new in surviving})
+    if collisions:
+        raise ValueError(f"rename: target name(s) already exist in the working data: {collisions}")
+
+    current = df
+    for old, new in _rename_schedule(cols, renames):
+        current = _apply_rename(current, old, new)
+    return current

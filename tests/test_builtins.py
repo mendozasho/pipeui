@@ -45,7 +45,7 @@ from pipeui.backend.domain.functions.builtins import (
     get_unified_pipeline,
     patch_builtin,
     _validate_rename_config,
-    _execute_rename,
+    _run_lowered_rename,
     _validate_date_range_config,
 )
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
@@ -793,21 +793,21 @@ def test_validate_rename_config_shapes():
 
 def test_execute_rename_renames_columns():
     df = pd.DataFrame({"a": [1], "b": [2]})
-    out = _execute_rename(None, df, {"renames": {"a": "A"}})
+    out = _run_lowered_rename(None, df, {"renames": {"a": "A"}})
     assert list(out.columns) == ["A", "b"]
 
 
 def test_execute_rename_missing_column_raises():
     df = pd.DataFrame({"a": [1]})
     with pytest.raises(ValueError, match="not found"):
-        _execute_rename(None, df, {"renames": {"zzz": "Z"}})
+        _run_lowered_rename(None, df, {"renames": {"zzz": "Z"}})
 
 
 def test_execute_rename_target_collision_raises():
     # Renaming a -> b collides with the surviving column b.
     df = pd.DataFrame({"a": [1], "b": [2]})
     with pytest.raises(ValueError, match="already exist"):
-        _execute_rename(None, df, {"renames": {"a": "b"}})
+        _run_lowered_rename(None, df, {"renames": {"a": "b"}})
 
 
 def test_attach_rename_is_singleton(source):
@@ -837,7 +837,7 @@ def test_execute_rename_swap_is_allowed():
     # renamed away), so it must NOT raise — guards the `surviving = cols - keys`
     # nuance against a naive `new in columns` check.
     df = pd.DataFrame({"a": [1], "b": [2]})
-    out = _execute_rename(None, df, {"renames": {"a": "b", "b": "a"}})
+    out = _run_lowered_rename(None, df, {"renames": {"a": "b", "b": "a"}})
     assert out["a"].iloc[0] == 2 and out["b"].iloc[0] == 1  # labels swapped
 
 

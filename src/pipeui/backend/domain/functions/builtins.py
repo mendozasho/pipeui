@@ -137,8 +137,9 @@ def _validate_rename_config(cfg: dict) -> str | None:
 
     Config: ``{"renames": {"<old>": "<new>", ...}}`` — a non-empty mapping; every old
     and new name a non-empty string; new names unique (no two columns map to the same
-    target). Run-time existence + target-collision are checked in ``_execute_rename``
-    (step status=failed), the same split filter uses.
+    target). Run-time existence + target-collision are checked by the lowered
+    executor (``builtin_lowering.execute_rename_lowered``, step status=failed),
+    the same split filter uses.
     """
     renames = cfg.get("renames")
     if not isinstance(renames, dict) or not renames:
@@ -608,35 +609,6 @@ def _execute_pivot(
     return result
 
 
-def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-    """Execute a rename built-in (#40) — rename the selected columns in the working df.
-
-    Config: ``{"renames": {"<old>": "<new>", ...}}``. Operates on the FULL working df
-    (including columns added by upstream joins) and is output-only — it does NOT touch
-    the source's real schema (``column_registry`` / instance table).
-
-    Run-time checks (raise ``ValueError`` → step status=failed, the same split filter uses):
-      - every source column named in ``renames`` must exist in the working df;
-      - no target name may collide with a *surviving* column (an existing column not
-        itself being renamed away).
-
-    ``conn`` is unused (rename is pure pandas) but kept for the uniform executor signature.
-    """
-    renames = cfg["renames"]
-    cols = list(df.columns)
-
-    missing = [old for old in renames if old not in cols]
-    if missing:
-        raise ValueError(f"rename: column(s) not found in the working data: {missing}")
-
-    surviving = set(cols) - set(renames.keys())
-    collisions = sorted({new for new in renames.values() if new in surviving})
-    if collisions:
-        raise ValueError(f"rename: target name(s) already exist in the working data: {collisions}")
-
-    return df.rename(columns=renames)
-
-
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -689,6 +661,18 @@ def _run_lowered_filter(conn, df, cfg):
     return execute_filter_lowered(conn, df, cfg)
 
 
+def _run_lowered_rename(conn, df, cfg):
+    """Validate (this module owns the validators) then delegate to the lowered
+    per-pair rename_column contract calls (#144). ``conn`` is unused (python
+    engine) but kept for the uniform executor signature."""
+    err = _validate_rename_config(cfg)
+    if err:
+        raise ValueError(err)
+    from pipeui.backend.domain.functions.builtin_lowering import execute_rename_lowered
+
+    return execute_rename_lowered(df, cfg)
+
+
 def _run_lowered_date_range(conn, df, cfg):
     """Validate (this module owns the validators) then delegate to the lowered
     predicate-contract + DNF executor (#142)."""
@@ -724,7 +708,11 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
     ),
     "rename": BuiltinSpec(
         validate=_validate_rename_config,
-        execute=lambda conn, df, cfg, run_transforms: (_execute_rename(conn, df, cfg), None),
+        # #144: lowered onto the rename_column python-engine contract with
+        # simultaneous-apply orchestration (builtin_lowering).
+        execute=lambda conn, df, cfg, run_transforms: (
+            _run_lowered_rename(conn, df, cfg), None,
+        ),
         singleton=True,
         # #40: rename operates on the final output (incl. joined columns) so it is
         # last in the pinned tail; rank 1 belongs to date_range (runs before rename
