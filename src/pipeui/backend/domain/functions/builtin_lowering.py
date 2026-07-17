@@ -12,9 +12,9 @@ executed through the same engine path as user functions:
     (conditions AND within a group, groups OR across) is orchestration ABOVE the
     contract (``runner/dnf.py``); each condition is exactly one BoundCall.
   - **rename** → ONE python-engine contract, ``rename_column(df, old_name,
-    new_name)``, executed in the isolated worker via ``realize`` (its inline
-    source rides on ``contract.body``). The batch semantics — simultaneous
-    application of the whole mapping, so swaps/chains work — are orchestration:
+    new_name)``, executed IN-PROCESS (#148 fast path — app-authored source needs no
+    worker isolation; its inline source rides on ``contract.body``). The batch
+    semantics — simultaneous application, so swaps/chains work — are orchestration:
     the shim runs the legacy global checks, then schedules per-pair calls,
     routing through reserved temp names when a target is also a pending source.
 
@@ -45,7 +45,6 @@ from pipeui.backend.data.functions.contract import (
     ParamContract,
 )
 from pipeui.backend.domain.runner.dnf import combine_dnf, normalize_mask
-from pipeui.backend.domain.runner.realize import realize
 from pipeui.backend.domain.runner.sql_engine import execute_sql_contract
 
 
@@ -246,19 +245,36 @@ RENAME_COLUMN = FunctionContract(
 )
 
 
+def _run_python_contract_inprocess(contract: FunctionContract, call, frame: pd.DataFrame):
+    """Execute an APP-AUTHORED python contract in-process (#148 fast path).
+
+    The worker's process isolation is an accident boundary for USER code
+    (Principle 5). A contract whose source this module authors (``contract.body``)
+    is the backend's own code — the same trust level as the executor calling it —
+    so a subprocess per call buys no safety and costs a process spawn + two Arrow
+    round-trips. Semantics mirror ``realize``'s table/value modes: the frame under
+    the table param's name (first param fallback), literals as kwargs.
+
+    ONLY for contracts defined in this module. User code always goes through
+    ``realize`` and the worker.
+    """
+    namespace: dict = {"pd": pd}
+    exec(contract.body, namespace)  # noqa: S102 — app-authored source, never user code
+    fn = namespace[contract.name]
+    kwarg = call.table_params[0] if call.table_params else contract.params[0].name
+    return fn(**{kwarg: frame}, **dict(call.literal_kwargs))
+
+
 def _apply_rename(df: pd.DataFrame, old: str, new: str) -> pd.DataFrame:
-    """One contract call: rename a single column through the isolated worker."""
+    """One contract call: rename a single column (in-process fast path — the
+    contract is app-authored, see ``_run_python_contract_inprocess``)."""
     binding = StepBinding(params=(
         ParamBinding(param_name="df", kind="table"),
         ParamBinding(param_name="old_name", kind="literal", value=old),
         ParamBinding(param_name="new_name", kind="literal", value=new),
     ))
     call = RENAME_COLUMN.bind(binding)[0]
-    result = realize(RENAME_COLUMN, call, fn_source=RENAME_COLUMN.body, frame=df)
-    if isinstance(result, FailedFunctionEntry):
-        reasons = "; ".join(r for _, r in result.failures) or "worker failed"
-        raise ValueError(reasons)
-    return result
+    return _run_python_contract_inprocess(RENAME_COLUMN, call, df)
 
 
 def _rename_schedule(cols: list[str], renames: dict[str, str]) -> list[tuple[str, str]]:

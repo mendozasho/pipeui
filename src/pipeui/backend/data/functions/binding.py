@@ -114,9 +114,9 @@ class ParamBinding:
 class StepBinding:
     """One function's full binding on a source, in loader param order.
 
-    NOTE (parity): param order is the step loader's order — alphabetical by
-    ``param_name`` today. Phase 3 flips loader ordering to ``parameter.position``
-    (signature order); pairing follows whatever order this carries.
+    Param order is the step loader's order — ``parameter.position`` (signature
+    order, ``param_name`` tiebreak for legacy rows); pairing follows whatever
+    order this carries.
     """
 
     params: tuple[ParamBinding, ...] = ()

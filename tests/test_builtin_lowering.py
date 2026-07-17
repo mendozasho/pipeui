@@ -400,3 +400,22 @@ class TestPivotLowered:
                 "pivot_column": "ghost",
                 "value_columns": [{"col_name": "v", "aggregations": ["sum"]}],
             })
+
+
+class TestInProcessFastPath:
+    @pytest.mark.integration
+    def test_rename_never_spawns_a_worker(self, monkeypatch):
+        # #148: app-authored python contracts run in-process — the worker is for
+        # USER code. If any worker call happens, this test fails loudly.
+        import pipeui.backend.domain.runner.worker as worker
+
+        def _boom(*a, **kw):
+            raise AssertionError("worker spawned for an app-authored contract")
+
+        monkeypatch.setattr(worker, "call_function", _boom)
+        df = pd.DataFrame({"a": [1, None], "b": ["x", ""]})
+        out = execute_rename_lowered(df, {"renames": {"a": "b2", "b": "a"}})
+        assert sorted(out.columns) == ["a", "b2"]
+        # In-process: NO Arrow roundtrip — values and dtypes pass through as-is.
+        assert out["b2"].tolist()[0] == 1 and pd.isna(out["b2"].tolist()[1])
+        assert out["a"].tolist() == ["x", ""]

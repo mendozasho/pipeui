@@ -72,6 +72,19 @@ epics, not feature phases. See `ARCHITECTURE.md §7` for the layer-migration det
   consumed by `ingestion.py`, `inference.py`, and `create.py`)* → **#53** dead-code /
   stale-doc / `REFACTOR_PLAN.md` prune *(✅ done — PR #84 merged)*.
   All five waves (#44–#53) merged; epic #43 closed. See `ARCHITECTURE.md §7`.
+- **FunctionContract redesign — #134–#148** *(✅ complete — PRs #135/#137/#139/#141/#143/#145/#147
+  merged).* One universal function interface for user `.py`, user `.sql`, and lowered built-in
+  steps: `backend/data/functions/contract.py` (`FunctionContract`/`ParamContract`, derived facts,
+  serialization) + `binding.py` (`bind_contract` → `BoundCall`s; canonical home of
+  `RequiredParamError`/`coerce_scalar`); `classification.py` moved down to
+  `backend/data/functions/`; `discovery.py` emits contracts (`extract_contracts`) behind the new
+  AST guardrail screen (`guardrails.py`); `registration.py` persists `parameter.position` +
+  `function_registry.engine`/`function_body`; the executor arms collapsed onto `bind()` +
+  `realize` (`runner/realize.py`); `.sql` contracts run through `runner/sql_engine.py`; built-ins
+  lowered onto contracts (`functions/builtin_lowering.py`, with `runner/dnf.py` above
+  `date_range`'s predicates). `param_resolve.py`, `sql_exec.py`, `bundle_exec.py`, and the
+  `_execute_*` builtin executors removed. See `ARCHITECTURE.md §7` and
+  `CONTEXT.md → Module responsibilities`.
 
 ---
 
@@ -84,11 +97,10 @@ unit rather than encoding an answer in code.
 - ~~**`column_type` enum**~~ — **resolved**: `INTEGER`, `BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `DATE`, `TIMESTAMP`. No longer gates Phase C.
 - **PK uniqueness enforcement** — whether to validate the chosen/assumed PK is
   unique. Relevant to Phase A (`POST /sources`) if enforcement is added.
-- **Return-type vocabulary** (`vector`/`matrix` vs `pd.series`/`pd.dataframe`) —
-  gates `feat/function-registration` (Phase D; §11 is currently written
-  vocabulary-agnostic).
 
 *Resolved since the last revision (no longer gating):*
+- **Return-type vocabulary** → **`pd.Series`/`pd.DataFrame` throughout** (CLAUDE.md →
+  Active Deferred Work, resolved); Phase D shipped on it.
 - **`content_hash_id` edit-collision rule** → **reject** (surface as failure),
   enforced at the write boundary (CLAUDE.md Principle 1; §2/§3). Wiring tracked in
   REFACTOR_PLAN.md.

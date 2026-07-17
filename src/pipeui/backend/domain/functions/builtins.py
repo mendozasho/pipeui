@@ -19,8 +19,9 @@ execute_builtin_step(conn, df, step) -> tuple[pd.DataFrame, str | None]
     Executes a single built-in step against the working DataFrame and returns
     (result_df, consumed_result_id).  consumed_result_id is the resolved
     transformed-output result_id when a join consumed a transformed source
-    (lineage), else None.  Built-ins run as DuckDB SQL, NOT via the worker
-    subprocess.
+    (lineage), else None.  Execution delegates to builtin_lowering: every
+    built-in runs through a FunctionContract (SQL contracts on the backend's
+    own connection; rename's app-authored python contract in-process).
 
 get_unified_pipeline(conn, source_id) -> dict | None
     Returns a unified list of function steps and built-in steps ordered by

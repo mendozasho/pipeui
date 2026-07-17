@@ -485,6 +485,21 @@ has native Arrow support, so column-out-of-DuckDB → worker → result-back nee
 extra serialization step. Parquet remains a possible later spill-to-disk
 fallback for very large frames — not v1.
 
+**FunctionContract execution seams (#134–#148).** The execution model above is
+realized through one universal interface: extraction (`domain/functions/discovery.py`)
+runs the **AST guardrail screen** (`guardrails.py` — blocks os/subprocess/eval/dunder
+access with line-numbered reasons BEFORE any user module is exec'd for signature
+reading) and emits a `FunctionContract` (`data/functions/contract.py`); the loader
+hydrates `FunctionSpec.contract`/`.binding`; the executors call `contract.bind(binding)`
+(literal resolution → shape homogeneity → `pair_bundles`) and `realize()` — one
+`BoundCall` per worker call, packed-frame wrappers for column/row modes. **SQL-engine
+contracts** (`engine='sql'`, `-- param:` headers) execute on the backend's own DuckDB
+connection via `sql_engine.render_sql` — column identifiers validate against a closed
+vocabulary and scalars always bind as `?` (reject-never-quote); they are *not*
+process-isolated (the backend's own query). **App-authored python contracts** (the
+rename built-in) run in-process — worker isolation is for USER code; the app's own
+inline-source contracts gain nothing from a subprocess (#148).
+
 **Function write transactions (Principle 3).** Two separate atomic units, since
 they happen at different times:
 - **Registration** (uploading a `.py`): `function_registry` row + all that
@@ -532,6 +547,16 @@ The canonical vocabulary for `function_return_type` is **`scalar`**, **`boolean`
 **`pd.Series`**, and **`pd.DataFrame`** — matching the stored enum values `pd.series`
 and `pd.dataframe` (lowercase) used in the database. The legacy terms `vector` and
 `matrix` are retired.
+
+**Where it lives (#134).** The derivation table is
+`data/functions/classification.py::_TYPE_DESCRIPTORS` (one row per supported type —
+OCP); `FunctionContract` exposes every derived fact as a property (`function_class`,
+`function_type`, `binding_kind`, `granularity`) and adds `execution_mode()`
+(`table`/`column`/`row`/`value` from signature shape; vectorization preferred, `row`
+only for all-scalar column-backed signatures — realized as ONE vectorized worker
+call). Two SQL-header-only rows exist: `date` (scalar) and `source_ref` (references
+another source; `source_only` binding kind) — no Python annotation canonicalizes to
+either, so neither crosses the worker's JSON boundary.
 
 **Collapse on re-upload (Principle 2).** Functions sharing `function_name`,
 `function_class`, and `function_return_type` collapse **strictly on
@@ -596,6 +621,26 @@ sources.
 - The `alias_map` row id is the `uuid5` of (`parameter_id`, `column_id`,
   `source_id`); rows are written directly (no pydantic object), as part of the
   attach transaction (§10).
+- **Runtime resolution is `contract.bind(binding)` (#136/#138).** `StepBinding`
+  (`data/functions/binding.py`) is the in-memory shape of `alias_map` +
+  `source_scalar_map` + Python defaults; `bind()` resolves literals (persisted value
+  → default → `RequiredParamError`), enforces Series/scalar shape homogeneity
+  (`MixedShapeError`), and feeds `pair_bundles` — producing one `BoundCall` per
+  argument bundle. `BoundCall.iter_row_args(frame)` is the bound-args **semantic
+  spec** (N rows → N per-row argument sets, pandas NULL → None, literals broadcast);
+  executors realize it vectorized. Parameter order is **signature order**
+  (`parameter.position`), not alphabetical (flipped in #138 — bundle labels for
+  multi-param functions follow signature order).
+- **Built-ins bind the same way (#142–#146).** All five built-ins execute through
+  contracts: filter (one SQL contract per operator family — the operator *selects*
+  the contract), date_range (three predicate contracts + DNF orchestration in
+  `runner/dnf.py`), rename (one in-process python contract + simultaneous-apply
+  scheduling), join/pivot (factory contracts per structural shape — each composite
+  join key is its own pair of single-column params, so binding never
+  multi-select-expands). The persisted `builtin_config` JSON is lowered to
+  `StepBinding`s at run time by `domain/functions/builtin_lowering.py`;
+  `source_builtin_map` is the **permanent** home of built-in orchestration config
+  (registry-row persistence was evaluated and rejected — CLAUDE.md → Resolved).
 
 ---
 

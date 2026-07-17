@@ -119,9 +119,9 @@ def fetch_steps(
                 if col_name is not None:
                     params_map[key]["bindings"].append(col_name)
 
-            # #136 shadow hydration: the universal contract (params in signature
-            # order) + this source's persisted binding (params in loader order —
-            # alphabetical until Phase 3 flips ordering to position).
+            # #136: the universal contract + this source's persisted binding —
+            # both in signature (parameter.position) order, matching the query's
+            # ORDER BY above.
             contract = FunctionContract(
                 name=fn_name,
                 engine=fn_engine or "python",

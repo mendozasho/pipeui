@@ -6,11 +6,14 @@
 > dissolved. One deliberate deviation from §4's map: `builtins.py` lives in
 > `backend/domain/functions/` (not `runner/`) — a built-in is a complex function (#41).
 > The SRP-decomposition epic #43 that followed is **complete** — all five waves (#44–#53)
-> are merged and the epic is closed — see §7.
+> are merged and the epic is closed — see §7. The FunctionContract redesign (#134–#148) is
+> also complete: `classification` now lives in `backend/data/functions/` beside the
+> `contract`/`binding` leaves it feeds, and the runner's execution seams are
+> `realize`/`sql_engine`/`dnf` (see §7).
 
-The runner-resolution-model SRP map (`.claude/CONTEXT.md` → "Runner module responsibilities")
-carved up the runner cleanly but only the runner. This doc lifts that same discipline to the
-**whole project**: one layer model, one dependency rule, applied fractally.
+The SRP map (`.claude/CONTEXT.md` → "Module responsibilities (SRP)") carved up the runner
+cleanly but only the runner. This doc lifts that same discipline to the **whole project**:
+one layer model, one dependency rule, applied fractally.
 
 ---
 
@@ -49,13 +52,13 @@ backend/
       ids        db         schema/ (DDL + type maps + seeds)
       tables     settings   results        fails
     sources/                # source + column registry contracts + file type-inference
-    functions/              # function + function-set registry contracts
+    functions/              # function contract + binding + classification; function-set registry contracts
     runner/                 # step carriers, bundles, staging store, step loading
   domain/                   # orchestration; owns transactions; called by middleware
     base/                   # shared domain helpers (as they emerge)
     sources/                # create, ingestion (write-path), read, migration
-    functions/              # classification, discovery, registration, function_read, sets, attach
-    runner/                 # run orchestration, executors, resolve, builtins, worker, export
+    functions/              # guardrails, discovery, registration, function_read, sets, attach, builtins + builtin_lowering
+    runner/                 # run orchestration, executors, realize, sql_engine, dnf, resolve, interpret, worker, export
 ```
 
 `frontend/` (the React app at `src/pipeui/frontend/`, served as the FastAPI static dir;
@@ -129,6 +132,8 @@ Every cross-boundary value is one of these frozen carriers (never an ad-hoc dict
 | Carrier | Defined in (target) | Boundary |
 | --- | --- | --- |
 | `StepContext` + `FunctionStepContext`/`BuiltinStepContext`, `FunctionSpec` | `data/runner/steps` | data → domain |
+| `FunctionContract` + `ParamContract` | `data/functions/contract` | data → domain (discovery → registration; step_loader → executors) |
+| `StepBinding`/`ParamBinding` → `BoundCall` | `data/functions/binding` | data → domain (`contract.bind()` → executors → realize/sql_engine) |
 | `StepRunEnv`, `StepExecResult` | `domain/runner/executors` | within domain/runner |
 | `RunResult` / `ValidationRunResult` | `data/base/results` | produced by domain, consumed by domain + middleware/export |
 | `FrameRef` | `domain/runner/resolve` | within domain/runner; flows into `RunResult.consumed_result_id` |
@@ -191,6 +196,20 @@ to `backend/data/sources/inference.py`, the `get_conn` provider moved to `middle
   type, else VARCHAR" rule, consumed by `ingestion.py`, `inference.py`, and `create.py`.
   #53 (dead-code / stale-doc / `REFACTOR_PLAN.md` prune) is **done** (PR #84 merged).
 
-**Next.** Both architecture epics are closed: the §4 layer migration (#55) and the
-SRP-decomposition epic (#43, all five waves #44–#53 merged). No SRP/migration front remains
-open. The next structural reshape will be tracked as a new epic when one is opened.
+**The FunctionContract redesign (#134–#148 — complete).** The universal function interface,
+built inside the settled layer map: `backend/data/functions/contract.py`
+(`FunctionContract`/`ParamContract`, derived facts, serialization) + `binding.py`
+(`bind_contract` → `BoundCall`s); `classification.py` moved down from `domain/functions/` to
+`backend/data/functions/` so the contract derives without an upward import; discovery emits
+contracts behind the AST guardrail screen (`domain/functions/guardrails.py`); the executor's
+per-function-class arms collapsed onto `bind()` + `realize` (`domain/runner/realize.py`,
+replacing `bundle_exec.py`); `.sql` contracts run through `domain/runner/sql_engine.py`
+(replacing `sql_exec.py`); built-ins lowered onto contracts
+(`domain/functions/builtin_lowering.py`, with `domain/runner/dnf.py` above `date_range`'s
+predicates); `param_resolve.py` absorbed into `binding.py`. The #41 `functions⇄runner`
+coupling is now contract-mediated through `builtin_lowering` → `runner.{sql_engine,dnf,resolve}`.
+
+**Next.** All three architecture tracks are closed: the §4 layer migration (#55), the
+SRP-decomposition epic (#43, all five waves #44–#53 merged), and the FunctionContract
+redesign (#134–#148). No structural front remains open; the next reshape will be tracked
+as a new epic when one is opened.
