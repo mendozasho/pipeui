@@ -9,7 +9,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { MigrationConfirmModal, RegisterModal } from "./screen-data.jsx";
+import { MigrationConfirmModal, RegisterModal, patternGroupLabel } from "./screen-data.jsx";
 
 afterEach(() => {
   cleanup();
@@ -61,6 +61,32 @@ describe("MigrationConfirmModal", () => {
     fireEvent.click(screen.getByText("Migrate anyway"));
     // Default scope is "this_source".
     expect(onConfirm).toHaveBeenCalledWith("this_source");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// patternGroupLabel (#156) — the stored source `pattern` is a regex from
+// infer_pattern with digit runs generalized to literal `\d+` tokens; the group
+// header must show the filename convention (prefix up to the first number + *),
+// never the raw regex.
+// ---------------------------------------------------------------------------
+describe("patternGroupLabel", () => {
+  it("turns a single-token pattern into the prefix plus a wildcard", () => {
+    expect(patternGroupLabel("sales_\\d+")).toBe("sales_*");
+  });
+
+  it("collapses a multi-part date pattern to one wildcard — never the raw regex", () => {
+    expect(patternGroupLabel("sales-\\d+.\\d+.\\d+")).toBe("sales-*");
+  });
+
+  it("returns null for a missing pattern (source stays ungrouped)", () => {
+    expect(patternGroupLabel(null)).toBe(null);
+    expect(patternGroupLabel(undefined)).toBe(null);
+    expect(patternGroupLabel("")).toBe(null);
+  });
+
+  it("passes through a pattern with no digit token unchanged", () => {
+    expect(patternGroupLabel("static_name")).toBe("static_name");
   });
 });
 

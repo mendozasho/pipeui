@@ -1,6 +1,19 @@
 // Data screen — Phase B + B2: ingestion, drawer, data preview
 const { useState, useRef, useEffect, useCallback } = React;
 
+// Group label for sources that share a filename pattern (#156). The stored
+// `pattern` is a regex from infer_pattern (create.py) with digit runs already
+// generalized to literal `\d+` tokens — never render it raw. The label is the
+// filename prefix up to the first number plus a `*` wildcard:
+//   "sales_\d+"          → "sales_*"
+//   "sales-\d+.\d+.\d+"  → "sales-*"
+function patternGroupLabel(pattern) {
+  if (!pattern) return null;
+  const cut = pattern.indexOf("\\d+");
+  if (cut === -1) return pattern;
+  return pattern.slice(0, cut) + "*";
+}
+
 function DropZone({ onFiles }) {
   const { Icon, Btn } = window.__UI__;
   const [dragging, setDragging] = useState(false);
@@ -963,13 +976,11 @@ function ScreenData({ flash, addResultCard, onNavigate }) {
         <DropZone onFiles={files => setPendingFile(files[0])} />
 
         {loading ? <LoadingState /> : (() => {
-          // Partition sources into flat (no pattern) and grouped (by pattern_label).
-          // If pattern_label is absent, derive it client-side from `pattern` by
-          // replacing digit sequences with *, e.g. "sales_2024" → "sales_*".
+          // Partition sources into flat (no pattern) and grouped (by pattern label,
+          // derived client-side from `pattern` — see patternGroupLabel).
           const grouped = {}, flat = [];
           for (const s of sources) {
-            const label = s.pattern_label
-              || (s.pattern ? s.pattern.replace(/\d+/g, "*") : null);
+            const label = patternGroupLabel(s.pattern);
             if (label) {
               (grouped[label] ??= []).push({ ...s, _pattern_label: label });
             } else {
@@ -1024,4 +1035,4 @@ window.__ScreenData__ = ScreenData;
 
 // Named exports for the dev-time vitest harness only; the app consumes the screen
 // via the window.__ScreenData__ global above.
-export { ScreenData, MigrationConfirmModal, ColumnTypeRow, RegisterModal };
+export { ScreenData, MigrationConfirmModal, ColumnTypeRow, RegisterModal, patternGroupLabel };
