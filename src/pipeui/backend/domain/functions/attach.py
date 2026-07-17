@@ -26,7 +26,7 @@ import duckdb
 from pipeui.backend.data.base.ids import content_hash_id, new_id
 from pipeui.backend.data.base.results import normalize_label
 from pipeui.backend.data.runner.bundles import BundleLengthError, pair_bundles
-from pipeui.backend.domain.functions.classification import binding_kind
+from pipeui.backend.data.functions.classification import binding_kind
 
 
 # ---------------------------------------------------------------------------

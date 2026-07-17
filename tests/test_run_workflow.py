@@ -96,7 +96,7 @@ def _seed_transform_step(db, source_id, column_id, fn_name, module_path, output_
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series",
          f"data: pd.Series", "transform", module_path, True],
     )
@@ -139,7 +139,7 @@ def _seed_df_transform_step(db, source_id, fn_name, module_path, output_mode="re
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.dataframe", fn_name, None, "pd.DataFrame",
          "df: pd.DataFrame", "transform", module_path, True],
     )
@@ -175,7 +175,7 @@ def _seed_validation_step(db, source_id, column_id, fn_name, module_path, positi
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )
@@ -659,7 +659,7 @@ def _seed_str_validation_step(db, source_id, column_id, fn_name, module_path, po
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "scalar", fn_name, None, "bool",
          f"value: str", "validation", module_path, True],
     )
@@ -701,7 +701,7 @@ def _seed_unbound_series_validation_step(db, source_id, fn_name, module_path, po
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "pd.series", fn_name, None, "pd.Series[bool]",
          "data: pd.Series", "validation", module_path, True],
     )
@@ -878,7 +878,7 @@ def test_fetch_steps_reads_bindings_in_position_order(db):
     # Register a multi-column pd.Series function and attach in non-alphabetical order
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "pd.series", "fn_runner_pos", "doc", "pd.Series",
          "cols: pd.Series", "validation", "/tmp/fn_runner_pos.py", True],
     )
@@ -934,7 +934,7 @@ def _seed_multicol_validation_step(db, source_id, column_ids, fn_name, module_pa
     """
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "pd.series", fn_name, None, "pd.Series[bool]",
          f"{param_name}: {param_type}", "validation", module_path, True],
     )
@@ -1088,7 +1088,7 @@ def _seed_scalar_param_validation(
     is_above_threshold(value, threshold) is attached."""
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "scalar", fn_name, None, "bool",
          "(value: int, threshold: int)", "validation", module_path, True],
     )
@@ -1241,7 +1241,7 @@ def _seed_multicol_transform_step(
     optional ordered output_target_map rows for a replace step. Returns sfm_id."""
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "pd.series", fn_name, None, "pd.Series",
          "data: pd.Series", "transform", module_path, True],
     )
@@ -1392,10 +1392,10 @@ def _seed_mixed_set(db, source_id, col_id, val_path, tfm_path):
     db.execute("INSERT INTO function_set VALUES (?, ?, ?, ?)",
                [set_id, uuid.uuid4(), "mixedset", None])
     val_fn, tfm_fn = uuid.uuid4(), uuid.uuid4()
-    db.execute("INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                [val_fn, uuid.uuid4(), "pd.series", "gt0", None, "pd.Series[bool]",
                 "data: pd.Series", "validation", val_path, True])
-    db.execute("INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    db.execute("INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                [tfm_fn, uuid.uuid4(), "pd.series", "dbl", None, "pd.Series",
                 "data: pd.Series", "transform", tfm_path, True])
     val_param, tfm_param = uuid.uuid4(), uuid.uuid4()
@@ -2211,7 +2211,7 @@ def _seed_multiparam_step(
     fn_id = uuid.uuid4()
     signature = "(" + ", ".join(f"{n}: {t}" for n, t, _ in param_specs) + ")"
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), function_class, fn_name, None, function_return_type,
          signature, function_type, module_path, True],
     )

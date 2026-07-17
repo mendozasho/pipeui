@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS function_registry (
     function_signature   VARCHAR NOT NULL,
     function_type        VARCHAR NOT NULL,
     module_path          VARCHAR NOT NULL,
-    is_active            BOOLEAN DEFAULT TRUE
+    is_active            BOOLEAN DEFAULT TRUE,
+    engine               VARCHAR DEFAULT 'python',  -- #134: how the body executes ('python' | 'sql')
+    function_body        VARCHAR  -- #134: sql-engine template text; NULL for python functions
 );
 
 CREATE TABLE IF NOT EXISTS column_registry (
@@ -43,7 +45,8 @@ CREATE TABLE IF NOT EXISTS parameter (
     param_type      VARCHAR NOT NULL,
     function_id     UUID NOT NULL,  -- references function_registry(function_id)
     has_default     BOOLEAN NOT NULL DEFAULT FALSE,  -- #258: param has a Python default
-    default_value   VARCHAR  -- #258: str() of the Python default; NULL when has_default is FALSE
+    default_value   VARCHAR,  -- #258: str() of the Python default; NULL when has_default is FALSE
+    position        INTEGER NOT NULL DEFAULT 0  -- #134: 0-based signature order (authoritative param order)
 );
 
 CREATE TABLE IF NOT EXISTS source_column_map (

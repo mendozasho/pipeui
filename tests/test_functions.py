@@ -7,13 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.backend.domain.functions import classification
-from pipeui.backend.domain.functions.classification import (
+from pipeui.backend.data.functions import classification
+from pipeui.backend.data.functions.classification import (
     binding_kind,
     derive_function_class,
     derive_function_return_type,
     derive_function_type,
 )
+from pipeui.backend.data.functions.contract import FunctionContract
 from pipeui.backend.domain.functions.discovery import (
     discover_functions_in_file,
     _inspect_function,
@@ -312,35 +313,35 @@ class TestInspectFunction:
     def test_eligible_scalar(self):
         def f(x: int) -> int: ...
         result = _inspect_function("f", f)
-        assert isinstance(result, dict)
-        assert result["function_class"] == "scalar"
-        assert result["function_return_type"] == "scalar"
-        assert result["function_type"] == "transform"
+        assert isinstance(result, FunctionContract)
+        assert result.function_class == "scalar"
+        assert result.function_return_type == "scalar"
+        assert result.function_type == "transform"
 
     @pytest.mark.unit
     def test_eligible_validation_bool_return(self):
         def f(x: int) -> bool: ...
         result = _inspect_function("f", f)
-        assert isinstance(result, dict)
-        assert result["function_type"] == "validation"
-        assert result["function_return_type"] == "boolean"
+        assert isinstance(result, FunctionContract)
+        assert result.function_type == "validation"
+        assert result.function_return_type == "boolean"
 
     @pytest.mark.unit
     def test_eligible_pd_series(self):
         import pandas as pd
         def f(col: pd.Series) -> pd.Series: ...
         result = _inspect_function("f", f)
-        assert isinstance(result, dict)
-        assert result["function_class"] == "pd.Series"
-        assert result["function_return_type"] == "pd.Series"
+        assert isinstance(result, FunctionContract)
+        assert result.function_class == "pd.Series"
+        assert result.function_return_type == "pd.Series"
 
     @pytest.mark.unit
     def test_eligible_pd_dataframe(self):
         import pandas as pd
         def f(df: pd.DataFrame) -> pd.DataFrame: ...
         result = _inspect_function("f", f)
-        assert isinstance(result, dict)
-        assert result["function_class"] == "pd.dataframe"
+        assert isinstance(result, FunctionContract)
+        assert result.function_class == "pd.dataframe"
 
 
 # ---------------------------------------------------------------------------
@@ -1053,7 +1054,7 @@ def test_classification_module_has_no_db_dependency():
     derived-not-stored) — it must import neither duckdb nor any data-layer DB module,
     so the derive_* helpers stay callable with no connection."""
     import ast
-    import pipeui.backend.domain.functions.classification as classification
+    import pipeui.backend.data.functions.classification as classification
 
     tree = ast.parse(Path(classification.__file__).read_text(encoding="utf-8"))
     imported_modules: list[str] = []

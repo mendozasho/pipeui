@@ -1,71 +1,100 @@
-"""Function discovery / parsing (functions domain) — read files, classify, NO DB.
+"""Function discovery / extraction (functions domain) — screen, read, contract. NO DB.
 
-Loads a ``.py`` module (or parses a ``.sql`` header), inspects each candidate function's
-signature, and produces the per-function classification dict (or a skip reason) the
-registration layer writes. Pure discovery: it reads the filesystem and calls
-``classification`` derivations, but touches no DuckDB connection.
+Loads a ``.py`` module (or parses a ``.sql`` header) and produces one
+``FunctionContract`` per eligible function — the universal interface every consumer
+reads (#134). ``.py`` sources pass the AST guardrail screen (``guardrails.py``)
+BEFORE they are exec'd for signature extraction: a ``block`` finding rejects the
+whole module and its top-level code never runs.
 
-Split out of ``registration.py`` (#47): sits between ``classification`` (leaf) and
-``registration`` (transaction). ``registration.scan_functions`` calls
-``discover_functions_in_file`` / ``discover_sql_functions_in_file``.
+``extract_contracts`` is the single entry point; ``registration.scan_functions``
+consumes it. The legacy ``discover_functions_in_file`` / ``discover_sql_functions_in_file``
+wrappers preserve the old dict shape for one phase — delete with the Phase-2 PR.
+
+Pure discovery: it reads the filesystem and calls ``classification`` derivations,
+but touches no DuckDB connection.
 """
 from __future__ import annotations
 
 import inspect
 import re
 import types
+from dataclasses import dataclass
 from pathlib import Path
 
-from pipeui.backend.domain.functions.classification import (
+from pipeui.backend.data.functions.classification import (
     annotation_to_str,
     is_known_param_type,
     is_known_return_type,
-    derive_function_class,
-    derive_function_return_type,
-    derive_function_type,
 )
+from pipeui.backend.data.functions.contract import (
+    ENGINE_PYTHON,
+    ENGINE_SQL,
+    FunctionContract,
+    ParamContract,
+)
+from pipeui.backend.domain.functions.guardrails import ScreenFinding, screen_module
+
+
+@dataclass(frozen=True)
+class DiscoveredFunction:
+    """One extraction result.
+
+    Exactly one of ``contract`` / ``skip_reason`` is set for a function entry.
+    Module-level screen ``flags`` (accepted-but-surfaced findings) ride on a
+    dedicated ``<module>`` entry with neither contract nor skip_reason.
+    """
+
+    function_name: str
+    contract: FunctionContract | None = None
+    skip_reason: str | None = None
+    flags: tuple[ScreenFinding, ...] = ()
+
+
+# ---------------------------------------------------------------------------
+# Extraction entry point
+# ---------------------------------------------------------------------------
+
+def extract_contracts(file_path: Path) -> list[DiscoveredFunction]:
+    """Extract every function contract from a ``.py`` or ``.sql`` file."""
+    if file_path.suffix == ".sql":
+        return _extract_sql(file_path)
+    return _extract_py(file_path)
 
 
 # ---------------------------------------------------------------------------
 # Per-file function discovery (.py)
 # ---------------------------------------------------------------------------
 
-def _load_module(file_path: Path):
-    """Import a .py file as a module without adding it to sys.modules permanently.
+def _load_module(file_path: Path, source: str):
+    """Exec an already-screened .py source as a module, without touching sys.modules.
 
     Compiles from source directly so stale .pyc bytecode cannot shadow a file
     that was modified within the same process (e.g. during tests or after a
-    user edits the file before re-scanning).
+    user edits the file before re-scanning). Callers MUST run
+    ``guardrails.screen_module`` first — this function trusts its input.
     """
-    source = file_path.read_text(encoding="utf-8")
     code = compile(source, str(file_path), "exec")
     mod = types.ModuleType(f"_pipeui_scan_{file_path.stem}")
     mod.__file__ = str(file_path)
-    # __name__ is used in discover_functions_in_file to filter imported symbols
+    # __name__ is used below to filter imported symbols from defined ones
     exec(code, mod.__dict__)
     return mod
 
 
-def _inspect_function(fn_name: str, fn_obj) -> dict | str:
-    """Inspect one function and return its classification data or a skip reason string.
-
-    Returns a dict with keys:
-        param_types, param_names, function_class, function_return_type,
-        function_type, function_signature, function_doc
-    Or a str describing why the function was skipped.
-    """
+def _inspect_function(fn_name: str, fn_obj, *, source_path: str | None = None) -> FunctionContract | str:
+    """Inspect one function: its ``FunctionContract``, or a skip reason string."""
     sig = inspect.signature(fn_obj)
-    params = list(sig.parameters.values())
+    sig_params = list(sig.parameters.values())
 
     # --- eligibility checks ---
-    if not params:
+    if not sig_params:
         return "function must have at least one parameter"
 
-    for p in params:
+    for p in sig_params:
         if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             return "variadic parameters not supported"
 
-    for p in params:
+    for p in sig_params:
         ann = annotation_to_str(p.annotation)
         if ann is None:
             return f"untyped parameter `{p.name}`"
@@ -78,47 +107,52 @@ def _inspect_function(fn_name: str, fn_obj) -> dict | str:
     if not is_known_return_type(ret_ann):
         return f"unsupported return type `{ret_ann}`"
 
-    # --- derivation ---
-    param_names = [p.name for p in params]
-    param_types_list = [annotation_to_str(p.annotation) for p in params]  # type: ignore[misc]
-    # #258: capture each param's Python default so the executor can fall back to it
-    # and the frontend can distinguish required params from optional ones.
-    param_has_default = [p.default is not inspect.Parameter.empty for p in params]
-    param_default_values = [
-        str(p.default) if p.default is not inspect.Parameter.empty else None
-        for p in params
-    ]
-    fn_class = derive_function_class(param_types_list)
-    fn_return_type = derive_function_return_type(ret_ann)
-    fn_type = derive_function_type(fn_return_type)  # type: ignore[arg-type]
-    fn_sig = str(sig)
-    fn_doc = inspect.getdoc(fn_obj) or None
-
-    return {
-        "param_names": param_names,
-        "param_types": param_types_list,
-        "param_has_default": param_has_default,
-        "param_default_values": param_default_values,
-        "function_class": fn_class,
-        "function_return_type": fn_return_type,
-        "function_type": fn_type,
-        "function_signature": fn_sig,
-        "function_doc": fn_doc,
-    }
+    # --- the contract: params in signature order, defaults captured (#258) ---
+    params = tuple(
+        ParamContract(
+            name=p.name,
+            type_str=annotation_to_str(p.annotation),  # type: ignore[arg-type]
+            position=i,
+            has_default=p.default is not inspect.Parameter.empty,
+            default_value=str(p.default) if p.default is not inspect.Parameter.empty else None,
+        )
+        for i, p in enumerate(sig_params)
+    )
+    return FunctionContract(
+        name=fn_name,
+        engine=ENGINE_PYTHON,
+        params=params,
+        return_type=ret_ann,
+        signature=str(sig),
+        doc=inspect.getdoc(fn_obj) or None,
+        source_path=source_path,
+    )
 
 
-def discover_functions_in_file(file_path: Path) -> list[dict]:
-    """Return a list of eligible function inspection dicts found in file_path.
-
-    Each item is either:
-      {"function_name": str, "data": dict}    — eligible
-      {"function_name": str, "skip_reason": str}  — ineligible
-    """
-    results = []
+def _extract_py(file_path: Path) -> list[DiscoveredFunction]:
     try:
-        mod = _load_module(file_path)
+        source = file_path.read_text(encoding="utf-8")
     except Exception as exc:
-        return [{"function_name": "<module>", "skip_reason": f"import error: {exc}"}]
+        return [DiscoveredFunction("<module>", skip_reason=f"read error: {exc}")]
+
+    # Guardrail screen BEFORE any exec of user code (#134).
+    findings = screen_module(source, filename=str(file_path))
+    blocks = [f for f in findings if f.severity == "block"]
+    flags = tuple(f for f in findings if f.severity == "flag")
+    if blocks:
+        detail = "; ".join(f"{b.detail} (line {b.lineno})" for b in blocks)
+        return [DiscoveredFunction(
+            "<module>", skip_reason=f"blocked by static screen: {detail}", flags=flags,
+        )]
+
+    results: list[DiscoveredFunction] = []
+    if flags:
+        results.append(DiscoveredFunction("<module>", flags=flags))
+
+    try:
+        mod = _load_module(file_path, source)
+    except Exception as exc:
+        return [DiscoveredFunction("<module>", skip_reason=f"import error: {exc}")]
 
     for name, obj in inspect.getmembers(mod, inspect.isfunction):
         if name.startswith("_"):
@@ -126,11 +160,11 @@ def discover_functions_in_file(file_path: Path) -> list[dict]:
         # Only functions defined in this file (not imported ones)
         if getattr(obj, "__module__", None) != mod.__name__:
             continue
-        result = _inspect_function(name, obj)
+        result = _inspect_function(name, obj, source_path=str(file_path))
         if isinstance(result, str):
-            results.append({"function_name": name, "skip_reason": result})
+            results.append(DiscoveredFunction(name, skip_reason=result))
         else:
-            results.append({"function_name": name, "data": result})
+            results.append(DiscoveredFunction(name, contract=result))
 
     return results
 
@@ -152,7 +186,8 @@ _SQL_RETURN_SUFFIX: dict[str, str] = {
 def _parse_sql_header(source: str) -> dict | str:
     """Parse the leading comment block of a .sql file.
 
-    Returns a dict with classification data or a str skip reason.
+    Returns ``{"function_name", "function_doc", "return_type", "signature"}``
+    or a str skip reason. Class/type facts are derived by the contract.
     """
     meta: dict[str, str] = {}
     for line in source.splitlines():
@@ -168,50 +203,63 @@ def _parse_sql_header(source: str) -> dict | str:
     if "name" not in meta:
         return "missing required `-- name:` header"
 
-    fn_name = meta["name"]
-    fn_doc = meta.get("description") or None
     raw_type = meta.get("type", "").lower()
-
-    if raw_type == "transform":
-        fn_type = "transform"
-    elif raw_type == "validation":
-        fn_type = "validation"
-    else:
-        fn_type = "unknown"
-
-    fn_class = "pd.dataframe"
+    fn_type = raw_type if raw_type in ("transform", "validation") else "unknown"
     fn_return_type = _SQL_RETURN_SUFFIX[fn_type]
-    fn_sig = f"{{source_table}}: pd.DataFrame -> {fn_return_type}"
 
     return {
-        "function_name": fn_name,
-        "function_doc": fn_doc,
-        "function_type": fn_type,
-        "function_class": fn_class,
-        "function_return_type": fn_return_type,
-        "function_signature": fn_sig,
-        "param_names": [],
-        "param_types": [],
-        "param_has_default": [],
-        "param_default_values": [],
+        "function_name": meta["name"],
+        "function_doc": meta.get("description") or None,
+        "return_type": fn_return_type,
+        "signature": f"{{source_table}}: pd.DataFrame -> {fn_return_type}",
     }
 
 
-def discover_sql_functions_in_file(file_path: Path) -> list[dict]:
-    """Return a list of SQL function discovery dicts for a .sql file.
-
-    Each item is either:
-      {"function_name": str, "data": dict}    — eligible
-      {"function_name": str, "skip_reason": str}  — ineligible
-    """
+def _extract_sql(file_path: Path) -> list[DiscoveredFunction]:
     try:
         source = file_path.read_text(encoding="utf-8")
     except Exception as exc:
-        return [{"function_name": "<file>", "skip_reason": f"read error: {exc}"}]
+        return [DiscoveredFunction("<file>", skip_reason=f"read error: {exc}")]
 
-    result = _parse_sql_header(source)
-    if isinstance(result, str):
-        return [{"function_name": file_path.stem, "skip_reason": result}]
+    parsed = _parse_sql_header(source)
+    if isinstance(parsed, str):
+        return [DiscoveredFunction(file_path.stem, skip_reason=parsed)]
 
-    fn_name = result.pop("function_name")
-    return [{"function_name": fn_name, "data": result}]
+    # A header with no param declarations is the implicit whole-table shape:
+    # zero params, function_class "pd.dataframe" (derived), body = the SQL text.
+    contract = FunctionContract(
+        name=parsed["function_name"],
+        engine=ENGINE_SQL,
+        params=(),
+        return_type=parsed["return_type"],
+        signature=parsed["signature"],
+        doc=parsed["function_doc"],
+        source_path=str(file_path),
+        body=source,
+    )
+    return [DiscoveredFunction(contract.name, contract=contract)]
+
+
+# ---------------------------------------------------------------------------
+# Legacy wrappers — old dict shape, kept for one phase (delete with Phase 2)
+# ---------------------------------------------------------------------------
+
+def _legacy_items(discovered: list[DiscoveredFunction]) -> list[dict]:
+    items: list[dict] = []
+    for d in discovered:
+        if d.skip_reason is not None:
+            items.append({"function_name": d.function_name, "skip_reason": d.skip_reason})
+        elif d.contract is not None:
+            items.append({"function_name": d.function_name, "data": d.contract.to_registry_dict()})
+        # flag-only <module> entries have no legacy representation
+    return items
+
+
+def discover_functions_in_file(file_path: Path) -> list[dict]:
+    """Legacy shape: ``{"function_name", "data"}`` or ``{"function_name", "skip_reason"}``."""
+    return _legacy_items(_extract_py(file_path))
+
+
+def discover_sql_functions_in_file(file_path: Path) -> list[dict]:
+    """Legacy shape for ``.sql`` files (see ``discover_functions_in_file``)."""
+    return _legacy_items(_extract_sql(file_path))

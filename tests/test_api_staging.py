@@ -213,7 +213,7 @@ def test_staging_fed_by_registry_run(client, db, tmp_path, monkeypatch):
     fn_path.write_text("def stg_double(data):\n    return data * 2\n")
     fn_id = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, uuid.uuid4(), "pd.series", "stg_double", None, "pd.Series",
          "data: pd.Series", "transform", str(fn_path), True],
     )

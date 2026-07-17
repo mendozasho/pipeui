@@ -65,6 +65,12 @@ _REGISTRY_SCHEMA_MIGRATIONS: list[tuple[str, str, str]] = [
     # fall back to Python defaults and the frontend can't flag required params.
     ("parameter", "has_default", "BOOLEAN DEFAULT FALSE"),
     ("parameter", "default_value", "VARCHAR"),
+    # #134 FunctionContract: signature-order param position + execution engine/body.
+    # DEFAULT 0 / 'python' backfill existing rows; the scanner always supplies real
+    # values on the next re-register.
+    ("parameter", "position", "INTEGER DEFAULT 0"),
+    ("function_registry", "engine", "VARCHAR DEFAULT 'python'"),
+    ("function_registry", "function_body", "VARCHAR"),
 ]
 
 

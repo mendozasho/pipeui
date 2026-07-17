@@ -282,7 +282,7 @@ def _seed_function_on_source(db, source_id, fn_name, fn_type, position=0):
     fn_id = uuid.uuid4()
     fn_ch = uuid.uuid4()
     db.execute(
-        "INSERT INTO function_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_registry (function_id, content_hash_id, function_class, function_name, function_doc, function_return_type, function_signature, function_type, module_path, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [fn_id, fn_ch, "scalar", fn_name, None, "bool",
          "value: str", fn_type, "/dev/null", True],
     )

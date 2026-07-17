@@ -1,12 +1,13 @@
-"""Function classification (functions domain) — pure derivation, ZERO DB dependency.
+"""Function classification (data/functions) — pure derivation, ZERO DB dependency.
 
 Derives a function's ``function_class`` / ``function_return_type`` / ``function_type``
 (§11, Principle 4: derived-not-stored) from its parameter/return annotations, plus the
 annotation-string canonicalization and known-type gates the discovery layer uses.
 
-Split out of ``registration.py`` (#47): this is the leaf of the functions registration
-chain — it touches no DuckDB connection, no filesystem, no app object. ``discovery``
-imports it; it imports nothing from the rest of the domain. Keep it DB-free.
+Split out of ``registration.py`` (#47); moved down from ``domain/functions`` (#134) so
+the ``FunctionContract`` carrier (``data/functions/contract.py``) can derive from the
+descriptor table without an upward import. This is the leaf of the functions chain —
+it touches no DuckDB connection, no filesystem, no app object. Keep it DB-free.
 """
 from __future__ import annotations
 
@@ -134,6 +135,16 @@ def binding_kind(type_str: str) -> str:
     (callers gate with ``is_known_param_type``).
     """
     return _CLASS_TO_BINDING_KIND[derive_function_class([type_str])]
+
+
+def granularity(type_str: str) -> int:
+    """Return the §11 granularity index for a canonical param type string.
+
+    Pure read off the descriptor table (the same row ``derive_function_class`` keys
+    on). Raises ``KeyError`` on an unknown type (callers gate with
+    ``is_known_param_type``).
+    """
+    return _BY_TYPE[type_str].granularity
 
 
 def derive_function_return_type(return_annotation_str: str) -> str | None:
