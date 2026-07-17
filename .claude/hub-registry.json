@@ -28,7 +28,15 @@
     "date-range-filter/1",
     "date-range-filter/2",
     "date-range-filter/3",
-    "date-range-filter/4"
+    "date-range-filter/4",
+    "function-contract/pr-135",
+    "function-contract/pr-137",
+    "function-contract/pr-139",
+    "function-contract/pr-141",
+    "function-contract/pr-143",
+    "function-contract/pr-145",
+    "function-contract/pr-147",
+    "function-contract/pr-149"
   ],
   "files": {
     "src/pipeui/frontend/screen-builder.jsx": {
@@ -115,7 +123,7 @@
       "missing": true
     },
     "tests/test_attach.py": {
-      "slice_count": 5,
+      "slice_count": 6,
       "layers": [
         "api",
         "business_logic",
@@ -125,12 +133,13 @@
       "features": [
         "render-builtin-steps",
         "param-binding-output-mode",
-        "runner-execution"
+        "runner-execution",
+        "function-contract"
       ],
       "missing": false
     },
     "tests/test_api_pipelines.py": {
-      "slice_count": 9,
+      "slice_count": 10,
       "layers": [
         "api",
         "business_logic",
@@ -142,7 +151,8 @@
         "param-binding-output-mode",
         "runner-execution",
         "runner-resolution-model",
-        "date-range-filter"
+        "date-range-filter",
+        "function-contract"
       ],
       "missing": false
     },
@@ -158,36 +168,42 @@
       "missing": false
     },
     "src/pipeui/backend/domain/functions/suggest.py": {
-      "slice_count": 1,
-      "layers": [
-        "business_logic",
-        "ui"
-      ],
-      "features": [
-        "param-binding-output-mode"
-      ],
-      "missing": false
-    },
-    "src/pipeui/backend/domain/functions/attach.py": {
-      "slice_count": 1,
-      "layers": [
-        "business_logic",
-        "ui"
-      ],
-      "features": [
-        "param-binding-output-mode"
-      ],
-      "missing": false
-    },
-    "tests/test_functions.py": {
       "slice_count": 2,
       "layers": [
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "param-binding-output-mode",
-        "runner-execution"
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/attach.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode",
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_functions.py": {
+      "slice_count": 4,
+      "layers": [
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "param-binding-output-mode",
+        "runner-execution",
+        "function-contract"
       ],
       "missing": false
     },
@@ -293,6 +309,21 @@
       "missing": false
     },
     "tests/test_run_workflow.py": {
+      "slice_count": 7,
+      "layers": [
+        "api",
+        "business_logic",
+        "data",
+        "ui"
+      ],
+      "features": [
+        "runner-execution",
+        "runner-resolution-model",
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_api_pipelines_run.py": {
       "slice_count": 5,
       "layers": [
         "api",
@@ -302,33 +333,23 @@
       ],
       "features": [
         "runner-execution",
-        "runner-resolution-model"
-      ],
-      "missing": false
-    },
-    "tests/test_api_pipelines_run.py": {
-      "slice_count": 4,
-      "layers": [
-        "api",
-        "business_logic",
-        "ui"
-      ],
-      "features": [
-        "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "function-contract"
       ],
       "missing": false
     },
     "tests/test_api_validations.py": {
-      "slice_count": 4,
+      "slice_count": 5,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "function-contract"
       ],
       "missing": false
     },
@@ -590,26 +611,38 @@
       "missing": false
     },
     "tests/test_api_run_set.py": {
-      "slice_count": 1,
-      "layers": [],
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
       "features": [
-        "runner-execution"
+        "runner-execution",
+        "function-contract"
       ],
       "missing": false
     },
     "tests/test_api_run_all.py": {
-      "slice_count": 1,
-      "layers": [],
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
       "features": [
-        "runner-execution"
+        "runner-execution",
+        "function-contract"
       ],
       "missing": false
     },
     "tests/test_ingestion.py": {
-      "slice_count": 1,
-      "layers": [],
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
       "features": [
-        "runner-execution"
+        "runner-execution",
+        "function-contract"
       ],
       "missing": false
     },
@@ -638,15 +671,17 @@
       "missing": true
     },
     "tests/test_api_staging.py": {
-      "slice_count": 2,
+      "slice_count": 3,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
         "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "function-contract"
       ],
       "missing": false
     },
@@ -726,7 +761,7 @@
       "missing": true
     },
     "tests/test_builtins.py": {
-      "slice_count": 4,
+      "slice_count": 6,
       "layers": [
         "api",
         "business_logic",
@@ -735,7 +770,8 @@
       ],
       "features": [
         "runner-resolution-model",
-        "date-range-filter"
+        "date-range-filter",
+        "function-contract"
       ],
       "missing": false
     },
@@ -768,14 +804,16 @@
       "missing": true
     },
     "src/pipeui/backend/domain/functions/builtins.py": {
-      "slice_count": 3,
+      "slice_count": 7,
       "layers": [
         "api",
         "business_logic",
-        "data"
+        "data",
+        "docs"
       ],
       "features": [
-        "date-range-filter"
+        "date-range-filter",
+        "function-contract"
       ],
       "missing": false
     },
@@ -790,13 +828,14 @@
       "missing": false
     },
     "src/pipeui/backend/data/base/schema/queries.py": {
-      "slice_count": 1,
+      "slice_count": 2,
       "layers": [
         "business_logic",
         "data"
       ],
       "features": [
-        "date-range-filter"
+        "date-range-filter",
+        "function-contract"
       ],
       "missing": false
     },
@@ -808,6 +847,278 @@
       ],
       "features": [
         "date-range-filter"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/base/db.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/functions/classification.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/functions/contract.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/discovery.py": {
+      "slice_count": 3,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/guardrails.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/registration.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_contract.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/functions/binding.py": {
+      "slice_count": 4,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/runner/step_loader.py": {
+      "slice_count": 4,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/runner/steps.py": {
+      "slice_count": 3,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_binding.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_sql_functions.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/runner/executors.py": {
+      "slice_count": 2,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/runner/realize.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/runner/sql_engine.py": {
+      "slice_count": 3,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_sql_engine.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/functions/builtin_lowering.py": {
+      "slice_count": 4,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/runner/dnf.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    "tests/test_builtin_lowering.py": {
+      "slice_count": 4,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    ".claude/ARCHITECTURE.md": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    ".claude/CLAUDE.md": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    ".claude/CLAUDE_REFERENCE.md": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    ".claude/CONTEXT.md": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
+      ],
+      "missing": false
+    },
+    ".claude/ROADMAP.md": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data",
+        "docs"
+      ],
+      "features": [
+        "function-contract"
       ],
       "missing": false
     }
