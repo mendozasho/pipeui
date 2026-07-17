@@ -104,12 +104,20 @@ def patch_builtin_route(
     body: PatchBuiltinBody,
     conn: duckdb.DuckDBPyConnection = Depends(get_conn),
 ):
-    """Update builtin_config and/or position for a built-in step."""
+    """Update builtin_config and/or position for a built-in step.
+
+    404 when the step is not found; 422 with {"ok": False, "detail": ...} when the
+    type's write-boundary check rejects the new config (#118/#123 — the same
+    rejection contract the attach route emits).
+    """
     sid = _parse_source_id(source_id)
     stid = _parse_step_id(step_id)
-    if not patch_builtin(conn, sid, stid, builtin_config=body.builtin_config, position=body.position):
+    result = patch_builtin(conn, sid, stid, builtin_config=body.builtin_config, position=body.position)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"Built-in step {step_id!r} not found")
-    return {"ok": True}
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+    return result
 
 
 @router.get("/{source_id}/pipeline")

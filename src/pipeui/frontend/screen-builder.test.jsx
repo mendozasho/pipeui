@@ -5,7 +5,7 @@
 // the app itself runs no-build-step from CDN React.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor, act } from "@testing-library/react";
-import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, RenameModal, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
+import { PendingStepCard, ParamRow, StepCard, JoinModal, FilterModal, RenameModal, DateRangeModal, RightPalette, SidePanel, PaletteBuiltinCard, PaletteBuiltinDrawer, BuiltinStepCard, PipelineCanvas } from "./screen-builder.jsx";
 
 afterEach(() => {
   cleanup();
@@ -1623,5 +1623,317 @@ describe("RenameModal — order preservation (Principle 7, non-alphabetical)", (
     fireEvent.click(screen.getByText("Save rename"));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(Object.keys(onSubmit.mock.calls[0][0].renames)).toEqual(["zebra", "apple"]);
+  });
+});
+
+// ===========================================================================
+// DateRangeModal — grouped date-range conditions (date_range built-in, #119/#125)
+// ===========================================================================
+
+const DATE_SOURCE = {
+  source_id: "S1",
+  source_name: "sales",
+  columns: [
+    { column_id: "d1", column_name: "created_at", column_type: "DATE" },
+    { column_id: "d2", column_name: "updated_at", column_type: "TIMESTAMP" },
+    { column_id: "d3", column_name: "synced_at", column_type: "TIMESTAMPTZ" },
+    { column_id: "c1", column_name: "amount", column_type: "DOUBLE" },
+    { column_id: "c2", column_name: "region", column_type: "VARCHAR" },
+  ],
+};
+
+function renderDateRange(extra = {}) {
+  const onSubmit = extra.onSubmit || vi.fn(() => Promise.resolve({ ok: true, step_id: "dr1" }));
+  const onClose = extra.onClose || vi.fn();
+  const utils = render(
+    React.createElement(DateRangeModal, {
+      open: true,
+      onClose,
+      currentSource: extra.currentSource || DATE_SOURCE,
+      onSubmit,
+      initialConfig: extra.initialConfig || null,
+    })
+  );
+  return { ...utils, onSubmit, onClose };
+}
+
+describe("DateRangeModal — date-only column picker", () => {
+  it("offers only DATE/TIMESTAMP/TIMESTAMPTZ columns", () => {
+    renderDateRange();
+    const col = screen.getByTestId("dr-column-0-0");
+    expect(within(col).getByText("created_at")).toBeTruthy();
+    expect(within(col).getByText("updated_at")).toBeTruthy();
+    expect(within(col).getByText("synced_at")).toBeTruthy();
+    expect(within(col).queryByText("amount")).toBeNull();
+    expect(within(col).queryByText("region")).toBeNull();
+  });
+});
+
+describe("DateRangeModal — add/remove conditions and OR groups", () => {
+  it("renders start/end as native date inputs", () => {
+    renderDateRange();
+    expect(screen.getByTestId("dr-start-0-0").getAttribute("type")).toBe("date");
+    expect(screen.getByTestId("dr-end-0-0").getAttribute("type")).toBe("date");
+  });
+
+  it("'+ Add condition' appends a condition row to the current group", () => {
+    renderDateRange();
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+    fireEvent.click(screen.getByTestId("dr-add-cond-0"));
+    expect(screen.getByTestId("dr-column-0-1")).toBeTruthy();
+    // Appended to group 0, not a new group.
+    expect(screen.queryByTestId("dr-column-1-0")).toBeNull();
+  });
+
+  it("'+ Add OR group' starts a new group", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByText("+ Add OR group"));
+    expect(screen.getByTestId("dr-column-1-0")).toBeTruthy();
+    // The new group has its own single condition, separate from group 0's.
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+  });
+
+  it("each row's remove control deletes exactly that row", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByTestId("dr-add-cond-0"));
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-column-0-1"), { target: { value: "updated_at" } });
+    fireEvent.click(screen.getByTestId("dr-remove-0-0"));
+    // The surviving row (formerly index 1) keeps its own value.
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("updated_at");
+    expect(screen.queryByTestId("dr-column-0-1")).toBeNull();
+  });
+});
+
+describe("DateRangeModal — validation + payload", () => {
+  it("blocks save with a visible reason when there are zero conditions", () => {
+    renderDateRange();
+    fireEvent.click(screen.getByTestId("dr-remove-0-0"));
+    expect(screen.queryByTestId("dr-column-0-0")).toBeNull();
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/at least one condition/i)).toBeTruthy();
+  });
+
+  it("blocks save with a visible reason when a condition has both bounds empty", () => {
+    renderDateRange();
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/at least one bound/i)).toBeTruthy();
+  });
+
+  it("blocks save with a visible reason when start is after end", () => {
+    renderDateRange();
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-start-0-0"), { target: { value: "2024-06-30" } });
+    fireEvent.change(screen.getByTestId("dr-end-0-0"), { target: { value: "2024-01-01" } });
+    expect(screen.getByText("Add step").disabled).toBe(true);
+    expect(screen.getByText(/start.*after.*end/i)).toBeTruthy();
+  });
+
+  it("a valid save submits exactly {groups:[{conditions:[{column,start,end}]}]}", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    renderDateRange({ onSubmit });
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-start-0-0"), { target: { value: "2024-01-01" } });
+    fireEvent.change(screen.getByTestId("dr-end-0-0"), { target: { value: "2024-06-30" } });
+    expect(screen.getByText("Add step").disabled).toBe(false);
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: "2024-06-30" }] }],
+    });
+  });
+});
+
+describe("DateRangeModal — Principle 7 round-trip", () => {
+  it("open persisted, save untouched, submits an identical config in persisted order", async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({ ok: true }));
+    // Non-trivial order (updated_at before created_at) + open bounds persisted as
+    // null — an untouched save must re-emit all of it byte-identically.
+    const persisted = {
+      groups: [
+        {
+          conditions: [
+            { column: "updated_at", start: "2024-05-01", end: "2024-05-31" },
+            { column: "created_at", start: null, end: "2024-12-31" },
+          ],
+        },
+        { conditions: [{ column: "synced_at", start: "2023-01-01", end: null }] },
+      ],
+    };
+    renderDateRange({ onSubmit, initialConfig: persisted });
+    // Pre-filled in persisted order.
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("updated_at");
+    expect(screen.getByTestId("dr-column-0-1").value).toBe("created_at");
+    expect(screen.getByTestId("dr-start-0-1").value).toBe("");  // null renders empty
+    expect(screen.getByTestId("dr-column-1-0").value).toBe("synced_at");
+    fireEvent.click(screen.getByText("Save date range"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual(persisted);
+  });
+});
+
+// ===========================================================================
+// BuiltinStepCard — date_range config summary (#119/#126)
+// ===========================================================================
+
+function renderDateRangeCard(builtin_config) {
+  return render(
+    React.createElement(BuiltinStepCard, {
+      step: makeBuiltinStep({ builtin_type: "date_range", builtin_config }),
+      sourceId: "src-1", order: 3,
+      sources: BUILTIN_SOURCES, onRemoved: () => {}, onEdit: () => {},
+    })
+  );
+}
+
+describe("BuiltinStepCard — date_range config summary", () => {
+  it("renders column + bounds for a single condition", () => {
+    renderDateRangeCard({
+      groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: "2024-06-30" }] }],
+    });
+    expect(screen.getByText(/Date range · created_at 2024-01-01 → 2024-06-30/)).toBeTruthy();
+  });
+
+  it("renders an open bound as an ellipsis", () => {
+    renderDateRangeCard({
+      groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: null }] }],
+    });
+    expect(screen.getByText(/Date range · created_at 2024-01-01 → …/)).toBeTruthy();
+  });
+
+  it("summarizes counts for multiple groups and conditions", () => {
+    renderDateRangeCard({
+      groups: [
+        { conditions: [
+          { column: "created_at", start: "2024-01-01", end: null },
+          { column: "updated_at", start: null, end: "2024-06-30" },
+        ] },
+        { conditions: [{ column: "synced_at", start: "2023-01-01", end: "2023-12-31" }] },
+      ],
+    });
+    expect(screen.getByText(/Date range · 3 conditions · 2 groups/)).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// date_range palette card + SidePanel drop routing (create vs edit) (#119/#126)
+// ===========================================================================
+
+describe("RightPalette — Built-ins tab (date_range)", () => {
+  it("shows a Date Range palette card sourced from /builtins", async () => {
+    // Regression guard: the palette is registry-driven, so the seeded date_range
+    // row must surface as a draggable built-in card.
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      const body = url === "/builtins"
+        ? [{ builtin_type: "date_range", display_name: "Date Range", description: "Keep rows in calendar ranges.", config_schema: { groups: "array" } }]
+        : [];
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+    }));
+    render(React.createElement(RightPalette, { selectedSource: null, flash: () => {} }));
+    fireEvent.click(screen.getByText("Built-ins"));
+    await waitFor(() => expect(screen.getByText("Date Range")).toBeTruthy());
+    expect(screen.getByText("built-in")).toBeTruthy();
+  });
+});
+
+const DR_SOURCE = { source_id: "S1", source_name: "sales", columns: DATE_SOURCE.columns };
+
+const DR_STEP = {
+  step_type: "builtin",
+  step_id: "bs-dr",
+  builtin_type: "date_range",
+  position: 5,
+  builtin_config: {
+    groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: "2024-06-30" }] }],
+  },
+};
+
+// Stub every fetch SidePanel makes: the pipeline load (steps parameterized),
+// the all-sources load, and the attach-builtin POST/PATCH (recorded for asserts).
+function stubSidePanelFetch(steps) {
+  const fetchMock = vi.fn((url, opts) => {
+    if (typeof url === "string" && url.startsWith("/pipelines/")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ steps, source: { source_id: "S1", columns: DATE_SOURCE.columns } }),
+      });
+    }
+    if (url === "/sources") {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, step_id: "bs-dr" }) });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function dropDateRange(zone) {
+  fireEvent.drop(zone, {
+    dataTransfer: {
+      types: ["palette/builtin_type"],
+      getData: (key) => (key === "palette/builtin_type" ? "date_range" : ""),
+    },
+  });
+}
+
+describe("SidePanel — date_range drop routing (create vs edit)", () => {
+  it("dropping date_range with none attached opens an empty DateRangeModal", async () => {
+    stubSidePanelFetch([]);
+    render(React.createElement(SidePanel, { source: DR_SOURCE, onClose: () => {}, onNavigate: () => {}, flash: () => {} }));
+    const zone = await screen.findByTestId("pipeline-dropzone");
+    await screen.findByText("No pipeline steps yet.");
+    dropDateRange(zone);
+    expect(await screen.findByText("Add date range")).toBeTruthy();
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("");
+  });
+
+  it("dropping date_range when one exists opens the existing step pre-filled (singleton drop-again-edits)", async () => {
+    stubSidePanelFetch([DR_STEP]);
+    render(React.createElement(SidePanel, { source: DR_SOURCE, onClose: () => {}, onNavigate: () => {}, flash: () => {} }));
+    const zone = await screen.findByTestId("pipeline-dropzone");
+    await screen.findByText(/Date range · created_at/); // placed card rendered
+    dropDateRange(zone);
+    expect(await screen.findByText("Edit date range")).toBeTruthy();
+    expect(screen.getByTestId("dr-column-0-0").value).toBe("created_at");
+    expect(screen.getByTestId("dr-start-0-0").value).toBe("2024-01-01");
+    expect(screen.getByTestId("dr-end-0-0").value).toBe("2024-06-30");
+  });
+
+  it("saving the pre-filled edit PATCHes the existing step", async () => {
+    const fetchMock = stubSidePanelFetch([DR_STEP]);
+    render(React.createElement(SidePanel, { source: DR_SOURCE, onClose: () => {}, onNavigate: () => {}, flash: () => {} }));
+    const zone = await screen.findByTestId("pipeline-dropzone");
+    await screen.findByText(/Date range · created_at/);
+    dropDateRange(zone);
+    await screen.findByText("Edit date range");
+    fireEvent.click(screen.getByText("Save date range"));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u]) => u === "/sources/S1/attach-builtin/bs-dr");
+      expect(call).toBeTruthy();
+      expect(call[1].method).toBe("PATCH");
+      expect(JSON.parse(call[1].body)).toEqual({ builtin_config: DR_STEP.builtin_config });
+    });
+  });
+
+  it("a create-mode save POSTs builtin_type=date_range with the built config", async () => {
+    const fetchMock = stubSidePanelFetch([]);
+    render(React.createElement(SidePanel, { source: DR_SOURCE, onClose: () => {}, onNavigate: () => {}, flash: () => {} }));
+    const zone = await screen.findByTestId("pipeline-dropzone");
+    await screen.findByText("No pipeline steps yet.");
+    dropDateRange(zone);
+    await screen.findByText("Add date range");
+    fireEvent.change(screen.getByTestId("dr-column-0-0"), { target: { value: "created_at" } });
+    fireEvent.change(screen.getByTestId("dr-start-0-0"), { target: { value: "2024-01-01" } });
+    fireEvent.click(screen.getByText("Add step"));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u]) => u === "/sources/S1/attach-builtin");
+      expect(call).toBeTruthy();
+      expect(call[1].method).toBe("POST");
+      expect(JSON.parse(call[1].body)).toEqual({
+        builtin_type: "date_range",
+        builtin_config: { groups: [{ conditions: [{ column: "created_at", start: "2024-01-01", end: "" }] }] },
+      });
+    });
   });
 });

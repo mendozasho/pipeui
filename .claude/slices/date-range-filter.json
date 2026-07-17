@@ -1,0 +1,240 @@
+{
+  "feature_slug": "date-range-filter",
+  "slice_status": "frozen",
+  "source_prd_hash": "5c26339f754977a1386439673cc511f850b5d336497ef223c25a0d16ba333987",
+  "decomposition": [
+    {
+      "slice_id": 1,
+      "slice_name": "Pinned-tail generalization (pays down #83)",
+      "intent": "Replace the triplicated 'rename' magic-string sort with one ordered pinned-tail definition consumed by every ordering site, so a second pinned builtin type is a registration, not a fourth copy.",
+      "layers": [
+        "business_logic"
+      ],
+      "scope": "Promote rename's pinned-last flag into ordered pinned-tail metadata on the builtin spec/registry; rewrite the three sort sites (pipeline read, unified pipeline, run order) to consume it; regression-lock rename's existing behavior. No new builtin type in this slice.",
+      "size": "M",
+      "acceptance": [
+        "A pipeline with positional steps and a rename step sorts identically to today at all three ordering consumers (pipeline read payload, unified pipeline payload, run execution order) - regression-locked against the existing pinned-last tests.",
+        "The pinned-tail ordering is defined in exactly one place (spec/registry metadata); no ordering site keys on the literal string 'rename'.",
+        "A second pinned type registered in a test sorts after all positional steps and before rename per its tail order, at all three consumers, with no site-specific changes."
+      ],
+      "depends_on": [],
+      "touched_files": [
+        "src/pipeui/backend/domain/functions/builtins.py",
+        "src/pipeui/backend/domain/runner/run.py",
+        "src/pipeui/backend/domain/functions/pipeline_read.py",
+        "tests/test_builtins.py",
+        "tests/test_api_pipelines.py",
+        ".claude/runs/date-range-filter/1.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/backend/domain/functions/builtins.py",
+          "shared_with": [
+            2,
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_builtins.py",
+          "shared_with": [
+            2,
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_api_pipelines.py",
+          "shared_with": [
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "pinned-tail ordering metadata",
+          "shared_with": [
+            2,
+            3
+          ],
+          "access": "creates"
+        }
+      ]
+    },
+    {
+      "slice_id": 2,
+      "slice_name": "date_range builtin: registration, validator, executor, catalog",
+      "intent": "The date_range step exists as a builtin: registered spec, seeded catalog row (fresh and pre-existing DBs), pure config validation, and a DuckDB executor implementing the full range-condition semantics.",
+      "layers": [
+        "data",
+        "business_logic"
+      ],
+      "scope": "BuiltinSpec registration in BUILTIN_EXECUTORS (singleton=true, pinned-tail order before rename); SEED_BUILTINS catalog row plus idempotent migration so pre-feature DBs gain it; pure validator over {groups:[{conditions:[{column,start,end}]}]}; executor building one WHERE of OR-ed groups of AND-ed inclusive range predicates over the working frame.",
+      "size": "L",
+      "acceptance": [
+        "BUILTIN_EXECUTORS contains date_range and builtin_registry carries its catalog row on a fresh DB AND after migrating a pre-feature DB; migration is idempotent (existing registry count assertions grow by one).",
+        "The pure validator rejects: zero groups, an empty group, a condition missing a column, a condition with both bounds empty, and start > end; it accepts one-sided conditions and multi-group configs.",
+        "Executor keeps exactly the matching rows with inclusive bounds on both ends; start-only means on-or-after and end-only means on-or-before (verified on realistic data including boundary-day rows).",
+        "TIMESTAMP/TIMESTAMPTZ columns compare at DATE granularity: a row stamped 23:59 on the range's end day is kept.",
+        "A NULL date fails its condition but the row can still pass via another OR group.",
+        "Conditions within a group AND; groups OR - verified with a matrix that includes the same column in two different groups.",
+        "date_range sorts in the pinned tail after positional steps and before rename via slice 1's mechanism."
+      ],
+      "depends_on": [
+        1
+      ],
+      "touched_files": [
+        "src/pipeui/backend/domain/functions/builtins.py",
+        "src/pipeui/backend/data/base/schema/queries.py",
+        "src/pipeui/backend/data/base/db.py",
+        "tests/test_builtins.py",
+        "tests/test_schema.py",
+        ".claude/runs/date-range-filter/2.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/backend/domain/functions/builtins.py",
+          "shared_with": [
+            1,
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_builtins.py",
+          "shared_with": [
+            1,
+            3
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "pinned-tail ordering metadata",
+          "shared_with": [
+            1,
+            3
+          ],
+          "access": "reads"
+        },
+        {
+          "surface": "date_range config schema {groups:[{conditions:[{column,start,end}]}]}",
+          "shared_with": [
+            3,
+            4
+          ],
+          "access": "creates"
+        }
+      ]
+    },
+    {
+      "slice_id": 3,
+      "slice_name": "Attach boundary + end-to-end run",
+      "intent": "A date_range step can be attached, edited, and run over HTTP with the write boundary enforcing what the pure validator cannot: date-typed column eligibility, singleton, and the Principle-7 persisted round-trip - proven end to end by a run whose staging contains only matching rows.",
+      "layers": [
+        "business_logic",
+        "api"
+      ],
+      "scope": "Attach/patch write-boundary check that every condition column is DATE/TIMESTAMP/TIMESTAMPTZ per column_registry (clear rejection message naming the column); singleton behavior via the existing generic flag; API-level persisted-order round-trip; end-to-end HTTP run proving row reduction reaches staging and the transformed export.",
+      "size": "M",
+      "acceptance": [
+        "Attaching or patching a date_range whose config references a non-date column is rejected at the write boundary with a message naming the offending column; an all-date-column config attaches successfully.",
+        "A second date_range attach on the same source is rejected by the generic singleton flag ('only one date_range step per source').",
+        "PATCH then read-back returns groups and conditions in persisted order with persisted bounds - the Principle 7 round-trip at the API seam (open, save untouched, unchanged).",
+        "End to end over HTTP: ingest a real source, attach a date_range, run the pipeline, and staging plus the transformed export contain only the matching rows.",
+        "The unified pipeline payload lists date_range in the pinned tail before rename."
+      ],
+      "depends_on": [
+        2
+      ],
+      "touched_files": [
+        "src/pipeui/backend/domain/functions/builtins.py",
+        "src/pipeui/middleware/builtins.py",
+        "tests/test_builtins.py",
+        "tests/test_api_pipelines.py",
+        ".claude/runs/date-range-filter/3.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "src/pipeui/backend/domain/functions/builtins.py",
+          "shared_with": [
+            1,
+            2
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_builtins.py",
+          "shared_with": [
+            1,
+            2
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "tests/test_api_pipelines.py",
+          "shared_with": [
+            1
+          ],
+          "access": "modifies"
+        },
+        {
+          "surface": "date_range config schema {groups:[{conditions:[{column,start,end}]}]}",
+          "shared_with": [
+            2,
+            4
+          ],
+          "access": "reads"
+        },
+        {
+          "surface": "attach/patch rejection contract (detail message shape)",
+          "shared_with": [
+            4
+          ],
+          "access": "creates"
+        }
+      ]
+    },
+    {
+      "slice_id": 4,
+      "slice_name": "Builder UI: palette card, DateRangeModal, edit flow, card summary",
+      "intent": "The user builds the date filter visually: a palette card, a modal that adds range conditions and OR groups one at a time with a date-only column picker and native calendar inputs, singleton drop-again-edits, and a readable card summary - with the frontend Principle-7 round-trip.",
+      "layers": [
+        "ui"
+      ],
+      "scope": "Palette entry for date_range; DateRangeModal (date-only column picker filtering on column_type, two native <input type=date> per condition, '+ Add condition' / '+ Add OR group' / per-row remove, save-disabling validation states, submit builds the grouped config); drop routing (none exists -> create modal; exists -> edit modal pre-filled); builtinConfigSummary for date_range; frontend round-trip test.",
+      "size": "L",
+      "acceptance": [
+        "The Builder palette shows a date_range card; dropping it when the source has none opens an empty DateRangeModal, and dropping it when one exists opens the existing step pre-filled for editing (singleton drop-again-edits).",
+        "The column picker offers only columns whose column_type is DATE, TIMESTAMP, or TIMESTAMPTZ.",
+        "'+ Add condition' appends a condition row to the current group, '+ Add OR group' starts a new group, and each row's remove control deletes exactly that row; start/end are native date inputs.",
+        "Save is blocked with a visible reason for: zero conditions, a condition with both bounds empty, and start > end; a valid save submits exactly {groups:[{conditions:[{column,start,end}]}]}.",
+        "Opening the modal with a persisted config and saving untouched submits an identical config - groups and conditions in persisted order (Principle 7 frontend round-trip).",
+        "The placed builtin card renders a readable date_range summary of its groups/conditions."
+      ],
+      "depends_on": [
+        3
+      ],
+      "touched_files": [
+        "src/pipeui/frontend/screen-builder.jsx",
+        "src/pipeui/frontend/screen-builder.test.jsx",
+        ".claude/runs/date-range-filter/4.md"
+      ],
+      "shared_surfaces": [
+        {
+          "surface": "date_range config schema {groups:[{conditions:[{column,start,end}]}]}",
+          "shared_with": [
+            2,
+            3
+          ],
+          "access": "reads"
+        },
+        {
+          "surface": "attach/patch rejection contract (detail message shape)",
+          "shared_with": [
+            3
+          ],
+          "access": "reads"
+        }
+      ]
+    }
+  ]
+}

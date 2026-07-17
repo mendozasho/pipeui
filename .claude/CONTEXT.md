@@ -14,6 +14,32 @@ in `BUILTIN_EXECUTORS` (`backend/domain/functions/builtins.py`); `rename` is sin
 (one per source) and pinned last in the pipeline.
 _Avoid_: built-in function, builtin
 
+**date_range step**:
+A singleton built-in step (`builtin_type: "date_range"`) holding the source's date filter:
+one or more `filter group`s of `range condition`s over registered date-typed columns.
+Runs in the `pinned tail` (before rename), so the transformed output contains only
+matching rows.
+_Avoid_: date filter step, calendar filter
+
+**range condition**:
+One `{column, start, end}` predicate inside a `filter group`: the date-typed column's value
+falls inclusively between the bounds. One-sided (start-only = on-or-after, end-only =
+on-or-before) is valid; both-empty is not. TIMESTAMP/TIMESTAMPTZ columns compare at DATE
+granularity (cast before comparison); a NULL date fails the condition.
+_Avoid_: date rule, bound pair, between clause
+
+**filter group**:
+An AND-ed set of `range condition`s inside a `date_range step`. Groups combine with OR
+(one-level disjunctive normal form) — mixed AND/OR expressions are expressed as
+OR-of-AND-groups, never as chained combinators or nested groups.
+_Avoid_: condition set, branch, clause
+
+**pinned tail**:
+The ordered suffix of the `unified pipeline` that runs last regardless of stored position:
+`date_range` then `rename`. Generalizes rename's pinned-last rule; the ordering exists
+because range conditions reference registered column names and rename relabels the output.
+_Avoid_: pinned last (as a category — fine as a per-step adjective), end steps
+
 **Function step**:
 A pipeline step backed by a function set (one or more user-uploaded functions).
 Persisted in `source_function_map`, identified by `source_function_map_id`, and carries

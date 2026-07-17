@@ -1,0 +1,46 @@
+{
+  "feature_slug": "date-range-filter",
+  "ledger_hash": "a03e404d49a074765964183a2b55d20c5f64226c8761d03732fea11a25a77eaa",
+  "accumulator_branch": "release/date-range-filter",
+  "current_round": 4,
+  "slices": {
+    "1": {
+      "status": "integrated",
+      "branch": "feature/date-range-filter-1",
+      "workspace": null,
+      "pr": 127,
+      "integrated_at": "2026-07-15T21:49:30.133403+00:00",
+      "note": "tests promoted (B16); test_api_pipelines.py predicted but untouched - phase-3 feedback in build record"
+    },
+    "2": {
+      "status": "integrated",
+      "branch": "feature/date-range-filter-2",
+      "workspace": null,
+      "pr": 128,
+      "integrated_at": "2026-07-15T22:07:39.028584+00:00",
+      "note": "tests promoted; db.py predicted but untouched (migration = existing idempotent seed re-run) - phase-3 feedback in build record"
+    },
+    "3": {
+      "status": "integrated",
+      "branch": "feature/date-range-filter-3",
+      "workspace": null,
+      "pr": 129,
+      "integrated_at": "2026-07-15T22:24:37.450998+00:00",
+      "note": "tests promoted; criteria 2-5 green-first-run regression locks (honest, recorded)"
+    },
+    "4": {
+      "status": "integrated",
+      "branch": "feature/date-range-filter-4",
+      "workspace": null,
+      "pr": 130,
+      "integrated_at": "2026-07-15T22:42:11.512295+00:00",
+      "note": "tests promoted; frontend-only diff; smoke mount gate green"
+    }
+  },
+  "integration_order": [
+    "1",
+    "2",
+    "3",
+    "4"
+  ]
+}

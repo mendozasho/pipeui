@@ -1,5 +1,5 @@
 """Built-in pipeline steps — app-provided steps registered in ``BUILTIN_EXECUTORS``
-(currently join, pivot, filter, rename; the registry is the source of truth).
+(currently join, pivot, filter, rename, date_range; the registry is the source of truth).
 
 attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
     Creates a source_builtin_map row and returns {"ok": True, "step_id": "..."}.
@@ -7,8 +7,9 @@ attach_builtin(conn, source_id, builtin_type, builtin_config) -> dict
 detach_builtin(conn, source_id, step_id) -> bool
     Removes the row; returns False when not found.
 
-patch_builtin(conn, source_id, step_id, *, builtin_config=None, position=None) -> bool
-    Updates builtin_config and/or position; returns False when not found.
+patch_builtin(conn, source_id, step_id, *, builtin_config=None, position=None) -> dict | None
+    Updates builtin_config and/or position; returns {"ok": True}, a
+    {"ok": False, "detail": ...} write-boundary rejection, or None when not found.
 
 get_builtin_steps(conn, source_id) -> list[dict]
     Returns all source_builtin_map rows for a source ordered by position,
@@ -153,6 +154,85 @@ def _validate_rename_config(cfg: dict) -> str | None:
     return None
 
 
+def _validate_date_range_config(cfg: dict) -> str | None:
+    """Attach-time shape check for a date_range built-in (PRD date-range-filter).
+
+    Config: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` — one-level
+    DNF: conditions within a group AND, groups OR. Bounds are inclusive "YYYY-MM-DD"
+    strings; ``None``/``""`` means an open bound, but at least one bound must be set
+    and start must not exceed end. Structural checks only — date-typed column
+    eligibility needs the DB and is enforced at the attach/patch write boundary.
+    """
+    groups = cfg.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return "date_range config must include a non-empty 'groups' list"
+    for group in groups:
+        conditions = group.get("conditions") if isinstance(group, dict) else None
+        if not isinstance(conditions, list) or not conditions:
+            return "every date_range group must include a non-empty 'conditions' list"
+        for cond in conditions:
+            if not isinstance(cond, dict) or not cond.get("column"):
+                return "every date_range condition must include a column"
+            start, end = cond.get("start"), cond.get("end")
+            if start in (None, "") and end in (None, ""):
+                return (
+                    f"condition on {cond['column']!r} must set at least one bound "
+                    "(start and end are both empty)"
+                )
+            if start not in (None, "") and end not in (None, "") and start > end:
+                return (
+                    f"condition on {cond['column']!r} has start {start!r} "
+                    f"after end {end!r}"
+                )
+    return None
+
+
+# Column types eligible for date_range conditions (PRD: date-typed columns only;
+# VARCHAR-held dates are fixed via column-type migration, not accepted here).
+_DATE_COLUMN_TYPES = {"DATE", "TIMESTAMP", "TIMESTAMPTZ"}
+
+
+def _date_range_boundary_check(
+    conn: duckdb.DuckDBPyConnection,
+    source_id: uuid.UUID,
+    cfg: dict,
+) -> str | None:
+    """Write-boundary check for a date_range config (#118 / #123) — what the pure
+    validator cannot see: every condition column must be a DATE/TIMESTAMP/TIMESTAMPTZ
+    column registered on the source per ``column_registry``. Returns a rejection
+    message naming the offending column, or None.
+
+    Runs the pure shape validator first: the patch path never ran it, and the
+    eligibility walk below assumes a structurally valid config. Lives at the
+    attach/patch write boundary (the workflow layer owns the connection) — the same
+    boundary-owns-DB-checks pattern Principle 1 uses for hash collisions.
+    """
+    err = _validate_date_range_config(cfg)
+    if err:
+        return err
+    rows = conn.execute(
+        """
+        SELECT cr.column_name, cr.column_type
+        FROM column_registry cr
+        JOIN source_column_map scm ON scm.column_id = cr.column_id
+        WHERE scm.source_id = ?
+        """,
+        [source_id],
+    ).fetchall()
+    col_types = {name: ctype for name, ctype in rows}
+    for group in cfg["groups"]:
+        for cond in group["conditions"]:
+            col = cond["column"]
+            if col not in col_types:
+                return f"date_range condition column {col!r} is not a registered column of this source"
+            if col_types[col] not in _DATE_COLUMN_TYPES:
+                return (
+                    f"date_range condition column {col!r} has type {col_types[col]}; "
+                    f"only DATE, TIMESTAMP, or TIMESTAMPTZ columns are eligible"
+                )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # attach / detach / patch
 # ---------------------------------------------------------------------------
@@ -188,6 +268,15 @@ def attach_builtin(
         [source_id, builtin_type],
     ).fetchone() is not None:
         return {"ok": False, "detail": f"only one {builtin_type!r} step is allowed per source"}
+
+    # Write-boundary check (#118/#123) — a DB-aware validation the pure validator
+    # cannot do (e.g. date_range's date-typed column eligibility). Registered on the
+    # spec like validate/singleton, so a future boundary-checked type is one
+    # registration — no type-specific branch here (OCP).
+    if spec.boundary_validate is not None:
+        err = spec.boundary_validate(conn, source_id, builtin_config)
+        if err:
+            return {"ok": False, "detail": err}
 
     # Position = MAX(position)+1 across both map tables for this source
     sfm_max = conn.execute(
@@ -231,15 +320,26 @@ def patch_builtin(
     *,
     builtin_config: dict | None = None,
     position: int | None = None,
-) -> bool:
-    """Update builtin_config and/or position.  Returns False when not found."""
+) -> dict | None:
+    """Update builtin_config and/or position.
+
+    Returns ``{"ok": True}`` on success, ``{"ok": False, "detail": "..."}`` when the
+    step's registered write-boundary check rejects the new config (#118/#123 — the
+    same rejection shape ``attach_builtin`` uses), or ``None`` when the step is not
+    found. Types without a ``boundary_validate`` registration patch exactly as before.
+    """
     row = conn.execute(
-        "SELECT step_id FROM source_builtin_map WHERE step_id = ? AND source_id = ?",
+        "SELECT builtin_type FROM source_builtin_map WHERE step_id = ? AND source_id = ?",
         [step_id, source_id],
     ).fetchone()
     if row is None:
-        return False
+        return None
     if builtin_config is not None:
+        spec = BUILTIN_EXECUTORS.get(row[0])
+        if spec is not None and spec.boundary_validate is not None:
+            err = spec.boundary_validate(conn, source_id, builtin_config)
+            if err:
+                return {"ok": False, "detail": err}
         conn.execute(
             "UPDATE source_builtin_map SET builtin_config = ? WHERE step_id = ?",
             [json.dumps(builtin_config), step_id],
@@ -249,7 +349,7 @@ def patch_builtin(
             "UPDATE source_builtin_map SET position = ? WHERE step_id = ?",
             [position, step_id],
         )
-    return True
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -337,10 +437,12 @@ def get_unified_pipeline(
             "position": bstep.position,
         })
 
-    # Sort unified list by position; a rename built-in is pinned last (#40), matching
-    # the execution order in run.py and the canvas order in get_pipeline.
+    # Sort unified list by position; pinned-tail builtins (e.g. rename, #40) sort
+    # after all positional steps in their registered tail order (#83/#116) — the
+    # spec metadata via pinned_tail_rank, matching the execution order in run.py
+    # and the canvas order in get_pipeline.
     steps.sort(key=lambda s: (
-        1 if s.get("builtin_type") == "rename" else 0,
+        pinned_tail_rank(s.get("builtin_type")),
         s["position"],
         s.get("set_name") or s.get("builtin_type") or "",
     ))
@@ -583,6 +685,50 @@ def _execute_rename(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, cfg: dict
     return df.rename(columns=renames)
 
 
+def _execute_date_range(
+    conn: duckdb.DuckDBPyConnection,
+    df: pd.DataFrame,
+    cfg: dict,
+) -> pd.DataFrame:
+    """Execute a date_range built-in (PRD date-range-filter) — keep rows matching
+    the grouped range conditions.
+
+    Config shape: ``{"groups": [{"conditions": [{"column", "start", "end"}]}]}`` —
+    one WHERE of OR-ed group predicates, each group an AND of inclusive range
+    predicates over only the bounds a condition sets (validation guarantees at
+    least one). Columns are CAST to DATE so TIMESTAMP/TIMESTAMPTZ compare at DATE
+    granularity (a 23:59 stamp on the end day is inside; TIMESTAMPTZ uses DuckDB's
+    session-default timezone); bounds are bound as parameters and CAST to DATE. A
+    NULL date fails its condition (SQL semantics) but the row may still pass via
+    another OR group.
+    """
+    err = _validate_date_range_config(cfg)
+    if err:
+        raise ValueError(err)
+
+    group_predicates: list[str] = []
+    params: list[str] = []
+    for group in cfg["groups"]:
+        condition_predicates: list[str] = []
+        for cond in group["conditions"]:
+            col_sql = f'CAST("{cond["column"]}" AS DATE)'
+            for bound, op in ((cond.get("start"), ">="), (cond.get("end"), "<=")):
+                if bound not in (None, ""):
+                    condition_predicates.append(f"{col_sql} {op} CAST(? AS DATE)")
+                    params.append(bound)
+        group_predicates.append("(" + " AND ".join(condition_predicates) + ")")
+    where = " OR ".join(group_predicates)
+
+    _view = f"_builtin_date_range_{uuid.uuid4().hex[:8]}"
+    conn.execute(f'CREATE OR REPLACE TEMP VIEW "{_view}" AS SELECT * FROM df')
+    try:
+        result = conn.execute(f'SELECT * FROM "{_view}" WHERE {where}', params).df()
+    finally:
+        conn.execute(f'DROP VIEW IF EXISTS "{_view}"')
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Built-in dispatch registry (OCP — #50)
 # ---------------------------------------------------------------------------
@@ -598,12 +744,30 @@ class BuiltinSpec:
       step. ``run_transforms`` is the injected runner (DIP) used only by the transformed-join
       materialize path; non-join built-ins accept-and-ignore it and return ``consumed_result_id=None``.
     - ``singleton`` — at most one step of this type per source (enforced in attach_builtin);
-      rename is singleton + pinned-last (#40).
+      rename is singleton + pinned-tail (#40).
+    - ``boundary_validate(conn, source_id, cfg) -> str | None`` — optional DB-aware
+      write-boundary check (#118/#123), run by attach_builtin and patch_builtin after
+      the pure ``validate``; error string or None. For checks the pure validator
+      cannot do (e.g. date_range's date-typed column eligibility per column_registry).
+      ``None`` (the default) means no boundary check — attach/patch behave as before.
+    - ``pinned_tail`` — ordered pinned-tail metadata (#83/#116). ``None`` (the default)
+      means positional: the step sorts by its stored position among the other
+      positional steps. An ``int >= 1`` pins the step to the tail: it sorts after
+      every positional step, ordered among pinned steps by this rank (lower runs
+      earlier). Current tail order: [positional steps..., date_range (1), rename (2)]
+      — rank 1 is taken by the date_range step (PRD date-range-filter). This is the
+      ONE place the pinned tail is defined; every ordering site (get_pipeline,
+      get_unified_pipeline, run_pipeline) consumes it via ``pinned_tail_rank`` —
+      never key an ordering on a builtin_type literal.
     """
 
     validate: Callable[[dict], "str | None"]
     execute: Callable[..., "tuple[pd.DataFrame, str | None]"]
     singleton: bool = False
+    pinned_tail: Optional[int] = None
+    boundary_validate: Optional[
+        Callable[[duckdb.DuckDBPyConnection, uuid.UUID, dict], "str | None"]
+    ] = None
 
 
 # The dispatch table both attach_builtin (validation) and execute_builtin_step
@@ -629,5 +793,39 @@ BUILTIN_EXECUTORS: dict[str, BuiltinSpec] = {
         validate=_validate_rename_config,
         execute=lambda conn, df, cfg, run_transforms: (_execute_rename(conn, df, cfg), None),
         singleton=True,
+        # #40: rename operates on the final output (incl. joined columns) so it is
+        # last in the pinned tail; rank 1 belongs to date_range (runs before rename
+        # because its conditions reference registered column names that rename relabels).
+        pinned_tail=2,
+    ),
+    "date_range": BuiltinSpec(
+        validate=_validate_date_range_config,
+        execute=lambda conn, df, cfg, run_transforms: (_execute_date_range(conn, df, cfg), None),
+        singleton=True,
+        # PRD date-range-filter: the date filter always applies to the final table
+        # (after every positional step) but before rename, whose relabelling would
+        # invalidate the registered column names the conditions reference.
+        pinned_tail=1,
+        # Date-typed column eligibility needs column_registry — a write-boundary
+        # check, not a pure-validator one (#118/#123).
+        boundary_validate=_date_range_boundary_check,
     ),
 }
+
+
+def pinned_tail_rank(builtin_type: "str | None") -> int:
+    """Return the pinned-tail sort rank for a step (#83/#116).
+
+    0 for every positional step — function steps (``builtin_type=None``) and any
+    builtin whose spec carries no ``pinned_tail`` — so they keep their by-position
+    order ahead of the tail. Pinned builtins return their spec's ``pinned_tail``
+    rank. Reads ``BUILTIN_EXECUTORS`` at call time, so the registry is the single
+    ordering authority. Use as the primary sort key, before position:
+    ``key=lambda s: (pinned_tail_rank(<builtin_type>), <position>, ...)``.
+    """
+    if builtin_type is None:
+        return 0
+    spec = BUILTIN_EXECUTORS.get(builtin_type)
+    if spec is None or spec.pinned_tail is None:
+        return 0
+    return spec.pinned_tail

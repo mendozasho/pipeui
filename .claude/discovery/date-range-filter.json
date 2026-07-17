@@ -1,0 +1,85 @@
+{
+  "feature_slug": "date-range-filter",
+  "discovery_status": "frozen",
+  "stack_context": "mixed",
+  "intent": "Let a user reduce a source's transformed output to rows matching a date filter - filter groups of range conditions (date-typed column + inclusive calendar-picked start/end), groups OR-ed, conditions within a group AND-ed - so the final report contains only the filtered rows.",
+  "definition_of_done": "A date_range palette card exists on the Builder canvas. Dropping it opens a modal where the user adds range conditions one at a time ('+ Add condition' within a group, '+ Add OR group' for a new branch, per-row remove), each condition = one registered DATE/TIMESTAMP/TIMESTAMPTZ column picked from a date-only picker + native <input type=date> start/end inputs. Saving attaches a singleton source_builtin_map row (builtin_type 'date_range', grouped JSON config); dropping the palette card again edits the existing step (rename's singleton pattern). Running the pipeline executes the step in the pinned tail (after all positional steps, before rename) as DuckDB SQL over the working frame: WHERE (g1c1 AND g1c2 ...) OR (g2c1 ...), inclusive bounds, one-sided conditions supported, TIMESTAMP cast to DATE, NULL dates failing their condition - and the reduced frame becomes the staging table, so the transformed report, its exports, and deliverables contain only matching rows. Validation rejects a config with zero groups, an empty group, a condition with both bounds empty, a non-date column, or start > end. Reopening the modal restores groups and conditions in persisted order with persisted bounds (Principle 7 round-trip, with test). Every behavioral guarantee above has a corresponding test.",
+  "mvp_scope": "New date_range builtin: BuiltinSpec registration (validate + execute) in BUILTIN_EXECUTORS + SEED_BUILTINS catalog row; grouped config schema {groups: [{conditions: [{column, start, end}]}]}; pinned-tail ordering generalized from rename's magic-string sort (no fourth magic-string site); singleton attach/edit flow; DateRangeModal with date-only column picker (filter columns on column_type in DATE/TIMESTAMP/TIMESTAMPTZ), native date inputs, add/remove conditions and OR groups; builtin card config summary; validation + edit round-trip; tests per guarantee (backend executor/validator/ordering + frontend modal/round-trip).",
+  "explicitly_out_of_scope": [
+    "Filtering non-date columns through this UI (the existing single-condition filter builtin covers those; a grouped generic filter is a separate future discovery).",
+    "Nested boolean groups beyond one-level OR-of-AND-groups (DNF covers every mixed AND/OR expression).",
+    "Time-of-day precision in the picker (whole calendar dates; TIMESTAMP columns compare at DATE granularity).",
+    "Filtering on columns created mid-pipeline by transforms/joins (picker offers registered columns only; needs end-of-pipeline schema computation - consciously deferred).",
+    "VARCHAR columns holding date strings (the existing column-type migration is the sanctioned fix).",
+    "Rich custom range-picker UI (two-month spread, presets) - would design-gate the UI slice; native inputs chosen instead.",
+    "Timezone-aware TIMESTAMPTZ semantics beyond DuckDB's session-default cast."
+  ],
+  "affected_components": [
+    "src/pipeui/backend/domain/functions/builtins.py (new _validate_date_range_config + _execute_date_range + BUILTIN_EXECUTORS registration; pinned-tail generalization)",
+    "src/pipeui/backend/data/base/schema/queries.py (SEED_BUILTINS catalog row for date_range)",
+    "pinned-last sort sites: get_unified_pipeline (builtins.py), run.py, pipeline_read.py (the #83 magic-string trio - must generalize to an ordered pinned tail)",
+    "src/pipeui/backend/domain/runner/executors.py (BuiltinStepExecutor dispatch - expected unchanged, verify)",
+    "src/pipeui/middleware/builtins.py (attach/patch/detach + GET /builtins catalog - expected mostly unchanged; singleton enforcement like rename)",
+    "src/pipeui/frontend/screen-builder.jsx (palette entry, DateRangeModal, builtinConfigSummary, drop/edit wiring)",
+    "tests/test_builtins.py + screen-builder.test.jsx"
+  ],
+  "dependencies": [
+    "None unbuilt: builtin registry (OCP), singleton mechanics (rename), generic builtin canvas card (render-builtin-steps, frozen), column_type in every columns payload, and the '+ Add another' modal pattern (RenameModal/KeyPairBuilder) all exist on main."
+  ],
+  "terms_resolved": [
+    "date_range step",
+    "range condition",
+    "filter group",
+    "pinned tail"
+  ],
+  "assumptions": [
+    "Grounding (verified against code 2026-07-15): the existing filter builtin is single-condition {column, operator, value} with no conditions array, no combinator, no range operator ('between' explicitly rejected); DuckDB implicitly casts the string value at comparison.",
+    "No date-picker/calendar UI primitive and no type-filtered column picker exist in the frontend today; both are net-new but trivial (native <input type=date>; filter columns list by column_type).",
+    "Built-ins execute as DuckDB SQL over the working frame (temp view + WHERE) and the reduced frame becomes the next staging table - row-reduction plumbing exists end-to-end.",
+    "CAST(timestamptz AS DATE) uses DuckDB's session-default timezone (UTC); acceptable for MVP, noted in out-of-scope.",
+    "Singleton enforcement for rename exists and is reusable for date_range (verify mechanism during PRD/slicing rather than assuming a config flag exists)."
+  ],
+  "resolved_decisions": [
+    {
+      "question": "Scope restatement - is one flat AND/OR combinator across all conditions enough?",
+      "resolution": "NO - the user needs mixed AND/OR relationships in one filter step, e.g. (A AND B) OR C. A flat combinator is insufficient; the config must express grouped boolean logic over date-range conditions. Whole-date calendar bounds, date-typed columns only, and single-source filtering were otherwise confirmed by omission (user corrected only the combinator item)."
+    },
+    {
+      "question": "Grouping model for mixed AND/OR: DNF groups, chained per-condition combinators, or arbitrary nesting?",
+      "resolution": "OR-of-AND-groups (disjunctive normal form, one level): conditions inside a group are ANDed; groups are ORed. '+ Add condition' adds within a group; '+ Add OR group' starts a new branch. Chosen over chained combinators (precedence of 'A AND B OR C' is invisible/ambiguous) and over fully nestable groups (recursive config + UI for unasked-for depth); any mixed AND/OR expression rewrites into this form, so no expressiveness is lost, only compactness in (A OR B) AND (C OR D)-style cases, which expand into DNF."
+    },
+    {
+      "question": "New date_range builtin type, or extend the existing filter builtin?",
+      "resolution": "NEW date_range builtin type. The registry is one-registration OCP (BuiltinSpec with validate + execute), the canvas card renders any builtin_type for free (adopted from render-builtin-steps: built-in cards stay generic over builtin_type), and the grouped {column, start, end} config shares no operator vocabulary, value shape, or validation with filter's flat {column, operator, value}. Extending filter would migrate persisted single-condition configs and rewrite FilterModal to serve a date-only feature. Revisit trigger recorded: if a grouped filter UI for numeric/text columns is later wanted, that becomes its own discovery weighing 'generalize date_range' vs a third engine."
+    },
+    {
+      "question": "Where does date_range execute, and which columns can it filter on?",
+      "resolution": "Pinned last, like rename: the step always runs at the end of the pipeline regardless of stored position ('the final report only has the filtered rows' is the user's core framing). The column picker offers the source's REGISTERED DATE/TIMESTAMP/TIMESTAMPTZ columns (column_registry) - filtering on columns created mid-pipeline by transforms/joins was explicitly offered as the bigger alternative and not chosen. This diverges from join/pivot/filter positional precedent and adopts rename's pinned-last precedent instead."
+    },
+    {
+      "question": "Singleton like rename, and relative order between the two pinned-last steps?",
+      "resolution": "Singleton: at most one date_range per source; dropping the palette card when one exists opens the existing step for editing (rename's exact pattern). OR-of-AND-groups inside the one step already express every combination, so a second step adds only ambiguity. Ordering (resolved by analysis, not preference): date_range runs BEFORE rename in the pinned tail - its conditions reference registered column names and rename relabels the output afterward; running rename first could invalidate the filter's column references. Implementation constraint carried forward: the pinned-last sort is duplicated across three sites keyed on the magic string 'rename' (#83); a second pinned type must generalize that mechanism (e.g. ordered pinned-tail metadata on the registry), not add a fourth magic-string site."
+    },
+    {
+      "question": "Exact semantics of one range condition (bounds, one-sided, TIMESTAMP granularity, NULLs)?",
+      "resolution": "(1) Inclusive on both ends - 'Jan 1 to Mar 31' keeps rows dated Mar 31. (2) One-sided ranges allowed: start-only = on-or-after, end-only = on-or-before; a condition with BOTH bounds empty is a validation error. (3) TIMESTAMP/TIMESTAMPTZ columns are cast to DATE before comparison so 'Mar 31 23:59' falls inside a range ending Mar 31 (avoids the off-by-one-day midnight-cutoff bug). (4) NULL dates fail the condition (standard SQL); a row can still pass via another OR group. User confirmed NULL-fails is correct for their reporting."
+    },
+    {
+      "question": "Which columns qualify as date columns in the picker?",
+      "resolution": "Strictly DATE/TIMESTAMP/TIMESTAMPTZ per column_registry. VARCHAR columns holding date strings are NOT offered - the sanctioned fix is the existing column-type migration (Principle 6: TRY_CAST recreate-and-copy via the Data screen), not filter-side runtime coercion, which would duplicate that machinery in a weaker form and mask data-quality problems."
+    },
+    {
+      "question": "What implements the calendar popup?",
+      "resolution": "Native <input type=date> - browser-native calendar popup, zero dependencies (frontend is deliberately no-build-step CDN React), cannot produce unparseable values, and keeps the feature off the HITL design gate (a custom calendar is a visual-design decision that would label the UI slice blocked-on-design). Rich range-picker and CDN library options were offered and declined."
+    },
+    {
+      "question": "May the same date column appear in multiple conditions?",
+      "resolution": "Yes (resolved by analysis, not asked): forbidding duplicates would break the core OR use case - '(order_date Jan-Mar) OR (order_date Oct-Dec)' requires the same column in two groups. Within one AND group, a duplicated column just narrows the range; harmless, no special validation."
+    },
+    {
+      "question": "Edit round-trip requirements?",
+      "resolution": "Adopted from repo Principle 7 (edits preserve persisted values, both halves): edit-load returns groups/conditions in persisted form and order; saving without touching a field persists it unchanged. Requires the open -> save-untouched -> unchanged round-trip test. Not optional - this is a standing project rule with a canonical breach (#260 column-order-on-edit)."
+    }
+  ],
+  "open_risks_to_resolve": []
+}
