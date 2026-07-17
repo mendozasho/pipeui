@@ -29,8 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from pipeui.backend.data.functions.binding import StepBinding
-from pipeui.backend.data.functions.contract import FunctionContract
+from pipeui.backend.data.functions.binding import ParamBinding, StepBinding
+from pipeui.backend.data.functions.contract import FunctionContract, ParamContract
 
 FUNCTION = "function"
 BUILTIN = "builtin"
@@ -60,11 +60,51 @@ class FunctionSpec:
     append_name: str | None
     output_targets: tuple[str, ...]
     step_type: str = FUNCTION
-    # #136 shadow layer: the universal interface + this source's persisted binding,
-    # assembled by the loader from the same rows ``params`` carries. Additive — the
-    # executors migrate onto contract.bind() in Phase 3.
+    # #136: the universal interface + this source's persisted binding, assembled by
+    # the loader from the same rows ``params`` carries. The executors consume these
+    # via ``contract_binding()``.
     contract: FunctionContract | None = None
     binding: StepBinding | None = None
+
+    def contract_binding(self) -> tuple[FunctionContract, StepBinding]:
+        """Return this member's (contract, binding), deriving them from the legacy
+        ``params`` rows when the spec was built without loader hydration (direct
+        construction in tests / adapters). The derived pair carries exactly the
+        information the executors need to bind — param types, order, defaults,
+        bindings, scalar values."""
+        if self.contract is not None and self.binding is not None:
+            return self.contract, self.binding
+        params = list(self.params)
+        contract = FunctionContract(
+            name=self.function_name,
+            engine="python",
+            params=tuple(
+                ParamContract(
+                    name=p["param_name"],
+                    type_str=p["param_type"],
+                    position=p.get("position") if p.get("position") is not None else i,
+                    has_default=bool(p.get("has_default")),
+                    default_value=p.get("default_value"),
+                )
+                for i, p in enumerate(params)
+            ),
+            return_type=self.function_return_type or "pd.Series",
+            signature="",
+        )
+        binding = StepBinding(params=tuple(
+            ParamBinding(
+                param_name=p["param_name"],
+                kind=(
+                    "table" if p["param_type"] == "pd.DataFrame"
+                    else "columns" if p.get("bindings")
+                    else "literal"
+                ),
+                columns=tuple(p.get("bindings") or ()),
+                value=p.get("scalar_value"),
+            )
+            for p in params
+        ))
+        return contract, binding
 
 
 @dataclass(frozen=True)

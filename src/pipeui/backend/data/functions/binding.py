@@ -18,9 +18,9 @@ model of a run:
 default → ``RequiredParamError``), enforces shape homogeneity (``MixedShapeError``),
 and pairs columns — no pandas data touched until a ``BoundCall`` meets a frame.
 
-This module is also the canonical home of ``RequiredParamError`` / ``coerce_scalar``
-(re-exported by ``domain/runner/param_resolve`` until Phase 3 deletes it) and
-``MixedShapeError`` / ``composite_key`` (re-exported by ``domain/runner/bundle_exec``).
+This module is the canonical home of ``RequiredParamError`` / ``coerce_scalar`` /
+``MixedShapeError`` / ``composite_key`` — the executors and ``realize`` import them
+from here.
 
 Layer: data-layer leaf beside ``contract.py``; imports only its published peers
 (``data/runner/bundles``). No DB, no worker, no app object.
@@ -40,7 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover — type-only; avoids a contract ⇄ bindi
 BindingKind = Literal["columns", "literal", "table", "source_ref"]
 
 # Scalar-shaped param types (bound to a column they receive per-row values; unbound
-# they resolve to a literal). Mirrors bundle_exec._SCALAR_TYPES — one vocabulary.
+# they resolve to a literal). The one vocabulary the executors and realize key off.
 SCALAR_TYPES = ("str", "int", "float", "bool")
 
 
