@@ -12,7 +12,6 @@ or sql_user_table/ directly.
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 import uuid
 from datetime import date
@@ -25,6 +24,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from pipeui.middleware.deps import get_conn
+from pipeui.middleware.results_files import results_file_response, sanitise_filename
 from pipeui.backend.domain.functions.attach import AttachBinding, attach_function, detach_function
 from pipeui.backend.domain.functions.pipeline_read import get_pipeline
 from pipeui.backend.domain.functions.suggest import suggest_bindings
@@ -392,11 +392,6 @@ _FILE_EXPORT_FORMATS = {
 }
 
 
-def _sanitise_filename(s: str) -> str:
-    # Mirrors the frontend sanitiseFilename so download names match the old UX.
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", s or "")
-
-
 @router.get("/{source_id}/export/transformed/file")
 def download_transformed_file(
     source_id: str,
@@ -444,7 +439,7 @@ def download_transformed_file(
         )
 
     filename = (
-        f"{_sanitise_filename(summary['source_name'])}_"
+        f"{sanitise_filename(summary['source_name'])}_"
         f"{date.today().isoformat()}_transform.{format}"
     )
     return FileResponse(
@@ -464,8 +459,8 @@ def export_source_results_report(
     """Export the transposed results report for a source (source-tied entry point).
 
     Runs the source's pipeline (default run_type=validations — each validation function
-    ran) and returns {"columns": [...], "rows": [...]}: one row per RunResult, keyed by
-    its normalized label, with pass/fail + metadata columns, INCLUDING runs that passed.
+    ran) and returns {"columns": [...], "rows": [...]}: one row per function run
+    (function × source), with pass/fail + metadata columns, INCLUDING runs that passed.
 
     404 when source_id is unknown.
     """
@@ -474,11 +469,73 @@ def export_source_results_report(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
 
+    summary = get_source_summary(conn, sid)
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
     result = run_pipeline(conn, sid, run_type)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
 
-    return build_results_report(result)
+    return build_results_report(result, source_name=summary["source_name"])
+
+
+@router.get("/{source_id}/export/results/file")
+def download_source_results_file(
+    source_id: str,
+    format: str = Query(default="csv"),
+    run_type: str = Query(default="validations"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Download the source-tied results report as a file (#152).
+
+    ?format=csv|xlsx — re-runs the source's pipeline (same contract as the JSON
+    /export/results route: the export reflects current data) and serves the
+    per-function report with Content-Disposition: attachment.
+
+    404 when source_id is unknown. 422 on invalid source_id or unknown format.
+    """
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid source_id: {source_id!r}")
+
+    summary = get_source_summary(conn, sid)
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    result = run_pipeline(conn, sid, run_type)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Source {source_id!r} not found")
+
+    report = build_results_report(result, source_name=summary["source_name"])
+    return results_file_response(report, format, summary["source_name"])
+
+
+@router.get("/sets/{set_id}/export/results/file")
+def download_set_results_file(
+    set_id: str,
+    format: str = Query(default="csv"),
+    conn: duckdb.DuckDBPyConnection = Depends(get_conn),
+):
+    """Download a set run's results report as a file (#152).
+
+    ?format=csv|xlsx — re-runs the set across all attached sources and serves the
+    per-function report (flattened sources × steps) as an attachment.
+
+    404 when set_id is unknown. 422 on invalid set_id or unknown format.
+    """
+    try:
+        parsed_set_id = uuid.UUID(set_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid set_id: {set_id!r}")
+
+    result = run_set_across_sources(conn, parsed_set_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Set {set_id!r} not found")
+
+    report = build_results_report(result)
+    return results_file_response(report, format, result.get("set_name") or "set")
 
 
 @router.get("/{source_id}/export/transformed")

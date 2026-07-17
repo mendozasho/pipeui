@@ -2,15 +2,26 @@
 
 Two consumption exports for the Results screen (PRD: Results surfacing — three tiers):
 
-  build_results_report(run_result) -> {"columns": [...], "rows": [...]}
-      The **transposed results report**: one row per RunResult keyed by its normalized
-      label, with pass/fail + metadata columns. INCLUDES runs that fully passed — there
-      is no filtering on rows_failed, so the report is a complete record of every run.
-      Accepts either runner output shape (both entry points collapse to one row list):
-        - source-tied validations: run_pipeline(conn, source_id, "validations")
-            -> { run_type, steps: [...] }   (each step already carries the RunResult contract)
+  build_results_report(run_result, *, source_name=None) -> {"columns": [...], "rows": [...]}
+      The **transposed results report**: one row per function run (function × source),
+      with pass/fail + metadata columns. INCLUDES runs that fully passed — there is no
+      filtering on rows_failed, so the report is a complete record of every run.
+      Accepts any runner output shape (all entry points collapse to one row list):
+        - source-tied: run_pipeline(conn, source_id, run_type)
+            -> { run_type, steps: [...] }   (steps carry function identity; the caller
+               supplies source_name since steps do not carry it)
         - Functions-page cross-source: run_validation_across_sources(conn, function_id)
-            -> { function_id, function_name, sources: [...] }  (each per-source entry IS a RunResult)
+            -> { function_id, function_name, sources: [...] }  (each per-source entry IS
+               a (function, source) RunResult carrying function identity + source_name)
+        - set run: run_set_across_sources(conn, set_id)
+            -> { set_id, set_name, sources: [ {source_name, steps: [...]}, ... ] }
+               (flattened sources × steps; a source-level crash with no steps still
+               yields one failed row so the report stays a complete record)
+
+  write_results_csv / write_results_xlsx (report, dest_path) -> row count
+      File writers for the results report (server-owned validation export). The report
+      is one row per function run — always tiny — so these use stdlib csv / openpyxl
+      directly rather than the DuckDB COPY path reserved for data tables.
 
   build_transformed_report(conn, source_id) -> {"columns": [...], "rows": [...]}
       The **transformed report**: the source's transformed data table after all assigned
@@ -31,8 +42,6 @@ File-download exports (#110 — large tables must never round-trip through JSON)
       table exceeds the xlsx sheet row limit. None when no staging table exists.
 
 §14: this is a workflow-layer module; api/ route modules call it, never schema/ directly.
-The RunResult label normalization (results.normalize_label) is reused read-only — this
-module never modifies results.py.
 """
 from __future__ import annotations
 
@@ -41,7 +50,6 @@ from typing import Any
 
 import duckdb
 
-from pipeui.backend.data.base.results import normalize_label
 from pipeui.backend.data.runner.staging import latest_staging
 from pipeui.backend.domain.runner.run import get_staging_rows
 
@@ -49,51 +57,108 @@ from pipeui.backend.domain.runner.run import get_staging_rows
 XLSX_MAX_DATA_ROWS = 1_048_575
 
 
-# Columns surfaced in the transposed results report, in order. Every RunResult row
-# carries these keys (missing values default to None) so the exported file is rectangular.
+# Columns surfaced in the transposed results report, in order — one row per function
+# run (function × source). Every row carries these keys (missing values default to
+# None) so the exported file is rectangular.
 _RESULT_COLUMNS = [
-    "result_id",
-    "label",
     "function_name",
     "function_type",
+    "source_name",
     "status",
     "rows_passed",
     "rows_failed",
     "pass_rate",
     "error",
+    "result_id",
 ]
 
 
-def _result_row(entry: dict[str, Any]) -> dict[str, Any]:
+def _result_row(entry: dict[str, Any], *, source_name: str | None = None) -> dict[str, Any]:
     """Project one runner result entry onto the transposed report's column set.
 
-    Re-normalizes the `label` defensively (acceptance #3 — no leading underscores or
-    odd tokens) even though the runner already normalizes it, so a malformed label can
-    never reach the exported file. Falls back to the function name for the label seed.
+    `source_name` fills the column when the entry itself does not carry it (source-tied
+    steps and set-run nested steps get it from their surrounding context).
     """
-    label_seed = entry.get("label") or entry.get("function_name")
     row: dict[str, Any] = {col: entry.get(col) for col in _RESULT_COLUMNS}
-    row["label"] = normalize_label(label_seed)
+    if row.get("source_name") is None:
+        row["source_name"] = source_name
     return row
 
 
-def build_results_report(run_result: dict | None) -> dict[str, Any]:
-    """Build the transposed results report from either runner output shape.
+def build_results_report(
+    run_result: dict | None,
+    *,
+    source_name: str | None = None,
+) -> dict[str, Any]:
+    """Build the transposed results report from any runner output shape.
 
-    Returns {"columns": [...], "rows": [...]} — one row per RunResult, including runs
-    that fully passed. Returns an empty payload for a None/empty run result.
+    Returns {"columns": [...], "rows": [...]} — one row per function run
+    (function × source), including runs that fully passed. Returns an empty
+    payload for a None/empty run result.
     """
     if not run_result:
         return {"columns": list(_RESULT_COLUMNS), "rows": []}
 
-    # The cross-source (Functions-page) shape carries a `sources` list; the source-tied
-    # shape carries a `steps` list. Both are lists of per-RunResult dicts.
-    entries = run_result.get("sources")
-    if entries is None:
-        entries = run_result.get("steps") or []
+    # Source-tied shape: a flat `steps` list; the steps carry function identity but
+    # not the source, which the caller passes in.
+    if "steps" in run_result:
+        rows = [_result_row(s, source_name=source_name) for s in run_result["steps"] or []]
+        return {"columns": list(_RESULT_COLUMNS), "rows": rows}
 
-    rows = [_result_row(e) for e in entries]
+    rows = []
+    for entry in run_result.get("sources") or []:
+        entry_source = entry.get("source_name")
+        if "steps" in entry:
+            # Set shape: per-source entries hold nested per-function steps.
+            steps = entry.get("steps") or []
+            for step in steps:
+                rows.append(_result_row(step, source_name=entry_source))
+            if not steps and entry.get("error"):
+                # A source-level crash ran no functions; it must still appear as a
+                # failure so the report stays a complete record of the run.
+                rows.append(_result_row(
+                    {"status": "failed", "error": entry.get("error")},
+                    source_name=entry_source,
+                ))
+        else:
+            # Cross-source shape: each entry IS one (function, source) RunResult.
+            rows.append(_result_row(entry, source_name=entry_source))
     return {"columns": list(_RESULT_COLUMNS), "rows": rows}
+
+
+def _format_report_cell(col: str, value: Any) -> Any:
+    if col == "pass_rate" and isinstance(value, (int, float)):
+        return f"{value * 100:.1f}%"
+    return value
+
+
+def write_results_csv(report: dict[str, Any], dest_path: str) -> int:
+    """Write a results report ({"columns", "rows"}) to dest_path as CSV; return the
+    data row count. None cells become empty CSV fields."""
+    import csv
+
+    columns = report["columns"]
+    with open(dest_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for row in report["rows"]:
+            writer.writerow({c: _format_report_cell(c, row.get(c)) for c in columns})
+    return len(report["rows"])
+
+
+def write_results_xlsx(report: dict[str, Any], dest_path: str) -> int:
+    """Write a results report ({"columns", "rows"}) to dest_path as xlsx; return the
+    data row count."""
+    from openpyxl import Workbook
+
+    columns = report["columns"]
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Results")
+    ws.append(columns)
+    for row in report["rows"]:
+        ws.append([_xlsx_safe(_format_report_cell(c, row.get(c))) for c in columns])
+    wb.save(dest_path)
+    return len(report["rows"])
 
 
 def build_transformed_report(

@@ -277,6 +277,10 @@ def test_validations_endpoint_serializes_label_and_identity(client, db, tmp_path
     assert _re.fullmatch(r"[0-9a-f]+", src_entry["result_id"])  # UUID5 identity
     assert src_entry["label"]                                   # readable, normalized
     assert not src_entry["label"].startswith("_")
+    # #152: the per-source entry is one (function, source) run — the function
+    # identity must survive the per-source aggregation.
+    assert src_entry["function_name"] == "pos_rr"
+    assert src_entry["function_type"] == "validation"
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +335,17 @@ def test_functions_page_results_export_is_transposed_and_includes_passing(db, tm
     assert r.status_code == 200, r.text
     body = r.json()
     rows = body["rows"]
-    # Two attached sources -> two RunResult rows, even though every row passed.
+    # Two attached sources -> two function × source rows, even though every row passed.
     assert len(rows) == 2
     for row in rows:
-        # Transposed shape: per-RunResult row with pass/fail + metadata columns.
-        assert "label" in row and "status" in row
-        assert "rows_passed" in row and "rows_failed" in row
+        # Transposed shape: per-function-run row with pass/fail + metadata columns.
         assert row["rows_failed"] == 0           # fully-passing run, still present
         assert row["status"] == "ok"
+        # #152 regression: the cross-source path used to drop the function identity,
+        # exporting function_name=None on every row.
+        assert row["function_name"] == "all_pass"
+        assert row["function_type"] == "validation"
+    assert {row["source_name"] for row in rows} == {"rep_src1", "rep_src2"}
 
 
 @pytest.mark.integration
@@ -360,11 +367,14 @@ def test_source_tied_results_export_one_row_per_validation_function(db, tmp_path
     assert len(rows) == 1
     assert rows[0]["function_name"] == "pos_st"
     assert rows[0]["status"] == "ok"
+    # #152: the source-tied steps do not carry the source; the route stamps it.
+    assert rows[0]["source_name"] == "srctied"
 
 
 @pytest.mark.integration
-def test_results_export_labels_are_normalized(db, tmp_path):
-    """#242 (slice #3): every results-report row label is normalized (no leading _, no odd tokens)."""
+def test_results_export_rows_carry_function_and_source_identity(db, tmp_path):
+    """#152: every results-report row is identified by explicit function_name +
+    source_name columns (replacing the retired normalized-label column)."""
     client = _pipelines_client(db)
     source_id, _ = register_and_ingest(db, tmp_path, name="normsrc")
     col_id = get_column_id(db, source_id)
@@ -373,13 +383,11 @@ def test_results_export_labels_are_normalized(db, tmp_path):
 
     r = client.get(f"/pipelines/{source_id}/export/results?run_type=validations")
     assert r.status_code == 200, r.text
-    import re as _re
-    for row in r.json()["rows"]:
-        label = row["label"]
-        assert label, "label must be non-empty"
-        assert not label.startswith("_"), f"label has leading underscore: {label!r}"
-        # No odd tokens: only alphanumerics and interior single underscores survive.
-        assert _re.fullmatch(r"[0-9A-Za-z]+(?:_[0-9A-Za-z]+)*", label), f"odd token in label: {label!r}"
+    body = r.json()
+    assert "label" not in body["columns"]
+    for row in body["rows"]:
+        assert row["function_name"] == "norm_chk"
+        assert row["source_name"] == "normsrc"
 
 
 def test_results_export_unknown_function_returns_404(db):
