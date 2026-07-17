@@ -7,8 +7,8 @@ BEFORE they are exec'd for signature extraction: a ``block`` finding rejects the
 whole module and its top-level code never runs.
 
 ``extract_contracts`` is the single entry point; ``registration.scan_functions``
-consumes it. The legacy ``discover_functions_in_file`` / ``discover_sql_functions_in_file``
-wrappers preserve the old dict shape for one phase — delete with the Phase-2 PR.
+consumes it. (The legacy ``discover_*_in_file`` dict-shape wrappers were removed
+in #136.)
 
 Pure discovery: it reads the filesystem and calls ``classification`` derivations,
 but touches no DuckDB connection.
@@ -240,26 +240,3 @@ def _extract_sql(file_path: Path) -> list[DiscoveredFunction]:
     return [DiscoveredFunction(contract.name, contract=contract)]
 
 
-# ---------------------------------------------------------------------------
-# Legacy wrappers — old dict shape, kept for one phase (delete with Phase 2)
-# ---------------------------------------------------------------------------
-
-def _legacy_items(discovered: list[DiscoveredFunction]) -> list[dict]:
-    items: list[dict] = []
-    for d in discovered:
-        if d.skip_reason is not None:
-            items.append({"function_name": d.function_name, "skip_reason": d.skip_reason})
-        elif d.contract is not None:
-            items.append({"function_name": d.function_name, "data": d.contract.to_registry_dict()})
-        # flag-only <module> entries have no legacy representation
-    return items
-
-
-def discover_functions_in_file(file_path: Path) -> list[dict]:
-    """Legacy shape: ``{"function_name", "data"}`` or ``{"function_name", "skip_reason"}``."""
-    return _legacy_items(_extract_py(file_path))
-
-
-def discover_sql_functions_in_file(file_path: Path) -> list[dict]:
-    """Legacy shape for ``.sql`` files (see ``discover_functions_in_file``)."""
-    return _legacy_items(_extract_sql(file_path))

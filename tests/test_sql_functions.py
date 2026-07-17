@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeui.backend.domain.functions.discovery import discover_sql_functions_in_file
+from pipeui.backend.domain.functions.discovery import extract_contracts
 from pipeui.backend.domain.functions.registration import scan_functions
 from pipeui.backend.domain.functions.function_read import list_functions
 from pipeui.backend.domain.runner.sql_exec import execute_sql_function
@@ -30,7 +30,7 @@ def write_sql(tmp_path: Path, name: str, src: str) -> Path:
 # ---------------------------------------------------------------------------
 
 class TestParseSqlHeader:
-    """discover_sql_functions_in_file parses comment headers correctly."""
+    """extract_contracts parses .sql comment headers correctly."""
 
     @pytest.mark.unit
     def test_valid_transform_header(self, tmp_path):
@@ -41,19 +41,18 @@ class TestParseSqlHeader:
             -- type: transform
             SELECT * FROM {source_table} WHERE col_a IS NOT NULL
         """)
-        results = discover_sql_functions_in_file(f)
+        results = extract_contracts(f)
         assert len(results) == 1
         item = results[0]
-        assert "skip_reason" not in item, item.get("skip_reason")
-        assert item["function_name"] == "clean_nulls"
-        data = item["data"]
-        assert data["function_type"] == "transform"
-        assert data["function_class"] == "pd.dataframe"
-        assert data["function_return_type"] == "pd.DataFrame"
-        assert "{source_table}: pd.DataFrame -> pd.DataFrame" in data["function_signature"]
-        assert data["function_doc"] == "Remove rows where key columns are null"
-        assert data["param_names"] == []
-        assert data["param_types"] == []
+        assert item.skip_reason is None, item.skip_reason
+        assert item.function_name == "clean_nulls"
+        contract = item.contract
+        assert contract.function_type == "transform"
+        assert contract.function_class == "pd.dataframe"
+        assert contract.function_return_type == "pd.DataFrame"
+        assert "{source_table}: pd.DataFrame -> pd.DataFrame" in contract.signature
+        assert contract.doc == "Remove rows where key columns are null"
+        assert contract.params == ()
 
     @pytest.mark.unit
     def test_valid_validation_header(self, tmp_path):
@@ -63,13 +62,13 @@ class TestParseSqlHeader:
             -- type: validation
             SELECT col_a IS NOT NULL FROM {source_table}
         """)
-        results = discover_sql_functions_in_file(f)
+        results = extract_contracts(f)
         assert len(results) == 1
         item = results[0]
-        assert "skip_reason" not in item
-        assert item["data"]["function_type"] == "validation"
-        assert item["data"]["function_return_type"] == "pd.Series[bool]"
-        assert "-> pd.Series[bool]" in item["data"]["function_signature"]
+        assert item.skip_reason is None
+        assert item.contract.function_type == "validation"
+        assert item.contract.function_return_type == "pd.Series[bool]"
+        assert "-> pd.Series[bool]" in item.contract.signature
 
     @pytest.mark.unit
     def test_missing_type_stores_unknown(self, tmp_path):
@@ -78,13 +77,13 @@ class TestParseSqlHeader:
             -- name: mystery_fn
             SELECT * FROM {source_table}
         """)
-        results = discover_sql_functions_in_file(f)
+        results = extract_contracts(f)
         assert len(results) == 1
         item = results[0]
-        assert "skip_reason" not in item
-        assert item["data"]["function_type"] == "unknown"
-        assert item["data"]["function_return_type"] == "unknown"
-        assert "-> unknown" in item["data"]["function_signature"]
+        assert item.skip_reason is None
+        assert item.contract.function_type == "unknown"
+        assert item.contract.function_return_type == "unknown"
+        assert "-> unknown" in item.contract.signature
 
     @pytest.mark.unit
     def test_missing_name_header_is_skipped(self, tmp_path):
@@ -93,10 +92,10 @@ class TestParseSqlHeader:
             -- type: transform
             SELECT * FROM {source_table}
         """)
-        results = discover_sql_functions_in_file(f)
+        results = extract_contracts(f)
         assert len(results) == 1
-        assert "skip_reason" in results[0]
-        assert "name" in results[0]["skip_reason"]
+        assert results[0].skip_reason is not None
+        assert "name" in results[0].skip_reason
 
     @pytest.mark.unit
     def test_no_description_is_none(self, tmp_path):
@@ -106,8 +105,8 @@ class TestParseSqlHeader:
             -- type: transform
             SELECT * FROM {source_table}
         """)
-        results = discover_sql_functions_in_file(f)
-        assert results[0]["data"]["function_doc"] is None
+        results = extract_contracts(f)
+        assert results[0].contract.doc is None
 
 
 # ---------------------------------------------------------------------------

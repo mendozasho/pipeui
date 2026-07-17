@@ -16,6 +16,8 @@ import uuid
 
 import duckdb
 
+from pipeui.backend.data.functions.binding import ParamBinding, StepBinding
+from pipeui.backend.data.functions.contract import FunctionContract, ParamContract
 from pipeui.backend.data.runner.steps import (
     BuiltinStepContext,
     FunctionStepContext,
@@ -63,7 +65,11 @@ def fetch_steps(
                 fr.function_type,
                 fr.function_class,
                 fr.function_return_type,
-                fr.module_path
+                fr.module_path,
+                fr.function_signature,
+                fr.function_doc,
+                fr.engine,
+                fr.function_body
             FROM function_set_map fsm
             JOIN function_registry fr ON fr.function_id = fsm.function_id
             WHERE fsm.set_id = ?
@@ -73,11 +79,12 @@ def fetch_steps(
         ).fetchall()
 
         functions = []
-        for fn_id, fn_name, fn_type, fn_class, fn_ret, module_path in fn_rows:
+        for (fn_id, fn_name, fn_type, fn_class, fn_ret, module_path,
+             fn_signature, fn_doc, fn_engine, fn_body) in fn_rows:
             param_rows = conn.execute(
                 """
                 SELECT p.param_id, p.param_name, p.param_type,
-                       p.has_default, p.default_value,
+                       p.has_default, p.default_value, p.position,
                        cr.column_name, ssm.value AS scalar_value
                 FROM parameter p
                 LEFT JOIN alias_map am ON am.parameter_id = p.param_id
@@ -95,7 +102,8 @@ def fetch_steps(
             # #258: also carry the persisted scalar value + Python default so the
             # executor can resolve and broadcast scalar params into every bundle.
             params_map: dict[str, dict] = {}
-            for p_id, p_name, p_type, p_has_default, p_default, col_name, scalar_value in param_rows:
+            for (p_id, p_name, p_type, p_has_default, p_default, p_position,
+                 col_name, scalar_value) in param_rows:
                 key = str(p_id)
                 if key not in params_map:
                     params_map[key] = {
@@ -105,10 +113,49 @@ def fetch_steps(
                         "bindings": [],
                         "has_default": bool(p_has_default),
                         "default_value": p_default,
+                        "position": p_position,
                         "scalar_value": scalar_value,
                     }
                 if col_name is not None:
                     params_map[key]["bindings"].append(col_name)
+
+            # #136 shadow hydration: the universal contract (params in signature
+            # order) + this source's persisted binding (params in loader order —
+            # alphabetical until Phase 3 flips ordering to position).
+            contract = FunctionContract(
+                name=fn_name,
+                engine=fn_engine or "python",
+                params=tuple(
+                    ParamContract(
+                        name=p["param_name"],
+                        type_str=p["param_type"],
+                        position=p["position"] if p["position"] is not None else i,
+                        has_default=p["has_default"],
+                        default_value=p["default_value"],
+                    )
+                    for i, p in enumerate(sorted(
+                        params_map.values(), key=lambda p: (p["position"] or 0),
+                    ))
+                ),
+                return_type=fn_ret,
+                signature=fn_signature,
+                doc=fn_doc,
+                source_path=module_path,
+                body=fn_body,
+            )
+            binding = StepBinding(params=tuple(
+                ParamBinding(
+                    param_name=p["param_name"],
+                    kind=(
+                        "table" if p["param_type"] == "pd.DataFrame"
+                        else "columns" if p["bindings"]
+                        else "literal"
+                    ),
+                    columns=tuple(p["bindings"]),
+                    value=p["scalar_value"],
+                )
+                for p in params_map.values()
+            ))
 
             # Per-function output config (#264): output_mode / append_name / output_targets
             # belong to each function, not the whole set. Fall back to the step-level
@@ -142,6 +189,8 @@ def fetch_steps(
                 "output_mode": fn_output_mode,
                 "append_name": fn_append_name,
                 "output_targets": [r[0] for r in fn_target_rows],
+                "contract": contract,
+                "binding": binding,
             })
 
         # Output-target columns for a `replace` transform step, in position order
