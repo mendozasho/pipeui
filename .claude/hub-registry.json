@@ -24,11 +24,15 @@
     "runner-execution/nan-export",
     "runner-execution/outcfg",
     "runner-execution/scalar-params",
-    "runner-execution/setiter"
+    "runner-execution/setiter",
+    "date-range-filter/1",
+    "date-range-filter/2",
+    "date-range-filter/3",
+    "date-range-filter/4"
   ],
   "files": {
     "src/pipeui/frontend/screen-builder.jsx": {
-      "slice_count": 8,
+      "slice_count": 9,
       "layers": [
         "api",
         "business_logic",
@@ -40,12 +44,13 @@
         "render-builtin-steps",
         "param-binding-output-mode",
         "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "date-range-filter"
       ],
       "missing": false
     },
     "src/pipeui/frontend/screen-builder.test.jsx": {
-      "slice_count": 8,
+      "slice_count": 9,
       "layers": [
         "api",
         "business_logic",
@@ -57,7 +62,8 @@
         "render-builtin-steps",
         "param-binding-output-mode",
         "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "date-range-filter"
       ],
       "missing": false
     },
@@ -124,7 +130,7 @@
       "missing": false
     },
     "tests/test_api_pipelines.py": {
-      "slice_count": 8,
+      "slice_count": 9,
       "layers": [
         "api",
         "business_logic",
@@ -135,7 +141,8 @@
         "render-builtin-steps",
         "param-binding-output-mode",
         "runner-execution",
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "date-range-filter"
       ],
       "missing": false
     },
@@ -209,14 +216,15 @@
       "missing": false
     },
     "src/pipeui/backend/domain/functions/pipeline_read.py": {
-      "slice_count": 1,
+      "slice_count": 2,
       "layers": [
         "api",
         "business_logic",
         "ui"
       ],
       "features": [
-        "param-binding-output-mode"
+        "param-binding-output-mode",
+        "date-range-filter"
       ],
       "missing": false
     },
@@ -718,14 +726,16 @@
       "missing": true
     },
     "tests/test_builtins.py": {
-      "slice_count": 1,
+      "slice_count": 4,
       "layers": [
         "api",
         "business_logic",
+        "data",
         "ui"
       ],
       "features": [
-        "runner-resolution-model"
+        "runner-resolution-model",
+        "date-range-filter"
       ],
       "missing": false
     },
@@ -756,6 +766,50 @@
         "runner-execution"
       ],
       "missing": true
+    },
+    "src/pipeui/backend/domain/functions/builtins.py": {
+      "slice_count": 3,
+      "layers": [
+        "api",
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "date-range-filter"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/domain/runner/run.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic"
+      ],
+      "features": [
+        "date-range-filter"
+      ],
+      "missing": false
+    },
+    "src/pipeui/backend/data/base/schema/queries.py": {
+      "slice_count": 1,
+      "layers": [
+        "business_logic",
+        "data"
+      ],
+      "features": [
+        "date-range-filter"
+      ],
+      "missing": false
+    },
+    "src/pipeui/middleware/builtins.py": {
+      "slice_count": 1,
+      "layers": [
+        "api",
+        "business_logic"
+      ],
+      "features": [
+        "date-range-filter"
+      ],
+      "missing": false
     }
   }
 }
