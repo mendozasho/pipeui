@@ -240,3 +240,72 @@ class TestDateRangeLowered:
             _run_lowered_date_range(db, dated_df, {"groups": [{"conditions": [
                 {"column": "opened", "start": None, "end": ""},
             ]}]})
+
+
+# ---------------------------------------------------------------------------
+# rename — python-engine contract + simultaneous-apply orchestration (#144)
+# ---------------------------------------------------------------------------
+
+from pipeui.backend.domain.functions.builtin_lowering import (  # noqa: E402
+    RENAME_COLUMN,
+    _rename_schedule,
+    execute_rename_lowered,
+)
+
+
+class TestRenameLowered:
+    @pytest.mark.unit
+    def test_contract_stays_minimal(self):
+        # One plain python-engine function; batch semantics live in orchestration.
+        assert RENAME_COLUMN.engine == "python"
+        assert [p.name for p in RENAME_COLUMN.params] == ["df", "old_name", "new_name"]
+        assert RENAME_COLUMN.body is not None  # inline source, executed via realize
+
+    @pytest.mark.unit
+    def test_schedule_direct_when_no_overlap(self):
+        assert _rename_schedule(["a", "b"], {"a": "x", "b": "y"}) == [("a", "x"), ("b", "y")]
+
+    @pytest.mark.unit
+    def test_schedule_two_pass_for_swap_and_chain(self):
+        swap = _rename_schedule(["a", "b"], {"a": "b", "b": "a"})
+        assert swap == [("a", "__pipeui_ren_0"), ("b", "__pipeui_ren_1"),
+                        ("__pipeui_ren_0", "b"), ("__pipeui_ren_1", "a")]
+        chain = _rename_schedule(["a", "b"], {"a": "b", "b": "c"})
+        assert chain[:2] == [("a", "__pipeui_ren_0"), ("b", "__pipeui_ren_1")]
+        assert chain[2:] == [("__pipeui_ren_0", "b"), ("__pipeui_ren_1", "c")]
+
+    @pytest.mark.unit
+    def test_schedule_temp_names_dodge_real_columns(self):
+        schedule = _rename_schedule(["a", "b", "__pipeui_ren_0"], {"a": "b", "b": "a"})
+        used_temps = [tmp for _, tmp in schedule[:2]]
+        assert "__pipeui_ren_0" not in used_temps  # reserved name occupied → dodged
+
+    @pytest.mark.integration
+    def test_rename_through_worker_preserves_messy_data(self):
+        df = pd.DataFrame({
+            "amount": [10.5, None, 30.0],
+            "region": ["east", None, ""],
+        })
+        out = execute_rename_lowered(df, {"renames": {"amount": "total"}})
+        assert list(out.columns) == ["total", "region"]
+        assert out["total"].tolist()[0] == 10.5 and pd.isna(out["total"].tolist()[1])
+        # Arrow roundtrip may represent an object-column None as nan — both are
+        # pandas nulls (the same representation every worker-run pd.DataFrame
+        # function returns); values and null positions are what's guaranteed.
+        region = out["region"].tolist()
+        assert region[0] == "east" and pd.isna(region[1]) and region[2] == ""
+
+    @pytest.mark.integration
+    def test_chain_applies_simultaneously(self):
+        # {a→b, b→c}: original a becomes b, original b becomes c — NOT a→b→c.
+        df = pd.DataFrame({"a": [1], "b": [2]})
+        out = execute_rename_lowered(df, {"renames": {"a": "b", "b": "c"}})
+        assert sorted(out.columns) == ["b", "c"]
+        assert out["b"].iloc[0] == 1 and out["c"].iloc[0] == 2
+
+    @pytest.mark.integration
+    def test_error_leaves_checks_before_any_call(self):
+        df = pd.DataFrame({"a": [1], "b": [2]})
+        with pytest.raises(ValueError, match="not found"):
+            execute_rename_lowered(df, {"renames": {"ghost": "x", "a": "y"}})
+        assert list(df.columns) == ["a", "b"]  # untouched
